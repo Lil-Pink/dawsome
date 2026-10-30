@@ -13,7 +13,7 @@ Open it, drag a drum from the Library onto the rack, click some steps, and you h
 Some of the features that I think are kinda nice:
 
 - **Patterns are linked.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy, and one click links it back.
-- **Audio clips you can mess with.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
+- **Drag and drop audio clip imports and audio clip/sample editing.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
 - **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it goes round. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
 - **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go.
 - **Plugins.** CLAP and VST3 instruments and effects both work, their windows open in Dawsome. Plugins without a window of their own get a generated one with every parameter automatable.
