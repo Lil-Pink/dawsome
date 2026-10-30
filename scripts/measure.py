@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The helper scripts/measure.sh runs, and the tables docs/performance.md shows; five commands.
+"""The helper scripts/measure.sh runs, and the tables of its results; five commands.
 
     measure.py fixtures OUT_DIR
         Writes the generated projects into OUT_DIR:
@@ -40,7 +40,7 @@
         change of each figure.
 
     measure.py compare --before RESULTS_JSON.. --after RESULTS_JSON.. [--expect SIDE:SCENARIO=LOW-HIGH]..
-        Prints the before/after tables of docs/performance.md from several runs of each build
+        Prints the before/after tables from several runs of each build
         (the results.json of each, in the order they were taken): every figure the mean of the
         first two runs per scenario that ran undisturbed, with its change (and, for CPU and
         context switches, the change in per cent); then the runs set aside, and how far the two

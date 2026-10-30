@@ -43,7 +43,7 @@ opt-level = 1
 
 # One optimization unit across all crates: the window's per-frame work runs mostly inside the
 # toolkit and renderer crates, and inlining across them saved about 10 % of UI-thread CPU in
-# scenarios (d) and (f) of docs/performance.md, within noise in (c) and (j), and took the
+# two of the scenarios scripts/measure.sh measures, within noise in two others, and took the
 # binary from 29 MB to 21 MB. Release builds take about two minutes instead of forty seconds;
 # debug builds and the checks are unchanged. Unwinding stays: the plugin host catches a panic
 # at the plugin boundary rather than aborting.

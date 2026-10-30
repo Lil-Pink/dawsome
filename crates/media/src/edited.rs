@@ -55,7 +55,7 @@ fn hex(text: &str) -> String {
 /// by one of the same size and time (`cp -p`, `rsync -t`, `touch -r`) is told apart by what it
 /// holds, without reading it whole (ten minutes of stereo are 230 MB). Its cost, per edit job
 /// and per stretch of an edited sound: two reads of 64 KiB and their hash, about 65 µs from the
-/// page cache in a release build (docs/performance.md). A change only inside a file's middle,
+/// page cache in a release build. A change only inside a file's middle,
 /// its ends, size and time the same, is not seen.
 pub fn ends_digest(file: &Path) -> String {
     read_ends(file).map_or_else(|_| "-".to_owned(), |bytes| hex_of(&bytes))

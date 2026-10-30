@@ -871,7 +871,7 @@ fn long_frame(k: u64, period: u64) -> [f32; 2] {
 // 230,400,000 bytes of frames and 1,800,000 of peaks (the generator's figures), and what
 // opening it left on the heap is that and under 64 KiB more. One op more (Gain over the whole
 // sound) is applied where the frames are: it holds the same, and the op takes nothing more from
-// the heap. The most opening it held on the way is printed, for docs/performance.md.
+// the heap. The most opening it held on the way is printed, for the performance figures.
 /// gen_p30's ten-minute sound ("long") written into the temp folder `name`, beside a copy of
 /// p30_long.json with its clip taken out (the session leaves the sound to the editor: a clip
 /// would make it for playback), and an app on that project: the app, its player, the folder
