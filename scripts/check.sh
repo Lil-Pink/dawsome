@@ -98,6 +98,9 @@ if command -v xmllint >/dev/null; then
 else
     echo "xmllint not installed: second schema validation skipped"
 fi
+# The fetch of the instrument sets lands the kit at its commit, and fetches a kit folder whose .git
+# is no repository again without touching the repository around it (repositories of its own).
+scripts/python.sh -I -B tests/scripts/fetch_kit_test.py
 # The fetch of the bundled plugin keeps only the files locks/surge.lock pins and takes only the plugin
 # and its factory data, from archives of the tests' own (no network).
 scripts/python.sh -I -B tests/scripts/fetch_surge_test.py

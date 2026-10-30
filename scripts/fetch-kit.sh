@@ -18,12 +18,17 @@ if [ -z "$url" ] || ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     exit 2
 fi
 kit="$(scripts/target-dir.sh)/kit"
-# Only the kit's own settings: no hooks or templates of this machine's run in the clone.
+# Only the kit's own settings: no hooks or templates of this machine's run in the clone. And the
+# kit's own repository alone: named outright, a missing or broken $kit/.git is an error, never
+# the repository around it. Why: found by looking upward, git in a kit folder whose .git a cache
+# restored in part took this checkout, and the forced checkout and clean below then put the
+# kit's files over it and deleted the target dir (CI, 2026-10-30; tests/scripts/fetch_kit_test.py).
 kit_git() {
-    GIT_CONFIG_NOSYSTEM=1 git -C "$kit" -c advice.detachedHead=false -c core.hooksPath=/dev/null "$@"
+    GIT_CONFIG_NOSYSTEM=1 git -C "$kit" --git-dir=.git --work-tree=. \
+        -c advice.detachedHead=false -c core.hooksPath=/dev/null "$@"
 }
 
-if [ ! -d "$kit/.git" ]; then
+if ! kit_git rev-parse --git-dir >/dev/null 2>&1; then
     rm -rf -- "$kit"
     mkdir -p -- "$(dirname -- "$kit")"
     GIT_CONFIG_NOSYSTEM=1 git clone --quiet --no-checkout --template= -- "$url" "$kit"
