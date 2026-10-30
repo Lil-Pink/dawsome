@@ -1,0 +1,5 @@
+# Windows programs carry the C and C++ runtime inside them, so they run on a machine without the
+# Visual C++ redistributable (the time-stretch library is C++). A RUSTFLAGS set in the
+# environment replaces these flags, so a Windows build leaves it unset.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

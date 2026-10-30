@@ -1,0 +1,90 @@
+[package]
+name = "dawsome-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome desktop app (iced). Owns the UI thread; talks to the engine through the command/notification queues."
+
+[dependencies]
+dawsome-engine.workspace = true
+dawsome-media.workspace = true
+dawsome-host-common.workspace = true
+dawsome-host-clap.workspace = true
+dawsome-host-vst3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Native file dialogs through the desktop portal (the desktop's own dialog; Wayland and X11),
+# default features: no GTK and no C library to build against.
+rfd = "0.17"
+# `tokio` provides `iced::time::every`, which drives the headless screenshot and quit timers;
+# `advanced` the text measure the toolbar fits its notices to one line with;
+# `image-without-codecs` the Help window's pictures, drawn from pixels the `png` crate below
+# decodes (iced's `image` would add a decoder for every format). The default
+# features except `linux-theme-detection`: the theme is always dark, and detecting the
+# desktop's kept a D-Bus connection and four threads awake for nothing; and except
+# `thread-pool`, an executor iced picks only without `tokio` (src/executor.rs is the one used).
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu", "tiny-skia", "crisp", "web-colors", "x11", "wayland",
+    "canvas", "tokio", "advanced", "image-without-codecs",
+] }
+# Screenshots are saved as PNG, the pixel probe reads them back, and the Help window's pictures
+# are read with it.
+png = "0.18"
+# Resamples the engine's output to the device's rate when the device cannot play the project's.
+# Default features only: the optional `log` feature allocates, and the callback must not.
+rubato = "5.0"
+# MIDI input ports through the ALSA sequencer on Linux and WinMM on Windows. Default features:
+# `jack` would replace ALSA at build time, and JACK clients reach the sequencer through the sound
+# server's MIDI bridge anyway; `winrt` would replace WinMM, which every Windows has.
+midir = "0.11.1"
+# Parses each MIDI message a port delivers, without allocating.
+wmidi = "4.0.11"
+# The queue controller moves wait in for the window: bounded, pushed without locking from MIDI
+# threads.
+crossbeam-queue = "0.3"
+# The runtime iced's `tokio` feature runs, built here with two workers (src/executor.rs), and
+# the timer the plugins' doorbells are watched on, off the window's thread.
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+# The per-user folders (settings, recordings, the demo, autosaves, Music): XDG on Linux, AppData
+# and the known folders on Windows.
+dirs = "6"
+# A sample's path as a project keeps it: resolved as the standard library does, but in the
+# plain `C:\...` form on Windows (see the media crate).
+dunce = "1"
+# The main window's X11 id or Win32 handle out of the toolkit's window, to ask the window system
+# where the pointer is when a file is dropped (the drop itself carries no position). 0.6 is the
+# line the toolkit already pulls in.
+raw-window-handle = "0.6"
+
+# Audio output, pinned to 0.18: the next release renames stream methods. On Linux, ALSA is
+# always built and cpal's default host is the native PipeWire backend when its server runs, else
+# ALSA (JACK is built and never the default host); `realtime-dbus` asks for realtime priority
+# for the audio thread (directly, or through the desktop's realtime service) and plays on at
+# normal priority when refused.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "=0.18", features = ["pipewire", "jack", "realtime-dbus"] }
+
+# Elsewhere the platform's own backend (WASAPI on Windows) at normal priority: no realtime
+# request, and no JACK, whose library a Windows machine does not have.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+cpal = "=0.18"
+
+[dev-dependencies]
+# Reads `--play-to` WAV files back in the integration tests.
+hound.workspace = true
+# Calls the VST3 test module's own exports (its restart and its entry count) in the tests.
+libloading = "0.8"
+# Hashes rendered frames for the known answers compared to the bit.
+sha2 = "0.10"
+
+# The desktop drop's check (tests/desktop_drop.rs, ignored: it needs an X display) is the other
+# X11 client: it finds the app's window and drops a file on it over XDND, as a file manager does.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = "0.13"
+
+# dawsome-app.exe's icon and version details (build.rs, dawsome-app.rc). Listed for every build
+# machine: cargo matches a build dependency's platform against the machine building, and a
+# cross-build from Linux needs it too. For a target other than Windows it does nothing.
+[build-dependencies]
+embed-resource = "3"

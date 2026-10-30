@@ -1,0 +1,7 @@
+/* Everything the reader does besides the plain opcodes. */
+<control> default_path=sounds/
+#define $ROOT 60
+#define $VOL -20
+<global> amp_veltrack=0 xfin_lovel=0 // velocity crossfades are left out
+#include "regions.sfz"
+<effect> type=reverb

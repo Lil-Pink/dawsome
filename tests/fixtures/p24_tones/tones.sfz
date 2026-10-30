@@ -1,0 +1,3 @@
+<region> sample=burst.wav key=60
+<region> sample=spike.wav key=62
+<region> sample=dc.wav key=64

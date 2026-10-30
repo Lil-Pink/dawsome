@@ -1,0 +1,9 @@
+# The instrument sets the programs ship: the dawsome-kit repository at one commit.
+# scripts/fetch-kit.sh clones it from url into <target dir>/kit at commit and checks it against
+# its own manifest; $DAWSOME_KIT_URL, when set, is cloned from instead (a mirror, or the
+# published kit while url still names a local clone; CI and the release workflow pass the
+# repository variable DAWSOME_KIT_URL).
+# url: where the kit is published. Until it is, a local clone's path, which a clone elsewhere
+# replaces with $DAWSOME_KIT_URL.
+url=https://github.com/Lil-Pink/dawsome-kit
+commit=081b109502308476dc09bbf942bf0f37f25bdf48

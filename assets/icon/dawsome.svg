@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Grand piano seen from above with its keyboard at the front, and a bench. Own drawing. -->
+  <path fill="#000" d="M50 190 V96 C50 58 78 38 112 38 C154 38 178 70 186 112 C192 140 200 160 200 190 Z"/>
+  <rect x="56" y="162" width="138" height="20" fill="#fff"/>
+  <g fill="#000">
+    <rect x="64" y="162" width="4" height="12"/><rect x="74" y="162" width="4" height="12"/>
+    <rect x="90" y="162" width="4" height="12"/><rect x="100" y="162" width="4" height="12"/><rect x="110" y="162" width="4" height="12"/>
+    <rect x="126" y="162" width="4" height="12"/><rect x="136" y="162" width="4" height="12"/>
+    <rect x="152" y="162" width="4" height="12"/><rect x="162" y="162" width="4" height="12"/><rect x="172" y="162" width="4" height="12"/>
+    <rect x="186" y="162" width="4" height="12"/>
+  </g>
+  <rect x="86" y="206" width="84" height="22" rx="6" fill="#000"/>
+</svg>

@@ -1,0 +1,9 @@
+{
+ "name": "Pad warm",
+ "kind": "instrument",
+ "category": "Pads",
+ "maker": "Dawsome",
+ "licence": "CC0-1.0",
+ "sfz": "pad-warm-c3.sfz",
+ "source": "PADsynth (Nasca Octavian Paul, public domain)"
+}

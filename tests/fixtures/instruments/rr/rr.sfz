@@ -1,0 +1,3 @@
+<group> seq_length=2 key=60
+<region> seq_position=1 sample=rr1.wav
+<region> seq_position=2 sample=rr2.wav

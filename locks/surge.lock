@@ -1,0 +1,18 @@
+# Surge XT, which the programs bundle as a CLAP plugin with its factory data: release 1.3.4 of
+# github.com/surge-synthesizer/releases-xt (JUCE 7, GPL-3.0-or-later; a later release builds on
+# JUCE 8, whose open license is the AGPL, so the pin moves only by decision). scripts/fetch-surge.sh
+# downloads each asset below from url, into a folder of its own under <target dir>/surge/downloads,
+# and refuses any whose size or SHA-256 is not the one pinned here.
+# Pinned 2026-10-22 from the first download of each, which matched the md5sum.txt the release
+# itself publishes.
+version=1.3.4
+url=https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4
+# asset.<what>=<file> <bytes> <SHA-256>
+# linux-x86_64 and windows-x86_64: the plugins of each platform, of which only Surge XT.clap is
+# taken; data: the factory data, as SurgeXTData/, the third-party patches and wavetables and the
+# tutorial skins left out; source: the complete source of the release, which the release zips
+# offer (SOURCES.md).
+asset.linux-x86_64=surge-xt-linux-1.3.4-pluginsonly.tar.gz 97294804 dd431b75f5fa197c4bffa6ca27ca46970f0a94c834119bb1db7decdeec4c28db
+asset.windows-x86_64=surge-xt-win64-1.3.4-pluginsonly.zip 49093875 564e162c560af07ad4ed47fe1bfcd827cf97a575de30d06c48249aad2e7c35e6
+asset.data=surge-xt-portable-content-1.3.4.tar.gz 252763750 7ed24822eab69f73101d8558222979b1bceb4882a780292bb7087309b7b101bd
+asset.source=surge-src-1.3.4.tar.gz 319327963 d4b8f595a0595205ddd63eacadd23a0be33df46affc83afe9eafff7018990d55

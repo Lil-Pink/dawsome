@@ -1,0 +1,21 @@
+[package]
+name = "dawsome"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome command line: render a project to WAV or MP3, scan CLAP and VST3 plugins, MIDI files in and out, exports. The real entry point the known-answer fixtures run through."
+
+[dependencies]
+dawsome-engine.workspace = true
+dawsome-media.workspace = true
+dawsome-host-common.workspace = true
+dawsome-host-clap.workspace = true
+dawsome-host-vst3.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Reads rendered WAV files back.
+hound.workspace = true
+# Hashes rendered WAV files for the byte-identical checks.
+sha2 = "0.10"

@@ -1,0 +1,4 @@
+// Bass synth C2: one of Dawsome's electronic instruments, written by assets/sounds/check.py
+// --write-sets from kit.json; CC0-1.0, see set.json.
+
+<region> sample=samples/Bass synth C2.wav lokey=0 hikey=127 pitch_keycenter=36 loop_mode=no_loop ampeg_release=0.3

@@ -1,0 +1,9 @@
+{
+ "name": "Pad bright",
+ "kind": "instrument",
+ "category": "Pads",
+ "maker": "Dawsome",
+ "licence": "CC0-1.0",
+ "sfz": "pad-bright-c3.sfz",
+ "source": "Surge XT 1.3.4 (GPL-3) rendered headless with a patch written for this kit"
+}

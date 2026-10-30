@@ -1,0 +1,8 @@
+# Only what the image builds from; build output, history and notes stay out of the context.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+!examples/
+!LICENSE
+!licenses/

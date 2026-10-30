@@ -1,0 +1,23 @@
+[package]
+name = "dawsome-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome DAW core: project model, musical time, and the offline/realtime render engine. No UI, no audio-device code."
+
+[dependencies]
+# The live-note inbox: a bounded queue several MIDI input threads push into without locking,
+# which the audio thread drains without waiting or allocating.
+crossbeam-queue = "0.3"
+# Standard MIDI files, read and written. Pure data; its `parallel` default pulls in a thread
+# pool, so only the plain reader and writer are built.
+midly = { version = "=0.5.3", default-features = false, features = ["std", "alloc"] }
+rtrb = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+sha2 = "0.10"
+# Reads the committed reference renders of the ported effects.
+hound.workspace = true

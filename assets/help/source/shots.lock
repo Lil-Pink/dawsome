@@ -1,0 +1,26 @@
+{
+ "pictures": {
+  "chain.png": "29c3a28470fe7d251ab7586ee2665951296b09f99b6f34d325f645e3d48f2924",
+  "dividers.png": "ef5b34a4742715becd13a8547a9fe3d8146552e225a467fc844946b4dac4e696",
+  "help-button.png": "caa94375e226b4f6024f7dfffc289b807e9a51e978f3302b43a041c230696cc9",
+  "instrument-window.png": "4be06d353e23594410f505f69c4073fe73193f1a4ed5045492f6c3a09e9114e4",
+  "library-devices.png": "e5b923be9a5fdd573cef70411e2e24655ac1a2f542585078159636637345fc18",
+  "linked-clips.png": "8d6065aa23561a8fa574df2a9d2383c9845b0e17b1ef65b76fb12e1d8cd20c38",
+  "mixer.png": "baa15fb5764d04fd319016e64bd113434f09535649b8963e9bba29499597be24",
+  "pattern-box.png": "31dc5912283085f340e08d1a752ca4312b949fe7bd692f9f1732a8bcfa312b22",
+  "piano-roll.png": "72ac0c9c035882d86238ce19a77a45b6519a26792021a2f021934c02b9575e8f",
+  "rack.png": "818575cdab8fc10dbd3870319e17ee6c7cbbedbbd2bb2f457e8ee9cab9e6b3cf",
+  "record.png": "ef8c0e4c6d26c0d8b5c24be308942b64093f85f54d1221da6cc5c89552a2f859",
+  "sample-editor.png": "5b86687fcf8c4604b813cbecebfd26d87d880821f6c3dc5bc2dc402a59e4f54a",
+  "screen.png": "21367f35adc55471583fff7d08b0aa68fe301dcd59ba9150787da95fde7fde03",
+  "settings-midi.png": "47e2e5eb3bd2fa8394e78c1078f26ee4d4b39ef87d9b47825379aff286ccf818",
+  "toolbar.png": "d71791f3e7c12e13f8a90e54b22c3cc6a6d8d2ca0adba12daee49efb961166a3"
+ },
+ "sources": {
+  "assets/help/source/guide-keys.json": "d3fd581c7a46ed3d8f5b2934688342c2d386dedc42820716e84e7da316cae062",
+  "assets/help/source/guide-song.json": "6495b40f83231d8e627b4437c6202084ddd2b276719d03455943aef57e72e123",
+  "assets/help/source/guide-sound.json": "9c2daa1c340f74e99c2b7d053912cff283c43922adccf7e738a1acde8a5d51c1",
+  "assets/help/source/shots.json": "de4655f68ca70546171c856a0f44e7ad7dab24a6844d4b5f9345d1866c3cc37b",
+  "scripts/help_shots.py": "27bdd774d014bc71d0032bde439e89b86bc561a4a392a28e81f78080a8a5fd8f"
+ }
+}

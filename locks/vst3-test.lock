@@ -1,0 +1,16 @@
+# The real VST3 plugins the VST3 host's integration tests load (crates/cli/tests/
+# vst3_real_plugins.rs): test inputs under their own licenses, never shipped, installed or
+# packaged (Dexed and JS80P GPL-3.0; DPF-Plugins' 3-Band EQ LGPL-3.0, DPF itself ISC).
+# scripts/fetch-vst3-test-plugins.sh downloads each asset below from its url into a folder of its
+# own under <target dir>/vst3-test/downloads and refuses any whose size or SHA-256 is not the one
+# pinned here; scripts/vst3_test_plugins.py says what it takes from each.
+# Pinned 2026-10-26 from the downloads of the VST3 host plan (section 4.2), whose SHA-256 matched
+# the digests GitHub publishes for Dexed and JS80P (it publishes none for DPF-Plugins).
+version=2026-10-26
+# url.<what>=<the folder it is downloaded from>; asset.<what>=<file> <bytes> <SHA-256>
+url.dexed=https://github.com/asb2m10/dexed/releases/download/v1.0.1
+asset.dexed=Dexed-1.0.1-lnx.zip 7725160 2bac3d0c4237e8c22c4274b6d5b59fe6329fcae72864f81b5830393eff354fc1
+url.js80p=https://github.com/attilammagyar/js80p/releases/download/v4.1.1
+asset.js80p=js80p-4_1_1-avx-vst3_bundle.zip 10368761 b07261dc5dc058bc2d348268c40ab5a5d6823c6196a8a6923548f6fb0d591019
+url.dpf=https://github.com/DISTRHO/DPF-Plugins/releases/download/v1.7
+asset.dpf=DPF-Plugins-v1.7-linux-x86_64.tar.xz 9827340 8088e362f9f68fea179abe9f96b83fca07693224ffcf46837c24ff8b59b119cb

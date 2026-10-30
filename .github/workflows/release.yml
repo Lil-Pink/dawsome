@@ -1,0 +1,77 @@
+# Builds the release programs on Linux and on Windows and uploads one zip per platform: the two
+# programs, the instrument sets (the kit at locks/kit.lock's commit and assets/instruments), the
+# bundled Surge XT plugin of the platform with its factory data, the icon, the demo project, the
+# documentation and the license files (scripts/package.sh). Runs by hand or on a pushed v* tag;
+# the zips are the run's artifacts, ready to attach to a release, with Surge XT's complete
+# source (locks/surge.lock's surge-src tarball), which a release attaches beside them: the zips'
+# SOURCES.md offers it there.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Where scripts/fetch-kit.sh clones the instrument sets from, when the repository's variable
+  # says; else locks/kit.lock's url.
+  DAWSOME_KIT_URL: ${{ vars.DAWSOME_KIT_URL }}
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev \
+            pkg-config libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev
+      - name: libclang
+        if: runner.os == 'Windows'
+        run: |
+          if [ ! -f "/c/Program Files/LLVM/bin/libclang.dll" ]; then
+            choco install llvm -y --no-progress
+          fi
+          echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+      - uses: Swatinem/rust-cache@v2
+      # The runner's folders mapped out of the programs (scripts/remap-paths.sh); package.sh
+      # refuses a program that still names the home folder.
+      - run: cargo build --release --locked --config "$(scripts/remap-paths.sh)" -p dawsome -p dawsome-app
+      - run: scripts/fetch-kit.sh
+      # The platform's Surge XT, each download held to locks/surge.lock's SHA-256; on Linux the
+      # release's complete source too.
+      - run: scripts/fetch-surge.sh "${{ matrix.platform }}"
+      - run: scripts/fetch-surge.sh --source linux-x86_64
+        if: runner.os == 'Linux'
+      - run: scripts/package.sh "${{ matrix.platform }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dawsome-${{ matrix.platform }}
+          path: target/dist/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: surge-source
+          path: target/surge/downloads/surge-src-*/surge-src-*.tar.gz
+          if-no-files-found: error
+          compression-level: 0

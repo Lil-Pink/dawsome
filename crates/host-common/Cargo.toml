@@ -1,0 +1,42 @@
+[package]
+name = "dawsome-host-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What Dawsome's plugin hosts share, whatever the plugin format: the plugin catalogue, the parent half of the out-of-process scan and the process tree its children run in, and the plugin windows. No plugin ABI lives here."
+
+[dependencies]
+dawsome-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The per-user cache folder the catalogue is kept in: XDG on Linux, AppData on Windows.
+dirs = "6"
+
+[target.'cfg(unix)'.dependencies]
+# A scan child's process group, and keeping a scan child from dumping core.
+libc = "0.2"
+# Plugin windows: a top-level X11 window of ours that a plugin's interface embeds into. 0.13 is
+# the line the toolkit already pulls in, so the tree keeps one.
+x11rb = "0.13"
+
+[target.'cfg(windows)'.dependencies]
+# The job object a scan child runs in (and finding its first thread to resume it), keeping a
+# crashing scan child from showing an error dialog, and plugin windows (a top-level Win32 window of
+# ours). 0.61 is the line the toolkit and the file dialogs already pull in on Windows.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ErrorReporting",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+# The catalogue's tests set folders' modification times, which takes a folder handle.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

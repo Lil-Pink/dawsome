@@ -1,0 +1,4 @@
+# Every file is checked out byte for byte as it was committed, on every platform: fixtures and
+# known answers are compared byte for byte, and a checkout that rewrote line endings would
+# change them.
+* -text

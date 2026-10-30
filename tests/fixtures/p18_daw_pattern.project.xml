@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Dawsome" version="0.1.0"/>
+  <Transport>
+    <Tempo unit="bpm" value="120.0"/>
+    <TimeSignature numerator="4" denominator="4"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" id="track1" name="kick">
+      <Channel audioChannels="2" destination="master" role="regular" solo="false" id="channel1">
+        <Mute value="false"/>
+        <Pan unit="normalized" value="0.5" min="0.0" max="1.0"/>
+        <Volume unit="linear" value="1.0" min="0.0" max="4.0"/>
+      </Channel>
+    </Track>
+    <Track contentType="audio notes" id="master-track" name="Master">
+      <Channel audioChannels="2" role="master" solo="false" id="master">
+        <Mute value="false"/>
+        <Pan unit="normalized" value="0.5" min="0.0" max="1.0"/>
+        <Volume unit="linear" value="1.0" min="0.0" max="4.0"/>
+      </Channel>
+    </Track>
+  </Structure>
+  <Arrangement>
+    <Lanes timeUnit="beats">
+      <Lanes track="track1">
+        <Clips>
+          <Clip time="4.0" duration="8.0" name="Beat">
+            <Notes>
+              <Note time="0.0" duration="0.25" channel="0" key="60" vel="1.0"/>
+              <Note time="2.0" duration="1.0" channel="0" key="64" vel="0.5"/>
+              <Note time="4.0" duration="0.25" channel="0" key="60" vel="1.0"/>
+              <Note time="6.0" duration="1.0" channel="0" key="64" vel="0.5"/>
+            </Notes>
+          </Clip>
+          <Clip time="12.0" duration="4.0" enable="false" name="Beat">
+            <Notes>
+              <Note time="0.0" duration="0.25" channel="0" key="60" vel="1.0"/>
+              <Note time="2.0" duration="1.0" channel="0" key="64" vel="0.5"/>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+</Project>
