@@ -2409,6 +2409,9 @@ mod tests {
     // side of it (printed), so the pins follow the sizes; the narrow pin holds every place.
     #[test]
     fn everything_fits_1000_px_and_the_labels_shorten_below() {
+        if !in_measured_font("everything_fits_1000_px_and_the_labels_shorten_below") {
+            return;
+        }
         let least = |tier, column, panels, notice: Option<f32>, retry| {
             least_width(&groups(
                 tier,
@@ -2659,6 +2662,9 @@ mod tests {
     // width. A cut notice fits the width it was cut for, and one more character would not.
     #[test]
     fn a_notice_is_cut_to_one_short_line() {
+        if !in_measured_font("a_notice_is_cut_to_one_short_line") {
+            return;
+        }
         let text = "sample samples/an-ambient-pad.wav cannot be read; its channel plays silence";
         assert!(
             line_width(text) > NOTICE_MOST,
@@ -2834,6 +2840,9 @@ mod tests {
     // other control keep their place and size when one comes.
     #[test]
     fn the_scale_follows_the_window_width_alone() {
+        if !in_measured_font("the_scale_follows_the_window_width_alone") {
+            return;
+        }
         let scale = |width| spread_at(width, false, false).sizes().scale;
         for width in [880.0, 1000.0, 1200.0] {
             assert_eq!(scale(width), 1.0, "{width} px");

@@ -19,11 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # fonts-noto-core: Noto Sans, the font the toolbar tests' widths were measured in (the app
+      # ships no font, and the runner's own is wider); without it those tests skip.
       - name: System packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev \
-            pkg-config libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev
+            pkg-config libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev \
+            fonts-noto-core
       # The license check and the fixture generators need Python 3.11 or later (tomllib). The
       # oldest of those, so a newer feature used by mistake fails here.
       - uses: actions/setup-python@v5

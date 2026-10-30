@@ -27,7 +27,6 @@ of Dawsome.
   edited by hand.
 - **Keep the audio thread clean.** It never allocates, frees, locks or logs, and offline renders
   and live playback share `Player::process`, whose output must not depend on the block size.
-  `arc.md` describes the architecture and the rules it keeps.
 - **Leave the machine as you found it.** Tests and scripts never write the user's settings, caches
   or data: pass `--cache`, `--cache-dir`, `--plugin-path` and temporary `XDG_*` folders.
 - **Credit what you port.** Code from another project keeps its license and is listed in

@@ -206,17 +206,28 @@ fn picture(line: &str) -> Option<(&str, &str)> {
 }
 
 /// The help folder: `$DAWSOME_HELP_DIR` when that is an absolute path, else the one installed
-/// with this program ([`installed_beside`]), else, for a run from the build folder, the
+/// with this program ([`installed_beside`]), else, for a debug run from the build folder, the
 /// repository's `assets/help` when it is still there.
 pub fn folder() -> Option<PathBuf> {
     std::env::var_os(FOLDER_VAR)
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
         .or_else(|| installed_beside(&std::env::current_exe().ok()?))
-        .or_else(|| {
-            let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/help");
-            source.is_dir().then_some(source)
-        })
+        .or_else(source_folder)
+}
+
+/// The repository's `assets/help` as the build saw it, when it is still a folder. Debug builds
+/// only: the path is the build machine's, written into the program, and a release must not
+/// carry it (scripts/package.sh refuses one that does).
+#[cfg(debug_assertions)]
+fn source_folder() -> Option<PathBuf> {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/help");
+    source.is_dir().then_some(source)
+}
+
+#[cfg(not(debug_assertions))]
+fn source_folder() -> Option<PathBuf> {
+    None
 }
 
 /// The help folder of the program at `program`: `help/` beside it (a Windows install and the

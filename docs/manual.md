@@ -365,7 +365,7 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
 
 ## Contributing and license
 
-See `CONTRIBUTING.md` for how to build, test and send changes, and `arc.md` for the architecture.
+See `CONTRIBUTING.md` for how to build, test and send changes.
 
 Dawsome is free software: you can redistribute it and/or modify it under the terms of the GNU
 General Public License as published by the Free Software Foundation, either version 3 of the

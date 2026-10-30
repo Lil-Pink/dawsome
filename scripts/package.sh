@@ -47,17 +47,20 @@ stage="$dist/$name"
 rm -rf -- "$stage" "$dist/$name.zip"
 mkdir -p -- "$stage/licenses" "$stage/icon" "$stage/demo/sounds" "$stage/starter-kit" "$stage/help"
 # The home folder as a program built here would name it: panic locations in every crate's
-# source carry their paths unless scripts/remap-paths.sh mapped them out.
-homes=("$HOME/")
+# source carry their paths unless scripts/remap-paths.sh mapped them out. And this checkout's
+# and the target dir's own paths: a path written in at build time (`env!("CARGO_MANIFEST_DIR")`)
+# is not one the remap reaches, and names the build machine's folders wherever they are.
+machine=("$HOME/" "$(pwd -P)/" "$target_dir/")
 if command -v cygpath >/dev/null; then
-    homes+=("$(cygpath -w -- "$HOME")\\")
+    machine+=("$(cygpath -w -- "$HOME")\\" "$(cygpath -w -- "$(pwd -P)")\\" "$(cygpath -w -- "$target_dir")\\")
 fi
 for program in dawsome dawsome-app; do
     [ -f "$release/$program$exe" ] || { echo "package: $release/$program$exe is not built" >&2; exit 1; }
-    for home in "${homes[@]}"; do
-        if grep -q -a -F -- "$home" "$release/$program$exe"; then
-            echo "package: $release/$program$exe names $home; build it with" \
-                "--config \"\$(scripts/remap-paths.sh)\"" >&2
+    for path in "${machine[@]}"; do
+        if grep -q -a -F -- "$path" "$release/$program$exe"; then
+            echo "package: $release/$program$exe names $path; build it with" \
+                "--config \"\$(scripts/remap-paths.sh)\", and keep build-time paths out of" \
+                "release code" >&2
             exit 1
         fi
     done
