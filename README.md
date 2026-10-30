@@ -2,7 +2,7 @@
 <img width="1600" height="847" alt="main-window" src="https://github.com/user-attachments/assets/319e4ecd-dcf2-41bd-bc3a-38e128f55859" />
 
 
-Dawsome is a free, open-source music maker for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
+Dawsome is a free, open-source music making software for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
 
 To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lol. But ey, it's free to use as you like.
 
