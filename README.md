@@ -8,7 +8,7 @@ Dawsome is not affiliated with Dawesome, the plugin company.
 
 ## What you can actually do with it
 
-Open it, drag a drum from the Library onto the rack, click some steps, and you have a beat. Double-click an instrument to play it from your computer keyboard (Tab is the sustain pedal) or a MIDI keyboard, and draw or record notes into the piano roll. Make a few patterns, switch to Song mode, lay them out on the playlist, and hit export.
+Open it, drag a drum from the Library onto the rack, click some steps, and you have a beat. Double-click an instrument to play it from your computer keyboard (Tab is the sustain pedal) or a MIDI keyboard, and draw or record notes into the piano roll. Make a few patterns, switch to Song mode, lay them out on the playlist, make a song or two.
 
 Some of the features that I think are kinda nice:
 
