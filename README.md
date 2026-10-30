@@ -16,7 +16,7 @@ Open it, drag a drum from the Library onto the rack, click some steps, and you h
 Some of the features that I think are kinda nice:
 
 - **Create set patterns while also allowing for unique adjustments.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy,
-<img width="680" height="168" alt="chain" src="https://github.com/user-attachments/assets/7a00ddb0-5649-4aad-a7c9-bd4c2c646a18" />
+ <img width="680" height="168" alt="chain" src="https://github.com/user-attachments/assets/7a00ddb0-5649-4aad-a7c9-bd4c2c646a18" />
 
 
 - **A reactive piano roll.** Play any instrument, sample, or plug-in channel on the piano roll with real time input feedback. Keyboard is automatically set up as your MIDI with keys set to match a keyboard.
