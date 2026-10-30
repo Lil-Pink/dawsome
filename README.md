@@ -14,14 +14,22 @@ Open it, drag a drum from the Library onto the rack, click some steps, and you h
 
 Some of the features that I think are kinda nice:
 
-- **Patterns are linked.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy, and one click links it back.
+- **Create set patterns while also allowing for unique adjustments.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy,
+  <img width="680" height="169" alt="linked-clips" src="https://github.com/user-attachments/assets/97ec1041-7215-4d94-b8d4-6cd0d6df3928" />
+
+- **A reactive piano roll.** Play any instrument, sample, or plug-in channel on the piano roll with real time input feedback. Keyboard is automatically set up as your MIDI with keys set to match a keyboard.
+  <img width="1360" height="992" alt="piano-roll" src="https://github.com/user-attachments/assets/a166f62e-466f-46dc-a672-8533e9592331" />
+
 - **Drag and drop audio clip imports and audio clip/sample editing.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
+  <img width="1800" height="880" alt="sample-editor" src="https://github.com/user-attachments/assets/0f19fbee-f225-4273-9cd7-4c1e078541b8" />
+  
 - **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it loops. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
 - **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go.
 - **Plugins.** CLAP and VST3 instruments and effects both work, their windows open in Dawsome. Plugins without a window of their own get a generated one with every parameter automatable.
 - **Virtual instruments in the box.** A piano, electric piano, three basses, acoustic and electric guitar, organ, two pads, strings, marimba and two drum kits, all made by me or public domain (CC0), plus Surge XT as a bundled synth. Bring your own SFZ instruments and sample folders.
 - **Export anywhere.** WAV (16, 24 or 32-bit float), MP3, MIDI, stems, and DAWproject so a song can move to another program if needed.
 - **A nice little Help guide** inside the app (F1) that walks through the entire app, with pictures :)
+  
 
 ## How to Use/ Install
 
