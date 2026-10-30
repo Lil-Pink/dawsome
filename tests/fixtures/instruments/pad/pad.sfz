@@ -1,0 +1,3 @@
+<global> loop_start=20 loop_end=29 ampeg_release=0.004
+<region> sample=ramp.wav lokey=0 hikey=63 pitch_keycenter=60 loop_mode=loop_continuous
+<region> sample=ramp.wav lokey=64 hikey=127 pitch_keycenter=72 loop_mode=loop_sustain ampeg_attack=0.001

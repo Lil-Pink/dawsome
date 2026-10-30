@@ -1,0 +1,60 @@
+{
+ "shots": {
+  "main": {
+   "project": "guide-song.json",
+   "args": ["--panels", "browser,rack,playlist", "--window-size", "1280x760"]
+  },
+  "chain": {
+   "project": "guide-song.json",
+   "args": ["--panels", "playlist", "--window-size", "1000x400", "--select-clip", "clip:1"]
+  },
+  "devices": {
+   "project": "guide-song.json",
+   "args": ["--panels", "browser", "--window-size", "1000x620"],
+   "midi_ports": "Keystation 49,Midi Through Port-0",
+   "settings": {"midi_inputs": ["Keystation 49"], "library": {"folded": ["Starter kit", "Instrument sets", "Plugins"]}}
+  },
+  "roll": {
+   "project": "guide-keys.json",
+   "args": ["--panels", "piano-roll", "--window-size", "1000x560"]
+  },
+  "instrument": {
+   "project": "guide-keys.json",
+   "args": ["--window-size", "1000x560", "--open-instrument", "channel:1"],
+   "window": "instrument"
+  },
+  "mixer": {
+   "project": "guide-song.json",
+   "args": ["--panels", "mixer", "--window-size", "680x480"]
+  },
+  "editor": {
+   "project": "guide-sound.json",
+   "args": ["--window-size", "1000x560", "--open-sample-editor", "clip:1", "--sample-editor-select", "14000-38000"],
+   "window": "sample-editor"
+  },
+  "settings": {
+   "project": "guide-song.json",
+   "args": ["--panels", "settings", "--window-size", "1000x560", "--hints", "on"],
+   "midi_ports": "Keystation 49,Midi Through Port-0",
+   "settings": {"midi_inputs": ["Keystation 49"], "settings_window": {"width": 680.0, "height": 440.0}},
+   "window": "settings"
+  }
+ },
+ "pictures": [
+  {"file": "screen.png", "shot": "main", "crop": [0, 0, 1280, 760], "width": 680},
+  {"file": "toolbar.png", "shot": "main", "crop": [0, 0, 560, 64]},
+  {"file": "record.png", "shot": "main", "crop": [0, 0, 340, 64], "rings": [[84, 5, 182, 59]]},
+  {"file": "pattern-box.png", "shot": "main", "crop": [241, 0, 691, 64], "rings": [[380, 5, 552, 59]]},
+  {"file": "help-button.png", "shot": "main", "crop": [820, 0, 1280, 64], "rings": [[1227, 5, 1276, 59]]},
+  {"file": "rack.png", "shot": "main", "crop": [300, 64, 1022, 322], "width": 680},
+  {"file": "dividers.png", "shot": "main", "crop": [300, 242, 980, 462], "rings": [[764, 354, 816, 376]], "arrows": [[884, 320, 822, 354]]},
+  {"file": "linked-clips.png", "shot": "main", "crop": [300, 368, 980, 537], "rings": [[464, 417, 487, 433]]},
+  {"file": "chain.png", "shot": "chain", "crop": [0, 64, 680, 232], "rings": [[395, 62, 425, 90]]},
+  {"file": "library-devices.png", "shot": "devices", "crop": [0, 64, 300, 392], "rings": [[3, 310, 297, 358]]},
+  {"file": "piano-roll.png", "shot": "roll", "crop": [0, 64, 680, 560]},
+  {"file": "instrument-window.png", "shot": "instrument", "crop": [0, 0, 560, 420]},
+  {"file": "sample-editor.png", "shot": "editor", "crop": [0, 0, 900, 440], "width": 680},
+  {"file": "mixer.png", "shot": "mixer", "crop": [0, 64, 680, 480], "rings": [[479, 120, 676, 146]]},
+  {"file": "settings-midi.png", "shot": "settings", "crop": [0, 0, 680, 230], "rings": [[6, 32, 230, 118]]}
+ ]
+}

@@ -1,0 +1,91 @@
+# Every push and pull request is built and tested on Linux and on Windows, so a change cannot
+# break one platform unnoticed. The Linux job runs scripts/check.sh, the check every commit
+# passes locally; the Windows job builds the workspace, lints it and runs every test that is not
+# Linux-only (those are gated in the code, each with what it proves and why).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Where scripts/fetch-kit.sh clones the instrument sets from, when the repository's variable
+  # says; else locks/kit.lock's url.
+  DAWSOME_KIT_URL: ${{ vars.DAWSOME_KIT_URL }}
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev \
+            pkg-config libasound2-dev libpipewire-0.3-dev libjack-jackd2-dev libdbus-1-dev
+      # The license check and the fixture generators need Python 3.11 or later (tomllib). The
+      # oldest of those, so a newer feature used by mistake fails here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+          components: rustfmt, clippy
+      # scripts/check.sh audits the dependencies (deny.toml) only where cargo-deny is installed.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      # The registry and the target dir, which holds the dependencies' builds, the static LAME
+      # library and the time-stretch library among them: their C and C++ builds are the slow part.
+      - uses: Swatinem/rust-cache@v2
+      # The instrument sets at locks/kit.lock's commit: the sounds license check, and the install check
+      # that copies them into a prefix, read them.
+      - run: scripts/fetch-kit.sh
+      # The bundled plugin's downloads, kept between runs while locks/surge.lock pins the same files
+      # (scripts/fetch-surge.sh checks each against its SHA-256 either way).
+      - uses: actions/cache@v4
+        with:
+          path: target/surge/downloads
+          key: surge-downloads-linux-${{ hashFiles('locks/surge.lock') }}
+      # Surge XT for Linux: the install check installs it and scans it.
+      - run: scripts/fetch-surge.sh linux-x86_64
+      - run: scripts/check.sh
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The time-stretch library's bindings are generated with libclang.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v4
+      - name: libclang
+        run: |
+          if [ ! -f "/c/Program Files/LLVM/bin/libclang.dll" ]; then
+            choco install llvm -y --no-progress
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+          components: clippy
+      # As on Linux: the registry and the dependencies' builds, LAME and time-stretch included.
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+      - run: scripts/fetch-kit.sh
+      - uses: actions/cache@v4
+        with:
+          path: target/surge/downloads
+          key: surge-downloads-windows-${{ hashFiles('locks/surge.lock') }}
+      # Surge XT for Windows, fetched and checked as the Windows release zip takes it.
+      - run: scripts/fetch-surge.sh windows-x86_64
+      # The plugin host's tests load these.
+      - run: scripts/build-test-plugins.sh
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace

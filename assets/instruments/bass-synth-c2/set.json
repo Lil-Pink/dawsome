@@ -1,0 +1,9 @@
+{
+ "name": "Bass synth",
+ "kind": "instrument",
+ "category": "Bass",
+ "maker": "Dawsome",
+ "licence": "CC0-1.0",
+ "sfz": "bass-synth-c2.sfz",
+ "source": "Surge XT 1.3.4 (GPL-3) rendered headless with a patch written for this kit"
+}

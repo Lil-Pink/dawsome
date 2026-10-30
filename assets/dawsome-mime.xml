@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Dawsome project file type, installed as share/mime/packages/dawsome.xml by
+     scripts/install.sh: a file manager then shows *.dawsome files with the app's icon and opens
+     them with the desktop entry that lists the type (assets/dawsome.desktop, MimeType). The
+     files hold JSON, so text editors are offered too. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-dawsome-project">
+    <comment>Dawsome project</comment>
+    <sub-class-of type="application/json"/>
+    <icon name="dawsome"/>
+    <glob pattern="*.dawsome"/>
+  </mime-type>
+</mime-info>

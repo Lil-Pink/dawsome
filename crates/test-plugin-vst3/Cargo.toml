@@ -1,0 +1,28 @@
+[package]
+name = "dawsome-test-plugin-vst3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome's own VST3 test plugins: a sine instrument with a separate controller, a gain effect, variants that fail, run a timer and report latency, and the sine with an editor, with exact output formulas, the VST3 host's known-answer oracles. Never shipped."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+# The plugins are checked through the host's tests; their own test target would be empty.
+test = false
+
+# A second module whose entry aborts the process while it loads: the scanner must survive it.
+# An example target, so one crate builds both files.
+[[example]]
+name = "dawsome_test_vst3_crash"
+crate-type = ["cdylib"]
+test = false
+
+[dependencies]
+# Pinned as the host pins it: the bindings generated from the VST 3 SDK's 3.8.0 interfaces.
+vst3 = "=0.3.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The View class's editor is an XEmbed client: a window of its own on a connection of its own.
+# The line the hosts' windows use, so the tree keeps one.
+x11rb = "0.13"

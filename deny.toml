@@ -1,0 +1,46 @@
+# cargo-deny: `cargo deny check` audits the dependency graph. Dawsome is GPL-3.0-or-later, so every
+# license below must be one a GPL-3.0 program may include; each was found in the graph.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # ttf-parser is unmaintained upstream but reaches us only through the UI toolkit's text
+    # stack (iced → cosmic-text → fontdb, winit → sctk-adwaita → ab_glyph); no release of the
+    # toolkit without it exists yet. Re-check when iced moves past 0.14.
+    "RUSTSEC-2026-0192",
+]
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    # The toolkit's clipboard on Windows (clipboard-win, through window_clipboard).
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    # LAME (MP3 export), through mp3lame-encoder and mp3lame-sys. Those crates declare the
+    # deprecated identifier "LGPL-3.0", which cargo-deny matches only as written.
+    "LGPL-3.0",
+    "MIT",
+    # Symphonia (decoding) and the realtime-priority crate cpal uses.
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+# A path dependency between workspace crates has no version, which counts as a wildcard.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

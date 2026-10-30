@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine",
+    "crates/media",
+    "crates/host-common",
+    "crates/host-clap",
+    "crates/host-vst3",
+    "crates/cli",
+    "crates/app",
+    "crates/test-plugin",
+    "crates/test-plugin-vst3",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+dawsome-engine = { path = "crates/engine" }
+dawsome-media = { path = "crates/media" }
+dawsome-host-common = { path = "crates/host-common" }
+dawsome-host-clap = { path = "crates/host-clap" }
+dawsome-host-vst3 = { path = "crates/host-vst3" }
+hound = "3.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# DSP crates run at full optimization even in debug builds: a debug-mode resampler misses the
+# audio deadline at unusual project rates (12 ms per 512-frame callback against a 10.7 ms budget).
+[profile.dev.package.rubato]
+opt-level = 3
+[profile.dev.package.realfft]
+opt-level = 3
+[profile.dev.package.rustfft]
+opt-level = 3
+# The engine too, at level 1: unoptimized, clearing 16 played delay lines on Stop took 10 ms of
+# the 10.67 ms a 512-frame callback has at 48 kHz.
+[profile.dev.package.dawsome-engine]
+opt-level = 1
+
+# One optimization unit across all crates: the window's per-frame work runs mostly inside the
+# toolkit and renderer crates, and inlining across them saved about 10 % of UI-thread CPU in
+# scenarios (d) and (f) of docs/performance.md, within noise in (c) and (j), and took the
+# binary from 29 MB to 21 MB. Release builds take about two minutes instead of forty seconds;
+# debug builds and the checks are unchanged. Unwinding stays: the plugin host catches a panic
+# at the plugin boundary rather than aborting.
+[profile.release]
+lto = "fat"
+codegen-units = 1

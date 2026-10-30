@@ -1,0 +1,44 @@
+[package]
+name = "dawsome-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome media files: decoding sound files, resampling, writing WAV and MP3 renders, finding a moved project's samples. File I/O lives here so the engine stays pure."
+
+[dependencies]
+dawsome-engine.workspace = true
+hound.workspace = true
+thiserror.workspace = true
+# Resampling on load, at a fixed ratio. Default features only, as in the app.
+rubato = "5.0"
+# Decoding: WAV/PCM, AIFF and AIFC (PCM and float), FLAC, Ogg Vorbis and MP3, pure Rust. 0.5 is
+# the line the disk-streaming crate (creek) builds on, so the tree keeps one symphonia.
+symphonia = { version = "0.5", default-features = false, features = ["wav", "aiff", "pcm", "flac", "ogg", "vorbis", "mp3"] }
+# Disk streaming for long audio clips: a reader thread per file fills a ring the audio thread
+# reads without waiting. It reads through our own symphonia decoder (src/stream/decoder.rs),
+# which seeks by exact frame; creek's own seeks by a time in seconds, a frame early at times.
+creek = { version = "1.2", default-features = false }
+# The input ring a recording's device callback writes into, the same ring the engine uses.
+rtrb = "0.4"
+# Names a long file converted to another rate in the cache by what makes it that file.
+sha2 = "0.10"
+# Time-stretch of audio clips: the MIT Signalsmith Stretch header library through its MIT Rust
+# wrapper, built with the C++ compiler (its bindings need libclang). Pinned: stretched files are
+# cached under the algorithm's name and version.
+signalsmith-stretch = "=0.1.3"
+# MP3 export. Builds the bundled LAME source into a static library; no system library is used.
+mp3lame-encoder = "0.2.5"
+# The per-user cache folder converted and stretched clips are kept in: XDG on Linux, AppData on
+# Windows.
+dirs = "6"
+# A CLAP instrument's saved state, stored in the project as standard padded base64, goes into a
+# DAWproject package as its bytes. The plugin host already decodes it with this crate.
+base64 = "0.22"
+# Resolves a sample's path as the standard library does, except that on Windows it gives the
+# plain `C:\...` form rather than the `\\?\C:\...` one, which takes no `/` and no `..` when a
+# relative path is joined to it, and which a project should not keep.
+dunce = "1"
+
+[dev-dependencies]
+# Reads the known answers' expected values (tests/fixtures/p23_expected.json).
+serde_json.workspace = true

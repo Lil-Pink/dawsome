@@ -1,0 +1,10 @@
+{
+ "name": "Bass 808 low",
+ "kind": "instrument",
+ "category": "Bass",
+ "maker": "Dawsome",
+ "licence": "CC0-1.0",
+ "sfz": "bass-808-c1.sfz",
+ "source": "Werner, Abel & Smith, TR-808 bass drum (DAFx-14) and cymbal (ICMC-SMC 2014) models; 808 bass practice (Attack Magazine)",
+ "cut_itself": true
+}

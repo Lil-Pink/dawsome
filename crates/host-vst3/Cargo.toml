@@ -1,0 +1,36 @@
+[package]
+name = "dawsome-host-vst3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome's VST3 plugin host: the scan child's half for VST3 modules, and VST3 instruments and effects behind the engine's processor port. The VST3 ABI lives only here."
+
+[dependencies]
+dawsome-engine.workspace = true
+dawsome-host-common.workspace = true
+# Pinned: the bindings generated from the VST 3 SDK's 3.8.0 interfaces (MIT), the host layer
+# written against this exact API.
+vst3 = "=0.3.0"
+# Loading a module's binary: dlopen on Linux, LoadLibraryW on Windows. The line clack-host
+# already pulls in.
+libloading = "0.8"
+# A plugin's state is stored in the project as standard padded base64 text.
+base64 = "0.22"
+# The audio half's rings to and from the main thread (edits in, values out), lock-free and
+# allocation-free once made.
+rtrb = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+# poll(2) for the file descriptors plugins register with the run loop, and dlopen's flags.
+libc = "0.2"
+
+[dev-dependencies]
+# Reads the known answers tests/fixtures/gen_p27_expected.py, gen_p28_expected.py and
+# gen_p29_expected.py write.
+serde_json.workspace = true
+# Hashes rendered frames for the known answers compared to the bit.
+sha2 = "0.10"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The window tests look at the host's windows on a connection of their own (tests/windows.rs).
+x11rb = "0.13"

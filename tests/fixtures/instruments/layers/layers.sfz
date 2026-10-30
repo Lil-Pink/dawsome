@@ -1,0 +1,12 @@
+// Three key ranges, two velocity layers each, and a click over the top range.
+<global> amp_veltrack=0
+<group> lovel=1 hivel=64
+<region> sample=a_soft.wav lokey=0 hikey=54 pitch_keycenter=48
+<region> sample=b_soft.wav lokey=55 hikey=66 pitch_keycenter=60
+<region> sample=c_soft.wav lokey=67 hikey=127 pitch_keycenter=72
+<group> lovel=65 hivel=127
+<region> sample=a_loud.wav lokey=0 hikey=54 pitch_keycenter=48
+<region> sample=b_loud.wav lokey=55 hikey=66 pitch_keycenter=60
+<region> sample=c_loud.wav lokey=67 hikey=127 pitch_keycenter=72
+<group>
+<region> sample=click.wav lokey=67 hikey=127 pitch_keycenter=72

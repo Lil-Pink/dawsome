@@ -1,0 +1,14 @@
+// What real libraries write: sound files in other forms, a volume past the range, Karoryfer's
+// loop mode and a Windows-made default_path.
+<control> default_path=\sounds\
+<global> amp_veltrack=0
+<region> sample=float20.wav key=60
+<region> sample=pcm20.wav key=62
+<region> sample=aiff16.aiff key=64
+<region> sample=aiff24.aif key=65
+<region> sample=aiff8.aif key=67
+<region> sample=sowt.aifc key=69
+<region> sample=fl32.aifc key=71
+<region> sample=none.aifc key=72
+<region> sample=float20.wav key=74 volume=9
+<region> sample=loop.wav key=76 loop_mode=continuous

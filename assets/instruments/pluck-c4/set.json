@@ -1,0 +1,9 @@
+{
+ "name": "Pluck",
+ "kind": "instrument",
+ "category": "Synth",
+ "maker": "Dawsome",
+ "licence": "CC0-1.0",
+ "sfz": "pluck-c4.sfz",
+ "source": "Karplus-Strong, extended (Jaffe & Smith, CMJ 1983)"
+}

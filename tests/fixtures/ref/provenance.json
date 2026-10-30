@@ -1,0 +1,141 @@
+{
+ "upstream": "https://github.com/airwindows/airwindows",
+ "commit": "e68f75154ed0520fc5757fec9e7792dd1747e5ee",
+ "licence": "MIT",
+ "compiler": "g++ (GCC) 16.2.1 20260810",
+ "flags": "-std=c++14 -O2 -D__cdecl= -w",
+ "harness_sha256": "df86944ea563820a54a3eb9ae8585b5e04f6c5a91d7a0e1f75004ab289e413c5",
+ "stub_sha256": "a0a9bdc8b2f0cf453f460db7ee33fd08c73703b203e67fc6bd4383e3ff167167",
+ "seeds": "srand(1) before construction (glibc): fpdL 2490677913, fpdR 3448036410",
+ "block": 512,
+ "input": "fx_input() in this script, 16384 frames stereo f32",
+ "renders": [
+  {
+   "file": "pressure4_a_44k.wav",
+   "class": "Pressure4",
+   "rate": 44100,
+   "params_ABCD": [
+    0.6,
+    0.4,
+    0.7,
+    0.9
+   ],
+   "input": "in.f32",
+   "sha256": "1653d9725add36cc8e10f3460841eee82fddf1ed47a899491024e7f2201ab340"
+  },
+  {
+   "file": "pressure4_a_48k.wav",
+   "class": "Pressure4",
+   "rate": 48000,
+   "params_ABCD": [
+    0.6,
+    0.4,
+    0.7,
+    0.9
+   ],
+   "input": "in.f32",
+   "sha256": "d738d4cc5a7cc757c9f9200cf0f04ff45c564616298041e19183ae1d412dcbfa"
+  },
+  {
+   "file": "pressure4_default_44k.wav",
+   "class": "Pressure4",
+   "rate": 44100,
+   "params_ABCD": [
+    0.0,
+    0.2,
+    1.0,
+    1.0
+   ],
+   "input": "in.f32",
+   "sha256": "63aa9653f081f01fc881359e8a34c3ecded4b1a256b4322577541d3cf6db57d1"
+  },
+  {
+   "file": "pressure4_default_48k.wav",
+   "class": "Pressure4",
+   "rate": 48000,
+   "params_ABCD": [
+    0.0,
+    0.2,
+    1.0,
+    1.0
+   ],
+   "input": "in.f32",
+   "sha256": "e54e1b081db228ac170104b090caf7e09a5e16dcf27d8f618b56bfe1be915a2e"
+  },
+  {
+   "file": "density_a_44k.wav",
+   "class": "Density",
+   "rate": 44100,
+   "params_ABCD": [
+    0.6,
+    0.3,
+    0.8,
+    0.7
+   ],
+   "input": "in.f32",
+   "sha256": "3e4e1cc6906ad188aa27935b1c5a648df22294eb1119ba24683d0f9083f35935"
+  },
+  {
+   "file": "density_a_48k.wav",
+   "class": "Density",
+   "rate": 48000,
+   "params_ABCD": [
+    0.6,
+    0.3,
+    0.8,
+    0.7
+   ],
+   "input": "in.f32",
+   "sha256": "53f3ee9ae67e0bbf4eda54a0cc6cbda3d721ebb73f4d9330385116bd4fa9f1a7"
+  },
+  {
+   "file": "density_hot_44k.wav",
+   "class": "Density",
+   "rate": 44100,
+   "params_ABCD": [
+    1.0,
+    0.0,
+    1.0,
+    1.0
+   ],
+   "input": "in.f32",
+   "sha256": "fb724405038a443bb3e811c9b609b013a0323d47ecdad25cb9bdc61d726d411f"
+  },
+  {
+   "file": "density_hot_48k.wav",
+   "class": "Density",
+   "rate": 48000,
+   "params_ABCD": [
+    1.0,
+    0.0,
+    1.0,
+    1.0
+   ],
+   "input": "in.f32",
+   "sha256": "f9aa2c909741473e4b53a67508563e1ffee7b805b86e3e6727310e04473dc899"
+  },
+  {
+   "file": "density_cli_44k.wav",
+   "class": "Density",
+   "rate": 44100,
+   "params_ABCD": [
+    0.6,
+    0.3,
+    0.8,
+    0.7
+   ],
+   "input": "mono.f32",
+   "sha256": "6e1800d7d8118f814425cd9d372de6780b7119e8cb078bc50f1b01f96a724e88"
+  }
+ ],
+ "Pressure4": {
+  "Pressure4.h": "fc6dd82e5e7852fd823c5334a876a22663fdc711d089e9494590948e87ac4113",
+  "Pressure4.cpp": "8f42761be2a36b450d334fd0afc8c58b3f16592556f71859305908001ae7fee7",
+  "Pressure4Proc.cpp": "0ce7634839ac59e0b469cb4fd7c786ae1d403138d553e7e06776aab58562409e"
+ },
+ "Density": {
+  "Density.h": "424efb38496c37f5c1f052c2f93b8d8b89aa5b7abd60629a3b3c8e775b513497",
+  "Density.cpp": "175e59d72e3b9c7413924df59855121bac9c54056fa544aba8e1bfc08bfdc2e2",
+  "DensityProc.cpp": "f1bdad65b968324bab7602cbda0ef096c24051777c7a806c3d8db665933deb09"
+ }
+}

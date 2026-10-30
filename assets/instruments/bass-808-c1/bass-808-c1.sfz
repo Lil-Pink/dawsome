@@ -1,0 +1,10 @@
+// Bass 808 C1: one of Dawsome's electronic instruments, written by assets/sounds/check.py
+// --write-sets from kit.json; CC0-1.0, see set.json.
+
+<region> sample=samples/Bass 808 C0.wav lokey=0 hikey=14 pitch_keycenter=12 loop_mode=loop_continuous loop_start=145964 loop_end=148898 ampeg_release=0.3
+<region> sample=samples/Bass 808 F0.wav lokey=15 hikey=20 pitch_keycenter=17 loop_mode=loop_continuous loop_start=144351 loop_end=146549 ampeg_release=0.3
+<region> sample=samples/Bass 808 C1.wav lokey=21 hikey=26 pitch_keycenter=24 loop_mode=loop_continuous loop_start=144547 loop_end=146014 ampeg_release=0.3
+<region> sample=samples/Bass 808 F1.wav lokey=27 hikey=32 pitch_keycenter=29 loop_mode=loop_continuous loop_start=145441 loop_end=147639 ampeg_release=0.3
+<region> sample=samples/Bass 808 C2.wav lokey=33 hikey=38 pitch_keycenter=36 loop_mode=loop_continuous loop_start=144525 loop_end=145258 ampeg_release=0.3
+<region> sample=samples/Bass 808 F2.wav lokey=39 hikey=44 pitch_keycenter=41 loop_mode=loop_continuous loop_start=144293 loop_end=145941 ampeg_release=0.3
+<region> sample=samples/Bass 808 C3.wav lokey=45 hikey=127 pitch_keycenter=48 loop_mode=loop_continuous loop_start=144126 loop_end=144492 ampeg_release=0.3

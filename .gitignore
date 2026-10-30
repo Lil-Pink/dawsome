@@ -1,0 +1,10 @@
+/target
+*.wav
+!tests/fixtures/**/*.wav
+!examples/sounds/*.wav
+!assets/sounds/*.wav
+!assets/instruments/*/samples/*.wav
+__pycache__/
+# What the app writes beside a project opened from the repo: its autosave, and recordings.
+*.autosave.json
+/tests/fixtures/**/samples/

@@ -1,0 +1,28 @@
+[package]
+name = "dawsome-test-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dawsome's own CLAP test plugins: a sine instrument and a gain effect with exact output formulas, variants, and the sine with an interface that logs each call, the plugin host's known-answer oracles. Never shipped."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+# The plugin is checked through the host's tests; its own test target would be empty.
+test = false
+
+# A second plugin file whose entry aborts the process while it loads: the scanner must survive
+# it. An example target, so one crate builds both files.
+[[example]]
+name = "dawsome_test_crash"
+crate-type = ["cdylib"]
+test = false
+
+[dependencies]
+clack-plugin = "=0.2.0"
+clack-extensions = { version = "=0.2.0", features = ["clack-plugin", "audio-ports", "gui", "note-ports", "params", "state", "timer"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The GUI file's interface is an X11 window of its own, a child of the host's, on a connection of
+# its own. The line the hosts' windows use, so the tree keeps one.
+x11rb = "0.13"

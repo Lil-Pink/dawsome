@@ -1,0 +1,1 @@
+{"format_version":4,"sample_rate":44100,"tempo_mbpm":120000,"ppq":96,"next_channel_id":2,"channels":[{"id":1,"name":"Sound","kind":"sampler","sample":"p25_quiet.wav","volume":1.0,"pan":0.0,"mute":false}],"patterns":[{"id":1,"name":"Pattern 1","length_bars":1,"notes":[{"channel":1,"tick":0,"length":0,"velocity":1.0}]}]}

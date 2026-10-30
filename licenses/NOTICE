@@ -1,0 +1,43 @@
+Dawsome
+Copyright (C) 2026 The Dawsome contributors
+
+Dawsome is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+Dawsome is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
+the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+Public License for more details. The full text is in LICENSE.
+
+Dawsome contains code ported from Airwindows (MIT license) and builds in libraries under their
+own licenses. Most are under MIT or Apache-2.0; these are under others, or under one in
+addition (Linux or Windows: built in on that platform only):
+
+  LGPL-2.0-or-later                     LAME (the C library, lame.sourceforge.io)
+  LGPL-3.0                              mp3lame-sys, mp3lame-encoder
+  MPL-2.0                               symphonia, symphonia-core, symphonia-bundle-flac,
+                                        symphonia-bundle-mp3, symphonia-codec-pcm,
+                                        symphonia-codec-vorbis, symphonia-format-ogg,
+                                        symphonia-format-riff, symphonia-metadata,
+                                        symphonia-utils-xiph, option-ext,
+                                        audio_thread_priority (Linux)
+  BSD-3-Clause                          tiny-skia, tiny-skia-path
+  (Apache-2.0 OR MIT) AND BSD-3-Clause  encoding_rs
+  BSD-2-Clause                          arrayref, kamadak-exif, mutate_once
+  ISC                                   libloading
+  Zlib                                  foldhash, slotmap
+  (MIT OR Apache-2.0) AND Unicode-3.0   unicode-ident
+  BSL-1.0                               clipboard-win, error-code (Windows)
+  CC0-1.0                               hexf-parse
+  Unlicense                             midly
+
+THIRD_PARTY.md lists each with what it is used for and its copyright, and holds the license
+texts that travel with the programs; every Cargo dependency carries its license text in its own
+source.
+
+Beside the programs, the release zips and the install hold Surge XT 1.3.4 (GPL-3.0-or-later),
+the Surge Synth Team's synthesizer, as a separate CLAP plugin with its factory data, unchanged.
+LICENSE-SURGE holds its notice and license; SOURCES.md in a release zip says where its complete
+source is.
+
+VST is a registered trademark of Steinberg Media Technologies GmbH.

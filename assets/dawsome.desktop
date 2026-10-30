@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Dawsome
+GenericName=Digital Audio Workstation
+Comment=Pattern-based digital audio workstation
+Keywords=DAW;music;audio;MIDI;sequencer;beat;
+Exec=dawsome-app %f
+Icon=dawsome
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+MimeType=application/x-dawsome-project;
+StartupWMClass=dawsome
