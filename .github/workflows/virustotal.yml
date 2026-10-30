@@ -1,0 +1,60 @@
+# Scans the programs of each published release with VirusTotal and adds the report links to the
+# release notes. The release zips are unpacked first: VirusTotal's free API takes files up to
+# 32 MB, and the programs inside are what a scan of a download judges. Runs when a release is
+# published, or by hand for a release that already exists (Actions → VirusTotal → Run workflow).
+# Needs the repository secret VT_API_KEY.
+name: VirusTotal
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to scan (e.g. v0.1.0)
+        required: true
+permissions:
+  contents: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: The release's programs
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir zips --pattern 'dawsome-*.zip'
+          mkdir -p unpacked scan/linux scan/windows
+          for zip in zips/*.zip; do unzip -q "$zip" -d unpacked; done
+          cp unpacked/dawsome-*-linux-*/dawsome unpacked/dawsome-*-linux-*/dawsome-app scan/linux/
+          cp unpacked/dawsome-*-windows-*/dawsome.exe unpacked/dawsome-*-windows-*/dawsome-app.exe scan/windows/
+          ls -l scan/linux scan/windows
+      - name: Scan
+        id: vt
+        uses: crazy-max/ghaction-virustotal@v5
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          request_rate: 4
+          files: |
+            ./scan/windows/dawsome-app.exe
+            ./scan/windows/dawsome.exe
+            ./scan/linux/dawsome-app
+            ./scan/linux/dawsome
+      - name: The reports in the release notes
+        env:
+          ANALYSIS: ${{ steps.vt.outputs.analysis }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > body.md
+          # A section written by an earlier run is replaced, not added to.
+          sed -i '/^<!-- virustotal -->$/,$d' body.md
+          {
+            echo '<!-- virustotal -->'
+            echo '### VirusTotal'
+            echo
+            echo 'The programs in the zips, scanned when this release was published:'
+            echo
+            echo "$ANALYSIS" | tr ',' '\n' | while IFS='=' read -r file url; do
+              [ -n "$file" ] && echo "- \`${file#./scan/}\`: $url"
+            done
+          } >> body.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md

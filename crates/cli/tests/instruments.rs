@@ -278,7 +278,12 @@ fn a_shipped_set_renders_the_same_from_any_data_folder_that_holds_it() {
         .iter()
         .all(|frame| *frame == [0.0; 2]));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let looked = empty.join("dawsome/instruments/layers/layers.sfz");
+    // Joined as the program joins it: the data folder's parts by the platform's separator, then
+    // the set's own path as the project names it (on Windows `…\dawsome\instruments/layers/…`).
+    let looked = empty
+        .join("dawsome")
+        .join("instruments")
+        .join("layers/layers.sfz");
     assert!(stderr.contains(&looked.display().to_string()), "{stderr}");
 }
 

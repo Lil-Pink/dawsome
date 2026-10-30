@@ -145,7 +145,7 @@ def release_targets():
 def built_in(target, packages, own):
     """The packages the programs are built from on `target`, by "name version": their normal
     dependencies, proc macros left out, as the release build resolves their features."""
-    listing = cargo("tree", "--quiet", "--target", target, *(f"-p={p}" for p in PROGRAMS),
+    listing = cargo("tree", "--quiet", "--color", "never", "--target", target, *(f"-p={p}" for p in PROGRAMS),
                     "--edges", "normal,no-proc-macro", "--prefix", "none", "--format", "{p}")
     built = {}
     for line in filter(None, listing.splitlines()):

@@ -139,7 +139,8 @@ def built_in(target, own):
     `target`, the workspace's own crates (`own`) left out."""
     packages = [argument for program in PROGRAMS for argument in ("--package", program)]
     listing = run(
-        "cargo", "tree", "--quiet", "--target", target, *packages,
+        # Never coloured: a CI runner turns cargo's colour on, and the codes would land in the lines.
+        "cargo", "tree", "--quiet", "--color", "never", "--target", target, *packages,
         "--edges", "normal,no-proc-macro", "--prefix", "none", "--format", "{p}\t{l}",
     )
     crates = {}
