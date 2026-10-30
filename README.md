@@ -1,5 +1,5 @@
 # Dawsome
-<img width="2560" height="1520" alt="screen" src="https://github.com/user-attachments/assets/c0985ee3-3442-4d63-907b-1b38770edd2f" />
+
 
 Dawsome is a free, open-source music maker for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
 
@@ -15,7 +15,7 @@ Open it, drag a drum from the Library onto the rack, click some steps, and you h
 Some of the features that I think are kinda nice:
 
 - **Create set patterns while also allowing for unique adjustments.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy,
-  <img width="680" height="169" alt="linked-clips" src="https://github.com/user-attachments/assets/97ec1041-7215-4d94-b8d4-6cd0d6df3928" />
+
 
 - **A reactive piano roll.** Play any instrument, sample, or plug-in channel on the piano roll with real time input feedback. Keyboard is automatically set up as your MIDI with keys set to match a keyboard.
   <img width="1360" height="992" alt="piano-roll" src="https://github.com/user-attachments/assets/a166f62e-466f-46dc-a672-8533e9592331" />
