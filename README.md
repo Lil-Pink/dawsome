@@ -49,7 +49,7 @@ The full reference, every panel and setting, is in [docs/manual.md](docs/manual.
 
 Compared to the paid DAWs, Dawsome still lacks: swing/groove, a big bundle of built-in effects (only six and one synth), audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though macOS probably not and VST2 definitely not (Steinberg no longer licenses it to anyone).
 
-Roughly in the order I plan to do them:
+Roughly in the order I plan to add these features:
 
 1. **Swing.** A knob for it on the step grid and in quantize.
 2. **More built-in effects and a simple synth.** Chorus, phaser, flanger, distortion, a filter, a gate, stereo width.
