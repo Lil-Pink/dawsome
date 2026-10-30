@@ -680,6 +680,25 @@ mod tests {
                 lane,
             ));
         }
+        // Each clip's start line (#1A1C1F) at its first pixel, x 120 and 248, and the mark of
+        // Pattern 1's tick-0 note (#DDE6F0) right of it, never over it: on the line it read as
+        // a note outside the clip. The mark's row: one key in a 47 px lane, so the body under the
+        // 10 px title less 2 px padding each side is 33 px, the mark 4 px high in its middle, y
+        // 26.5..30.5 in the lane, 144.5 at its middle in the window (the lane's 22 is 138).
+        let mark_y = lane_center(0, 28.5);
+        assert_eq!(tracks(0.0, mark_y).y, 144.5);
+        for (clip, start) in [(1, bar_x(0)), (2, bar_x(2))] {
+            points.push((
+                format!("clip {clip} start line"),
+                tracks(start + 0.5, mark_y),
+                [0x1A, 0x1C, 0x1F],
+            ));
+            points.push((
+                format!("clip {clip} first note mark"),
+                tracks(start + 1.5, mark_y),
+                [0xDD, 0xE6, 0xF0],
+            ));
+        }
         let wrong = wrong_colors(&shot, &points);
         // Bar-number boxes [x+3, x+15] x [90, 102] for x = 120 + 64b, b = 0..12, window pixels.
         let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);

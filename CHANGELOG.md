@@ -2,6 +2,13 @@
 
 What each release of Dawsome does for you. The manual (docs/manual.md) has the details.
 
+## Unreleased
+
+- **Playlist**: a pattern clip's note marks stay inside the clip. A note on the pattern's first
+  step was drawn over the clip's start line, so it looked like a note outside the clip, or at
+  the end of the clip before it; one on the last steps could reach past the clip's end when
+  zoomed out.
+
 ## 0.1.0 — unreleased
 
 The first release: a pattern-based digital audio workstation for Linux and Windows.

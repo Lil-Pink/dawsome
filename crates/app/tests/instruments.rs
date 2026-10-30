@@ -358,7 +358,10 @@ fn a_project_naming_a_set_no_longer_shipped_opens_with_its_channel_kept() {
         Some(&installed),
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let looked = data.join("dawsome/instruments/ep-c4/ep-c4.sfz");
+    // Joined as the program joins it (`ShippedRoots::file`): the user's data folder, then the
+    // reference's own `instruments/ep-c4/ep-c4.sfz` in one piece, so on Windows the separator
+    // after `dawsome` is the platform's and the ones inside the reference stay `/`.
+    let looked = data.join("dawsome").join("instruments/ep-c4/ep-c4.sfz");
     let warning = format!(
         "dawsome-app: warning: instrument {}: 1 problem: it cannot be read",
         looked.display()

@@ -5,11 +5,12 @@ set -euo pipefail
 
 # Test folders go under the target dir, never /tmp, which is often memory (on 2026-10-26 some
 # 2900 stale dawsome-* test folders held 14 GB of it), so runs with separate target dirs keep
-# apart; folders a day old are removed first.
-export TMPDIR="${TMPDIR:-${CARGO_TARGET_DIR:-target}/tmp}"
+# apart; folders a day old are removed first. An absolute path: rustc runs in each dependency's
+# own folder, where a relative one (CI's, with no CARGO_TARGET_DIR) names no folder at all.
+cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")/.."
+export TMPDIR="${TMPDIR:-$(scripts/target-dir.sh)/tmp}"
 mkdir -p "$TMPDIR"
 find "$TMPDIR" -mindepth 1 -maxdepth 1 -name 'dawsome-*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
-cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")/.."
 scripts/lint-names.sh
 # licenses/THIRD_PARTY.md and licenses/NOTICE against the crates the programs are built from, on every target.
 scripts/license-check.sh
