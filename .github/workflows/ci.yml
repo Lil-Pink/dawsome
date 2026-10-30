@@ -42,6 +42,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The instrument sets at locks/kit.lock's commit: the sounds license check, and the install check
       # that copies them into a prefix, read them.
+      # Every crate the lock names, for every platform: the notices check reads cargo's metadata
+      # offline, and that lists the other platforms' crates too.
+      - run: cargo fetch --locked
       - run: scripts/fetch-kit.sh
       # The bundled plugin's downloads, kept between runs while locks/surge.lock pins the same files
       # (scripts/fetch-surge.sh checks each against its SHA-256 either way).
