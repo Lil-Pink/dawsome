@@ -1,6 +1,7 @@
-# Scans the programs of each published release with VirusTotal and adds the report links to the
-# release notes. The release zips are unpacked first: VirusTotal's free API takes files up to
-# 32 MB, and the programs inside are what a scan of a download judges. Runs when a release is
+# Scans the programs of each published release with VirusTotal and adds each one's verdict and
+# report link to the release notes. The release zips are unpacked first: VirusTotal's free API
+# takes files up to 32 MB, and the programs inside are what a scan of a download judges. A file
+# VirusTotal already knows (by its SHA-256) is not sent again, so a re-run only reads the reports. Runs when a release is
 # published, or by hand for a release that already exists (Actions → VirusTotal → Run workflow).
 # Needs the repository secret VT_API_KEY.
 name: VirusTotal
@@ -17,6 +18,7 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -29,48 +31,43 @@ jobs:
           cp unpacked/dawsome-*-linux-*/dawsome unpacked/dawsome-*-linux-*/dawsome-app scan/linux/
           cp unpacked/dawsome-*-windows-*/dawsome.exe unpacked/dawsome-*-windows-*/dawsome-app.exe scan/windows/
           ls -l scan/linux scan/windows
-      - name: Scan
-        id: vt
-        uses: crazy-max/ghaction-virustotal@v5
-        with:
-          vt_api_key: ${{ secrets.VT_API_KEY }}
-          request_rate: 4
-          files: |
-            ./scan/windows/dawsome-app.exe
-            ./scan/windows/dawsome.exe
-            ./scan/linux/dawsome-app
-            ./scan/linux/dawsome
-      - name: The reports in the release notes
+      - name: Scan, and the verdicts in the release notes
         env:
-          ANALYSIS: ${{ steps.vt.outputs.analysis }}
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
+          # Every request waits 16 s first: the free key allows 4 a minute.
+          api() { sleep 16; curl -s -H "x-apikey: $VT_API_KEY" "$@"; }
+          stats_of() { jq -c '.data.attributes.last_analysis_stats // empty' <<<"$1"; }
+          scanned() { jq '.malicious + .suspicious + .undetected + .harmless' <<<"$1"; }
+          lines=()
+          for path in scan/windows/dawsome-app.exe scan/windows/dawsome.exe scan/linux/dawsome-app scan/linux/dawsome; do
+            name="${path#scan/}"
+            sha="$(sha256sum "$path" | cut -d' ' -f1)"
+            stats="$(stats_of "$(api "https://www.virustotal.com/api/v3/files/$sha")")"
+            if [ -z "$stats" ] || [ "$(scanned "$stats")" = 0 ]; then
+              echo "$name: new to VirusTotal, sending it"
+              api -F "file=@$path" https://www.virustotal.com/api/v3/files >/dev/null
+              stats=""
+              # Read the file's report until its analysis has finished: 12 minutes at most.
+              for _ in $(seq 45); do
+                stats="$(stats_of "$(api "https://www.virustotal.com/api/v3/files/$sha")")"
+                [ -n "$stats" ] && [ "$(scanned "$stats")" != 0 ] && break
+                stats=""
+              done
+            fi
+            report="https://www.virustotal.com/gui/file/$sha"
+            if [ -n "$stats" ]; then
+              flagged="$(jq '.malicious + .suspicious' <<<"$stats")"
+              echo "$name: $flagged of $(scanned "$stats") engines flagged it"
+              lines+=("- \`$name\`: $flagged of $(scanned "$stats") engines flagged it ([report]($report))")
+            else
+              echo "$name: still being scanned"
+              lines+=("- \`$name\`: still being scanned ([report]($report))")
+            fi
+          done
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > body.md
           # A section written by an earlier run is replaced, not added to.
           sed -i '/^<!-- virustotal -->$/,$d' body.md
-          lines=()
-          while IFS='=' read -r file url; do
-            [ -n "$file" ] || continue
-            name="${file#./}"; name="${name#scan/}"
-            id="$(printf '%s' "$url" | sed -E 's#.*/file-analysis/([^/]+)/.*#\1#')"
-            # Each analysis is read until it completes: one request every 20 s keeps to the free
-            # key's 4 a minute; 15 minutes at most.
-            status=""
-            for _ in $(seq 45); do
-              json="$(curl -sf -H "x-apikey: $VT_API_KEY" "https://www.virustotal.com/api/v3/analyses/$id" || true)"
-              status="$(jq -r '.data.attributes.status // empty' <<<"$json")"
-              [ "$status" = completed ] && break
-              sleep 20
-            done
-            if [ "$status" = completed ]; then
-              flagged="$(jq -r '.data.attributes.stats | .malicious + .suspicious' <<<"$json")"
-              engines="$(jq -r '.data.attributes.stats | .malicious + .suspicious + .undetected + .harmless' <<<"$json")"
-              sha="$(jq -r '.meta.file_info.sha256' <<<"$json")"
-              lines+=("- \`$name\`: $flagged of $engines engines flagged it ([report](https://www.virustotal.com/gui/file/$sha))")
-            else
-              lines+=("- \`$name\`: still being scanned ([report]($url))")
-            fi
-          done < <(printf '%s\n' "$ANALYSIS" | tr ',' '\n')
           {
             echo '<!-- virustotal -->'
             echo '### VirusTotal'
