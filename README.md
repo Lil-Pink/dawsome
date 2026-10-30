@@ -16,14 +16,12 @@ Open it, drag a drum from the Library onto the rack, click some steps, and you h
 Some of the features that I think are kinda nice:
 
 - **Create set patterns while also allowing for unique adjustments.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy,
- <img width="680" height="168" alt="chain" src="https://github.com/user-attachments/assets/7a00ddb0-5649-4aad-a7c9-bd4c2c646a18" />
 
 
 - **A reactive piano roll.** Play any instrument, sample, or plug-in channel on the piano roll with real time input feedback. Keyboard is automatically set up as your MIDI with keys set to match a keyboard.
 
 
 - **Drag and drop audio clip imports and audio clip/sample editing.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
-  <img width="1800" height="880" alt="sample-editor" src="https://github.com/user-attachments/assets/0f19fbee-f225-4273-9cd7-4c1e078541b8" />
   
 - **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it loops. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
 - **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go.
