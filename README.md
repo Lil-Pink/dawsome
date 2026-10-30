@@ -21,7 +21,7 @@ Some of the features that I think are kinda nice:
 - **Export anywhere.** WAV (16, 24 or 32-bit float), MP3, MIDI, stems, and DAWproject so a song can move to another program if needed.
 - **A nice little Help guide** inside the app (F1) that walks through the entire app, with pictures :)
 
-## Getting it
+## How to Use/ Install
 
 Grab the zip for your system from the Releases page, unpack it anywhere, and run `dawsome-app`.
 
