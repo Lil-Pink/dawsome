@@ -20,7 +20,6 @@ Some of the features that I think are kinda nice:
 
 
 - **A reactive piano roll.** Play any instrument, sample, or plug-in channel on the piano roll with real time input feedback. Keyboard is automatically set up as your MIDI with keys set to match a keyboard.
-  <img width="680" height="496" alt="piano-roll-small" src="https://github.com/user-attachments/assets/d28d13a1-fc30-4e26-9bf2-1042c4a61041" />
 
 
 - **Drag and drop audio clip imports and audio clip/sample editing.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
