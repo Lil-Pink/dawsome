@@ -1,8 +1,13 @@
 # Dawsome
+<img width="680" height="404" alt="screen" src="https://github.com/user-attachments/assets/0d78962f-b681-4235-ae93-443029618d28" />
+<img width="560" height="420" alt="instrument-window" src="https://github.com/user-attachments/assets/257251c2-7ff0-4d79-9af9-c852146683c6" />
+<img width="680" height="496" alt="piano-roll" src="https://github.com/user-attachments/assets/b9edf897-6074-43b7-97ea-a5a8da38fad2" />
+<img width="680" height="243" alt="rack" src="https://github.com/user-attachments/assets/4e3e0ccf-ac82-4659-9b48-8987a0fee976" />
+
 
 Dawsome is a free, open-source music maker for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
 
-To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lmao. But it's free to use, soo.
+To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lol.
 
 Dawsome is not affiliated with Dawesome, the plugin company.
 
