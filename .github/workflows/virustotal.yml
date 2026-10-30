@@ -43,18 +43,40 @@ jobs:
       - name: The reports in the release notes
         env:
           ANALYSIS: ${{ steps.vt.outputs.analysis }}
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > body.md
           # A section written by an earlier run is replaced, not added to.
           sed -i '/^<!-- virustotal -->$/,$d' body.md
+          lines=()
+          while IFS='=' read -r file url; do
+            [ -n "$file" ] || continue
+            name="${file#./}"; name="${name#scan/}"
+            id="$(printf '%s' "$url" | sed -E 's#.*/file-analysis/([^/]+)/.*#\1#')"
+            # Each analysis is read until it completes: one request every 20 s keeps to the free
+            # key's 4 a minute; 15 minutes at most.
+            status=""
+            for _ in $(seq 45); do
+              json="$(curl -sf -H "x-apikey: $VT_API_KEY" "https://www.virustotal.com/api/v3/analyses/$id" || true)"
+              status="$(jq -r '.data.attributes.status // empty' <<<"$json")"
+              [ "$status" = completed ] && break
+              sleep 20
+            done
+            if [ "$status" = completed ]; then
+              flagged="$(jq -r '.data.attributes.stats | .malicious + .suspicious' <<<"$json")"
+              engines="$(jq -r '.data.attributes.stats | .malicious + .suspicious + .undetected + .harmless' <<<"$json")"
+              sha="$(jq -r '.meta.file_info.sha256' <<<"$json")"
+              lines+=("- \`$name\`: $flagged of $engines engines flagged it ([report](https://www.virustotal.com/gui/file/$sha))")
+            else
+              lines+=("- \`$name\`: still being scanned ([report]($url))")
+            fi
+          done < <(printf '%s\n' "$ANALYSIS" | tr ',' '\n')
           {
             echo '<!-- virustotal -->'
             echo '### VirusTotal'
             echo
-            echo 'The programs in the zips, scanned when this release was published:'
+            echo 'The programs in the zips, scanned with VirusTotal when this release was published:'
             echo
-            echo "$ANALYSIS" | tr ',' '\n' | while IFS='=' read -r file url; do
-              [ -n "$file" ] && echo "- \`${file#./scan/}\`: $url"
-            done
+            printf '%s\n' "${lines[@]}"
           } >> body.md
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md
