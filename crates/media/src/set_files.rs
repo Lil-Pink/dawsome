@@ -290,6 +290,8 @@ mod tests {
             Err(NOT_A_FILE.to_owned()),
             "a folder"
         );
+        // Unix's device; Windows has no such path.
+        #[cfg(unix)]
         assert_eq!(
             read_text(Path::new("/dev/zero")),
             Err(NOT_A_FILE.to_owned()),

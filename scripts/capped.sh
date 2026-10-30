@@ -15,12 +15,17 @@ if [ "${1:-}" = "--max" ]; then max=$2; shift 2; fi
 if [ "${DAWSOME_CAPPED:-}" = 1 ]; then
     exec "$@"
 fi
+# Passed on only when set: an empty CARGO_TARGET_DIR is an error to cargo (CI sets none).
+target=()
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    target=(--setenv=CARGO_TARGET_DIR="$CARGO_TARGET_DIR")
+fi
 if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope --quiet -- true >/dev/null 2>&1; then
     exec systemd-run --user --scope --quiet --same-dir \
         -p MemoryMax="$max" -p MemorySwapMax=2G \
         --setenv=DAWSOME_CAPPED=1 \
         --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
-        --setenv=CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-}" \
+        "${target[@]}" \
         --setenv=CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
         --setenv=RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
         -- "$@"
