@@ -50,7 +50,7 @@ Roughly in the order I plan to add these features:
 
 1. **Swing.** A knob for it on the step grid and in quantize.
 2. **More built-in effects and a simple synth.** Chorus, phaser, flanger, distortion, a filter, a gate, stereo width.
-3. **UI Clean-up** Because I built the app in Linux and on a 4k monitor, I realize the UI is not uniform across OSs/monitors. Plan to clean tidy this up and make the UI in general easier on the eyes.
+3. **UI Clean-up** Because I built the app in Linux and on a 4k monitor, I realize the UI is not uniform across OSs/monitors. Planning to tidy this up and make the UI in general easier on the eyes.
 4. **Sample chopping** and finer, precision sample editing.
 5. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.
 6. **Piano roll helpers.** Chord, arpeggiate, strum, and a preset browser for plugin patches.
