@@ -87,7 +87,8 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("message: a known message 7\n"), "{text}");
-        assert!(text.contains("at: crates/app/src/crash.rs:"), "{text}");
+        // As the compiler spells this file's path (with `\` on Windows), as the panic does.
+        assert!(text.contains(&format!("at: {}:", file!())), "{text}");
         assert!(text.ends_with("backtrace:\nframe 0: here\n"), "{text}");
     }
 

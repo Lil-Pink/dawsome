@@ -1234,7 +1234,10 @@ mod tests {
                 .position(|item| *item == Item::Tree(tree))
                 .expect("listed")
         };
-        assert_eq!(row_of(&app, 0), 23);
+        // On Linux; Windows' plugin hint is a line longer (its folders take two lines), so
+        // every row under it lies one further down.
+        let shift = crate::ui::library::PLUGIN_HINT.len() - 4;
+        assert_eq!(row_of(&app, 0), 23 + shift);
         for selected in 0..3 {
             let _ = app.update(Message::Browser(BrowserMessage::Key(Nav::Down)));
             assert_eq!(app.browse.model.selected, Some(selected));
@@ -1242,12 +1245,20 @@ mod tests {
             let top = app.browse.library.top;
             assert!((top..top + visible).contains(&row), "row {row} from {top}");
         }
-        assert_eq!(app.browse.library.top, 13, "list row 25 is the last shown");
+        assert_eq!(
+            app.browse.library.top,
+            13 + shift,
+            "list row 25 is the last shown"
+        );
         for _ in 0..3 {
             let _ = app.update(Message::Browser(BrowserMessage::Key(Nav::Up)));
         }
         assert_eq!(app.browse.model.selected, Some(0));
-        assert_eq!(app.browse.library.top, 13, "row 23 is still in view");
+        assert_eq!(
+            app.browse.library.top,
+            13 + shift,
+            "row 23 is still in view"
+        );
     }
 
     // With no folder for the starter kit (a scripted run's), a press on a sound says so and

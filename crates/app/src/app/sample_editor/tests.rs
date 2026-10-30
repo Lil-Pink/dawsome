@@ -1556,12 +1556,32 @@ fn a_quit_while_a_sound_saves_waits_for_the_write() {
 /// Sets the time `path` was last written (a folder's too).
 fn set_written(path: &Path, time: std::time::SystemTime) {
     let file = if path.is_dir() {
-        fs::File::open(path)
+        open_folder(path)
     } else {
         fs::File::options().write(true).open(path)
     };
     file.and_then(|file| file.set_modified(time))
         .expect("dated");
+}
+
+/// A folder opened so its times can be set.
+#[cfg(not(windows))]
+fn open_folder(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+/// A folder opened so its times can be set: Windows opens a folder only with backup semantics,
+/// and sets a time only through a handle that may write attributes (a plain open is refused
+/// with "Access is denied").
+#[cfg(windows)]
+fn open_folder(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    fs::File::options()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
 }
 
 /// The names in `dir`, sorted.

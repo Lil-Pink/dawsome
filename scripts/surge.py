@@ -477,12 +477,18 @@ def main(argv):
     fetch_mode.add_argument("--if-fetched", action="store_true")
     fetch.add_argument("--source", action="store_true")
     fetch.add_argument("--vst3", action="store_true")
-    fetch.add_argument("platforms", nargs="*", choices=PLATFORMS, metavar="PLATFORM")
+    fetch.add_argument("platforms", nargs="*", metavar="PLATFORM")
     sources = commands.add_parser("sources")
     sources.add_argument("--lock", default=os.path.join(ROOT, "locks", "surge.lock"))
     sources.add_argument("platform", choices=PLATFORMS, metavar="PLATFORM")
     try:
         args = parser.parse_args(argv)
+        # Checked here, not by argparse's `choices`: before Python 3.12 they refuse the empty
+        # list `nargs="*"` gives when none is named.
+        for platform in args.platforms if args.command == "fetch" else []:
+            if platform not in PLATFORMS:
+                fetch.error(f"argument PLATFORM: invalid choice: {platform!r} (choose from "
+                            f"{', '.join(map(repr, PLATFORMS))})")
     except SystemExit as exit_:
         return int(exit_.code or 0)
     try:

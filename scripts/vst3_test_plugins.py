@@ -154,9 +154,15 @@ def main(argv):
     fetch_mode = fetch.add_mutually_exclusive_group()
     fetch_mode.add_argument("--offline", action="store_true")
     fetch_mode.add_argument("--if-fetched", action="store_true")
-    fetch.add_argument("names", nargs="*", choices=sorted(TAKEN), metavar="NAME")
+    fetch.add_argument("names", nargs="*", metavar="NAME")
     try:
         args = parser.parse_args(argv)
+        # Checked here, not by argparse's `choices`: before Python 3.12 they refuse the empty
+        # list `nargs="*"` gives when none is named.
+        for name in args.names:
+            if name not in TAKEN:
+                fetch.error(f"argument NAME: invalid choice: {name!r} (choose from "
+                            f"{', '.join(map(repr, sorted(TAKEN)))})")
     except SystemExit as exit_:
         return int(exit_.code or 0)
     try:

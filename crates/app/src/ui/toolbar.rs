@@ -2046,6 +2046,39 @@ fn triangle(corners: [(f32, f32); 3]) -> canvas::Path {
 mod tests {
     use super::*;
 
+    /// The font the pinned widths below were measured in. The app ships no font: the window's
+    /// text falls on one of the system's, so Windows, or a Linux without this one, draws the
+    /// labels wider or narrower and the bar spreads by those widths instead.
+    const MEASURED_IN: &str = "Noto Sans";
+
+    /// The family the window's default text is drawn in.
+    fn window_font() -> String {
+        use iced::advanced::graphics::text::{cosmic_text, font_system};
+        let mut system = font_system().write().expect("the font system");
+        let raw = system.raw();
+        let mut buffer = cosmic_text::Buffer::new(raw, cosmic_text::Metrics::new(12.0, 16.0));
+        let attrs = cosmic_text::Attrs::new().family(cosmic_text::Family::SansSerif);
+        buffer.set_text(raw, "Notes", &attrs, cosmic_text::Shaping::Advanced, None);
+        let font = buffer
+            .layout_runs()
+            .next()
+            .and_then(|run| run.glyphs.first().map(|glyph| glyph.font_id));
+        font.and_then(|id| raw.db().face(id))
+            .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+            .unwrap_or_default()
+    }
+
+    /// Whether the window draws in [`MEASURED_IN`]; says so when not, as `test` is then skipped.
+    fn in_measured_font(test: &str) -> bool {
+        let font = window_font();
+        if font != MEASURED_IN {
+            eprintln!(
+                "{test}: skipped: its widths are {MEASURED_IN}'s, the window draws in {font:?}"
+            );
+        }
+        font == MEASURED_IN
+    }
+
     /// The sizes at a scale of 1: a window with nothing to spare.
     fn narrow() -> Sizes {
         Sizes::at(1.0)
@@ -2075,6 +2108,9 @@ mod tests {
     // meter, the 84 px tempo, the 22 px arrow and the 54 px column): the 50 px column.
     #[test]
     fn the_pattern_name_starts_past_the_transport_tempo_and_arrow() {
+        if !in_measured_font("the_pattern_name_starts_past_the_transport_tempo_and_arrow") {
+            return;
+        }
         assert_eq!(narrow().take_column_width(Column::Words), 50.0);
         // With the badge on Record (no column) the name's box lies where it lay
         // before Recording v2.
@@ -2758,6 +2794,9 @@ mod tests {
     // the panel buttons or the full labels).
     #[test]
     fn narrow_windows_lay_the_bar_out_as_before() {
+        if !in_measured_font("narrow_windows_lay_the_bar_out_as_before") {
+            return;
+        }
         let pinned = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/toolbar_narrow_layout.txt"
