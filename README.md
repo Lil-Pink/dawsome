@@ -4,7 +4,7 @@ Dawsome is a free, open-source music maker for Linux and Windows. It's pattern f
 
 To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lmao. But it's free to use, soo.
 
-Dawsome is not affiliated with Dawesome, the plugin company. The names just sound the same.
+Dawsome is not affiliated with Dawesome, the plugin company.
 
 ## What you can actually do with it
 
