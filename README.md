@@ -60,10 +60,6 @@ Roughly in the order I plan to add these features:
 10. **A clip launcher** for playing live.
 11. **macOS**, if I get my hands on a Mac or receive outside help.
 
-## If you'd like to play with the code
-
-The engine is its own crate, and offline rendering and live playback go through the exact same function, so what the tests render is what you hear. The audio thread never allocates, and a test proves it. Expected values in the tests come from Python generators that compute the answer independently of the Rust code, so if you change the sound you find out straight away. There's a command-line renderer too, which is handy for scripts.
-
 `CONTRIBUTING.md` has the build and the one check command that runs everything. Effects would be nice first contributions (an effect is one type implementing one trait, and there are two Airwindows ports to copy from) and anything on the list above. If you find a bug, one line with what you did, what you expected, and what happened is plenty.
 
 ## License
