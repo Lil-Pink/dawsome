@@ -7,7 +7,8 @@
 use std::mem;
 
 use super::{pattern_mut, Applied, Edit, EditError, Touched};
-use crate::project::{Pattern, PatternId, Project, MAX_PATTERNS};
+use crate::project::{Pattern, PatternId, PatternKind, Project, MAX_PATTERNS};
+use crate::time;
 
 pub(super) fn add(
     project: &mut Project,
@@ -35,6 +36,8 @@ pub(super) fn add(
         name,
         length_bars: bars,
         copied_from,
+        swing_tenths: time::STRAIGHT_SWING,
+        kind: PatternKind::Pattern,
         notes: Vec::new(),
     };
     // The rule the file is checked by: a copy names a pattern made before it.
@@ -54,7 +57,12 @@ pub(super) fn unadd(project: &mut Project, id: PatternId) -> Result<Applied, Edi
     // pattern deleted above it, giving its ID back would make the deleted one's ID the next
     // but one, and the add that undid this would not restore the counter.
     let added_last = id.0.checked_add(1) == Some(project.pattern_counter().0);
-    if !added_last || !pattern.notes.is_empty() || is_played(project, id) {
+    // Why straight and a pattern too: `AddPattern` adds a straight pattern, so the inverse of
+    // taking out a swung one or a take would lose its swing or its kind.
+    let as_added = pattern.notes.is_empty()
+        && pattern.swing_tenths == time::STRAIGHT_SWING
+        && pattern.kind == PatternKind::Pattern;
+    if !added_last || !as_added || is_played(project, id) {
         return Err(EditError::PatternNotRemovable(id.0));
     }
     let Some(pattern) = project.patterns.remove(&id) else {

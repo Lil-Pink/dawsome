@@ -311,7 +311,7 @@ BENDS = {1: 8191, 2: 0, 3: -8192}
 BENT = play_bent(4, BENDS)
 UNBENT = play_bent(4, {})
 PROBES = [511, 512, 1023, 1024, 1536, 2047]
-# The spec's values (vst3-host-phase2.md, K2), to ten digits.
+# The values precomputed apart from this generator, to ten digits.
 assert ["%.10g" % BENT[k] for k in PROBES] == ["-0.1004869416", "-0.08714301139", "0.2382726669", "0.2426635325",
                                               "-0.1409350932", "0.1173973233"]
 assert all(BENT[n] == UNBENT[n] for n in range(512))

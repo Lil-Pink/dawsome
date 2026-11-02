@@ -4,7 +4,7 @@
 //! arrows and name) | the play mode (Pat over Song, then Loop) | the play position | the
 //! computer keyboard (its labeled switch, the octave's + and − with its name between) | the
 //! panel buttons | the notices, on one short line, and Retry while audio is off | File, Edit and
-//! Help at the right end (File first since 2026-10-27: Edit was first).
+//! Help at the right end (File first).
 //!
 //! Every group's width is fixed by the toolbar itself (each button sized to its label measured,
 //! the readouts and the name box set; the notices' line its text, cut to [`NOTICE_MOST`]) at the
@@ -50,8 +50,8 @@ use crate::ui::text_fit::{fit, text_width};
 /// The least space either side of the line between two of the toolbar's groups, and the line.
 /// Why this tight: at 16 px text and 42 px transport buttons everything fitted 1000 px with the
 /// panel buttons and a notice's room only so. Kept when the controls became 0.9 of their size
-/// (asked 2026-10-27: "about 10 % smaller both ways, spacing kept"). A wider window gives every gap the same share of
-/// what it has to spare ([`Spread`]). 2 px (was 3), so the 1000 px window
+/// (about 10 % smaller both ways, the spacing kept). A wider window gives every gap the same
+/// share of what it has to spare ([`Spread`]). 2 px (was 3), so the 1000 px window
 /// keeps the panel buttons beside a notice's room once the keyboard switch stood on one line and
 /// the name's box held "Pattern 12" (28 px more); only a window that narrow shows the least gap.
 /// The Help button right of File moved every fold by its 47.584 px, so at 1000 px
@@ -86,9 +86,9 @@ const HALF_ROW: f32 = (BUTTON_HEIGHT - PANEL_SPACING) / 2.0;
 /// became 67 × 52 (38 × 46 → 61 × 46 at 0.9 of the size), wider than tall but not yet a flat
 /// strip (2.0 read as wide pills, and with the text and
 /// icons stopped at their rows' most it only padded them). Past it the groups stand to the left
-/// and the notices' cell takes what the window has to spare ([`PACKED_EXTRA`]). Toolbar scale
-/// (2026-10-24): at a full-screen window of 2259 px each group sat small in the middle
-/// of a cell three or four times its width.
+/// and the notices' cell takes what the window has to spare ([`PACKED_EXTRA`]). Why a scale:
+/// unscaled, at a full-screen window of 2259 px each group sat small in the middle of a cell
+/// three or four times its width.
 const SCALE_MOST: f32 = 1.6;
 /// How many gaps the bar has with nothing but its groups (the transport to the panel buttons,
 /// then File, Edit and Help: eight groups).
@@ -127,8 +127,8 @@ const ARROW_WIDTH: f32 = 20.0;
 
 /// The edge of a piece made of parts (the pattern's arrows and its name, Pat over Song, Notes
 /// over Audio): one line of [`style::BUTTON_EDGE`] round the piece and between its parts, where
-/// each part drew its own edge before, which made 2 px seams between three boxes (on
-/// 2026-10-27 the pattern's piece was called the ugliest part of the bar).
+/// each part drew its own edge before, which made 2 px seams between three boxes (the
+/// pattern's piece looked the worst of the bar).
 const FRAME: f32 = 1.0;
 /// A side of a two-row switch in a group's height (Pat over Song, N over A): the height inside
 /// the frame, halved.
@@ -188,9 +188,8 @@ const SMALL_MOST: f32 = 14.0;
 /// The button that tries the output device again.
 const RETRY: &str = "Retry";
 
-/// The File and Edit menus' buttons' labels (File first, then Edit, then Help: asked so on
-/// 2026-10-27), the Help window's button's right of them (asked for there), and
-/// the space between two of them.
+/// The File and Edit menus' buttons' labels (File first, then Edit, then Help), the Help
+/// window's button's right of them, and the space between two of them.
 const FILE: &str = "File";
 const EDIT: &str = "Edit";
 const MENU_SPACING: f32 = 4.0;
@@ -234,8 +233,8 @@ const PATTERN_NAME_SHORT: f32 = 47.0;
 const PATTERN_NAME_WHOLE: &str = "Pattern 12";
 /// A name of 24 characters, which the full box holds whole at [`NAME_LEAST`]: a longer name
 /// than the labels' size holds shrinks a pixel at a time down to it, then is cut with an
-/// ellipsis (the hint bar names it whole). Why 24: the name was asked to fit always
-/// (2026-10-27); the box held 10 characters ("Pattern 12") and cut every name past them.
+/// ellipsis (the hint bar names it whole). Why 24: a name must always fit, and the box held 10
+/// characters ("Pattern 12") and cut every name past them.
 const PATTERN_NAME_HELD: &str = "Chorus bassline (take 2)";
 /// The least the pattern's name shrinks to: 10 px with nothing to spare, the column's words'
 /// size, up to 14 at the most scale.
@@ -1035,7 +1034,7 @@ impl<'a> Toolbar<'a> {
         ]
         .spacing(PART_SPACING)
         .align_y(Center);
-        // Drag up or down, or scroll, to change the tempo; Shift for 0.001 steps; a click
+        // Drag left or right, or scroll, to change the tempo; Shift for 0.001 steps; a click
         // opens a box to type it in.
         let tempo: Element<'a, Message> = match self.tempo_edit {
             // In a box the readout's height, so the group keeps it while the tempo is typed.
@@ -1056,7 +1055,7 @@ impl<'a> Toolbar<'a> {
                 mouse_area(readout(format_tempo(self.tempo), s.tempo_width, s))
                     .on_press(Message::TempoPressed)
                     .on_scroll(Message::TempoScrolled)
-                    .interaction(mouse::Interaction::ResizingVertically),
+                    .interaction(mouse::Interaction::ResizingHorizontally),
                 "Tempo \u{b7} drag or scroll; click to type it",
             ),
         };
@@ -2046,6 +2045,39 @@ fn triangle(corners: [(f32, f32); 3]) -> canvas::Path {
 mod tests {
     use super::*;
 
+    /// The font the pinned widths below were measured in. The app ships no font: the window's
+    /// text falls on one of the system's, so Windows, or a Linux without this one, draws the
+    /// labels wider or narrower and the bar spreads by those widths instead.
+    const MEASURED_IN: &str = "Noto Sans";
+
+    /// The family the window's default text is drawn in.
+    fn window_font() -> String {
+        use iced::advanced::graphics::text::{cosmic_text, font_system};
+        let mut system = font_system().write().expect("the font system");
+        let raw = system.raw();
+        let mut buffer = cosmic_text::Buffer::new(raw, cosmic_text::Metrics::new(12.0, 16.0));
+        let attrs = cosmic_text::Attrs::new().family(cosmic_text::Family::SansSerif);
+        buffer.set_text(raw, "Notes", &attrs, cosmic_text::Shaping::Advanced, None);
+        let font = buffer
+            .layout_runs()
+            .next()
+            .and_then(|run| run.glyphs.first().map(|glyph| glyph.font_id));
+        font.and_then(|id| raw.db().face(id))
+            .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+            .unwrap_or_default()
+    }
+
+    /// Whether the window draws in [`MEASURED_IN`]; says so when not, as `test` is then skipped.
+    fn in_measured_font(test: &str) -> bool {
+        let font = window_font();
+        if font != MEASURED_IN {
+            eprintln!(
+                "{test}: skipped: its widths are {MEASURED_IN}'s, the window draws in {font:?}"
+            );
+        }
+        font == MEASURED_IN
+    }
+
     /// The sizes at a scale of 1: a window with nothing to spare.
     fn narrow() -> Sizes {
         Sizes::at(1.0)
@@ -2071,10 +2103,13 @@ mod tests {
     // 322): the arrow is joined to the box (no 2 px between them), and the least space beside
     // each line is 2 px (was 3). Recording v2, pins moved (were 298 and 316): the 54 px column
     // beside Record (Notes over Audio over Capture) and its 2 px. Pins moved at 0.9 of the size
-    // (asked 2026-10-27; were 298 and 316, 354 and 372 with 42 px buttons, the 60 px
+    // (were 298 and 316, 354 and 372 with 42 px buttons, the 60 px
     // meter, the 84 px tempo, the 22 px arrow and the 54 px column): the 50 px column.
     #[test]
     fn the_pattern_name_starts_past_the_transport_tempo_and_arrow() {
+        if !in_measured_font("the_pattern_name_starts_past_the_transport_tempo_and_arrow") {
+            return;
+        }
         assert_eq!(narrow().take_column_width(Column::Words), 50.0);
         // With the badge on Record (no column) the name's box lies where it lay
         // before Recording v2.
@@ -2368,11 +2403,14 @@ mod tests {
     // at 880 px with Retry the short labels leave Retry, File, Edit and Help ("?") whole and a
     // notice its least room. Recording v2 and the Help button (47.584 px) had pushed every fold
     // past 1000 px (the panel buttons folded beside a notice there, the full labels with Retry and
-    // a notice held only from 1016.5 px); at 0.9 of the size (asked 2026-10-27) they lie
+    // a notice held only from 1016.5 px); at 0.9 of the size they lie
     // under it again. Each fold is worked out here from the least widths of the looks on either
     // side of it (printed), so the pins follow the sizes; the narrow pin holds every place.
     #[test]
     fn everything_fits_1000_px_and_the_labels_shorten_below() {
+        if !in_measured_font("everything_fits_1000_px_and_the_labels_shorten_below") {
+            return;
+        }
         let least = |tier, column, panels, notice: Option<f32>, retry| {
             least_width(&groups(
                 tier,
@@ -2451,7 +2489,7 @@ mod tests {
 
     // B4: with the Edit button beside File, a toolbar 880 px wide still leaves the notices room
     // for the audio notice cut with an ellipsis beside Retry, as the p8 probe looks for; File
-    // first (asked 2026-10-27: Edit was), Edit the menus' spacing right of it and Help
+    // first, Edit the menus' spacing right of it and Help
     // the spacing right of Edit, Retry a line and its spacing left of File (no room to spare
     // there), the Edit menu's right edge under Edit's and the File menu's under File's.
     #[test]
@@ -2485,7 +2523,7 @@ mod tests {
         assert!(loop_tip(Some(true)).starts_with("Loop"));
     }
 
-    // A pattern's name fits its box (asked 2026-10-27: "the name must always fit"): one
+    // A pattern's name always fits its box: one
     // that fits at the labels' size shows so ("Pattern 1", "Pattern 12": the tenth pattern's
     // name); a longer one shrinks a pixel at a time, whole, down to the least size (a name of 24
     // characters is whole at a size between the two, and a pixel larger would not fit); a longer
@@ -2623,6 +2661,9 @@ mod tests {
     // width. A cut notice fits the width it was cut for, and one more character would not.
     #[test]
     fn a_notice_is_cut_to_one_short_line() {
+        if !in_measured_font("a_notice_is_cut_to_one_short_line") {
+            return;
+        }
         let text = "sample samples/an-ambient-pad.wav cannot be read; its channel plays silence";
         assert!(
             line_width(text) > NOTICE_MOST,
@@ -2744,11 +2785,11 @@ mod tests {
     // that, every one of the 60 lines of 8247957's pin came out of the new layout to the pixel
     // at its width plus Help's room (its label and the menus' spacing: 47.584 px at the full
     // labels, "?" 22.264 px at the short ones), Help's place left out, so Help moved every fold
-    // by its own room and nothing else. Pin rewritten by the same line at 0.9 of the size (asked
-    // 2026-10-27: every size of the bar 0.9 of what it was, the gaps kept), its lines
+    // by its own room and nothing else. Pin rewritten by the same line at 0.9 of the size
+    // (every size of the bar 0.9 of what it was, the gaps kept), its lines
     // checked apart from the layout: each group starts where the one before ends plus a gap of
     // 5 px and its share, Help ends at the right padding, and every group and line spans y 9..55.
-    // Rewritten again with File first (asked 2026-10-27): against the line
+    // Rewritten again with File first: against the line
     // before, each line alike to the Edit menu's place, File starting where Edit started and
     // Edit ending where File ended, each as wide as before, Retry and Help where they were. And
     // again with the pattern's box holding 24 characters (164 px at the full labels, 45 more):
@@ -2758,6 +2799,9 @@ mod tests {
     // the panel buttons or the full labels).
     #[test]
     fn narrow_windows_lay_the_bar_out_as_before() {
+        if !in_measured_font("narrow_windows_lay_the_bar_out_as_before") {
+            return;
+        }
         let pinned = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/toolbar_narrow_layout.txt"
@@ -2795,6 +2839,9 @@ mod tests {
     // other control keep their place and size when one comes.
     #[test]
     fn the_scale_follows_the_window_width_alone() {
+        if !in_measured_font("the_scale_follows_the_window_width_alone") {
+            return;
+        }
         let scale = |width| spread_at(width, false, false).sizes().scale;
         for width in [880.0, 1000.0, 1200.0] {
             assert_eq!(scale(width), 1.0, "{width} px");
@@ -2863,8 +2910,8 @@ mod tests {
     // leaves 3 px over and under in their 22 px rows), so a panel button is 16 + 2 × 6 = 28 px
     // wide and the grid 3 × 28 + 2 × 2 = 88; the readouts' digits 16 → 23 px and the readouts
     // with them, 76 × 23 / 16 = 109.25 → 110 px and 86 × 23 / 16 = 123.6 → 124, 4 × 23 / 16 =
-    // 5.75 → 6 px either side. At 1 every size is its constant. (At 0.9 of the size, asked
-    // 2026-10-27: were 42 → 67, 18 → 29, 60 → 96, 22 → 35, 14 → 22, 26 → 42, 21 × 14 →
+    // 5.75 → 6 px either side. At 1 every size is its constant. (Before 0.9 of the size these
+    // were 42 → 67, 18 → 29, 60 → 96, 22 → 35, 14 → 22, 26 → 42, 21 × 14 →
     // 34 × 22, 6 → 10, 6 → 10, 16 → 22, 16 → 20, 12 → 14, 12 → 16, 15 → 18, 12 → 14, 11 → 14,
     // 12 → 19 in 25 px rows, 31, 97, 18 → 26, 122, 139.)
     #[test]

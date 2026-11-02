@@ -515,9 +515,8 @@ impl Compiler {
                 };
                 // Muted is gain 0, so muting needs no pattern recompile either. Playing nothing
                 // of the document (a latency measurement) plays no input channel either: down a
-                // cable looped from the output into the input, one would feed itself back
-                // (found 2026-10-26). Its device's recording is filled by the device
-                // callback, not by the plan.
+                // cable looped from the output into the input, one would feed itself back. Its
+                // device's recording is filled by the device callback, not by the plan.
                 let muted = channel.mute
                     || (mode == PlayMode::Nothing && channel.kind == ChannelKind::Input);
                 let gain = if muted { 0.0 } else { channel.volume };
@@ -1371,27 +1370,32 @@ fn automation_edges(automation: &[AutomationPlan]) -> Vec<Ticks> {
     edges
 }
 
-/// A pattern's notes as events sorted by tick. Notes at or past the pattern's end are kept in
-/// the document but silent, so they are left out here; so are negative ticks, which a valid
-/// project never has.
+/// A pattern's notes as events sorted by tick, each where the pattern's swing plays it
+/// ([`time::swung_note`]). Notes at or past the pattern's end are kept in the document but
+/// silent, so they are left out here (by their stored tick: a swung note stays inside the
+/// pattern); so are negative ticks, which a valid project never has.
 fn compile_pattern(pattern: &Pattern, ppq: u16) -> Arc<[NoteEvent]> {
     let length = time::bars_to_ticks(pattern.length_bars, ppq);
     let mut events: Vec<NoteEvent> = pattern
         .notes
         .iter()
         .filter(|note| (Ticks(0)..length).contains(&note.start))
-        .map(|note| NoteEvent {
-            tick: note.start,
-            channel: note.channel,
-            velocity: note.velocity,
-            speed: playback_speed(note.key),
-            key: note.key,
-            length: note.length,
+        .map(|note| {
+            let (tick, length) =
+                time::swung_note(note.start, note.length, pattern.swing_tenths, ppq);
+            NoteEvent {
+                tick,
+                channel: note.channel,
+                velocity: note.velocity,
+                speed: playback_speed(note.key),
+                key: note.key,
+                length,
+            }
         })
         .collect();
-    // Valid notes are already sorted, but the player's binary search depends on the order, so
-    // it is enforced here. The sort is stable: notes that start together keep their order,
-    // which fixes the order their voices are mixed in.
+    // The player's binary search depends on the order, so it is enforced here: valid notes are
+    // sorted, but a swung note can pass a hand-placed one. The sort is stable: notes that start
+    // together keep their order, which fixes the order their voices are mixed in.
     events.sort_by_key(|event| event.tick);
     events.into()
 }
@@ -1403,8 +1407,8 @@ mod tests {
     use super::*;
     use crate::plan::ProcessorSlot;
     use crate::project::{
-        Automations, Channel, ChannelId, ClipId, EffectId, MidiLinks, Mixer, Note, Playlist,
-        TrackId, DEFAULT_KEY, MAX_KEY,
+        Automations, Channel, ChannelId, ClipId, EffectId, MidiLinks, Mixer, Note, PatternKind,
+        Playlist, TrackId, DEFAULT_KEY, MAX_KEY,
     };
     use crate::time::MilliBpm;
 
@@ -1442,6 +1446,8 @@ mod tests {
                     name: "Pattern 1".into(),
                     length_bars: 2,
                     copied_from: None,
+                    swing_tenths: time::STRAIGHT_SWING,
+                    kind: PatternKind::Pattern,
                     notes,
                 },
             )]),
@@ -1512,6 +1518,22 @@ mod tests {
         let plan = compile_all(&project);
         assert_eq!(plan.channel(ChannelId(3)).map(|c| c.gain), Some(0.0));
         assert_eq!(plan.channel(ChannelId(7)).map(|c| c.gain), Some(0.5));
+    }
+
+    // Known answer (d) of tests/fixtures/gen_p31_expected.py: at 75 % the hit at 24 plays at
+    // 36, past the hand-placed one at 30, which stays, so the events' order by tick flips; the
+    // held note at 120 (= 96 + 24) plays at 132 with its own length; the swung hit lasts
+    // 2·24 − 36 = 12 ticks, so it ends on the next step; the unmoved one stays a step hit.
+    #[test]
+    fn swing_plays_second_sixteenths_late_in_tick_order() {
+        let fixture = include_str!("../../../tests/fixtures/p31_offgrid.json");
+        let plan = compile_all(&Project::load_json(fixture).expect("loads"));
+        let events: Vec<(i64, u32, i64)> = plan.patterns[0]
+            .events
+            .iter()
+            .map(|event| (event.tick.0, event.channel.0, event.length.0))
+            .collect();
+        assert_eq!(events, [(30, 1, 0), (36, 1, 12), (132, 2, 48)]);
     }
 
     #[test]

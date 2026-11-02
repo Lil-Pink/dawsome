@@ -231,6 +231,14 @@ class Fetch(unittest.TestCase):
         self.assertFalse(os.path.exists(stamp))
 
     # The source: fetched only when asked for, and its download's path printed.
+    # A PLATFORM the script does not know is refused, saying which, and nothing is fetched.
+    def test_an_unknown_platform_is_refused(self):
+        release = standard(self)
+        status, _, err = release.fetch("nosuch-x86_64")
+        self.assertEqual(status, 2)
+        self.assertIn("'nosuch-x86_64'", err)
+        self.assertFalse(os.path.exists(release.dir))
+
     def test_the_source_is_fetched_when_asked_for(self):
         release = standard(self)
         status, out, err = release.fetch("--source")

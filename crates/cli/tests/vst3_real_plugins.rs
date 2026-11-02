@@ -275,7 +275,7 @@ fn moduleinfo_classes(module: &Path) -> Vec<(String, String, String)> {
 // LSP Plugins' VST3 module, the system's own (`/usr/lib/vst3/lsp-plugins.vst3`, skipped when it
 // is not installed), scanned through a temp folder holding a link to it, never a copy: every
 // audio class of its moduleinfo.json (198) is listed with its name and kind. Its child takes
-// close to one CHILD_TIMEOUT in all (7.7 to 8.3 s on the debug build, 2026-10-26), some 40 ms a
+// close to one CHILD_TIMEOUT in all (7.7 to 8.3 s on the debug build), some 40 ms a
 // class: its progress lines, one a class, are what keep a module like it inside the limits as it
 // grows (CHILD_CAP, 60 s, in all). The wall time is printed.
 #[cfg(target_os = "linux")]

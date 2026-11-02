@@ -11,9 +11,9 @@ left out (they run only while compiling), and so are the workspace's own crates:
 scripts/license-check.py reads, `cargo tree -p dawsome -p dawsome-app --target <each> --edges
 normal,no-proc-macro`. Why not the resolve `cargo metadata --filter-platform` gives: it unites
 the features of the whole workspace, so a feature only the test plugins turn on adds crates the
-release build never compiles (clack-plugin, through clack-extensions, and seven more on
-2026-10-29). `cargo metadata` gives each crate's folder and manifest fields. For each: its name, version,
-the license expression and repository from its manifest, the platforms that build it in, and the
+release build never compiles (clack-plugin, through clack-extensions, and seven more when this
+was written). `cargo metadata` gives each crate's folder and manifest fields. For each: its
+name, version, the license expression and repository from its manifest, the platforms that build it in, and the
 texts of its license and notice files (LICENSE*, LICENCE*, COPYING*, COPYRIGHT*, NOTICE*,
 UNLICENSE*, and the manifest's license-file) from its folder in the cargo registry, word for word.
 A crate with none on disk gets the line "license text: see the crate's repository": no text is
@@ -145,7 +145,7 @@ def release_targets():
 def built_in(target, packages, own):
     """The packages the programs are built from on `target`, by "name version": their normal
     dependencies, proc macros left out, as the release build resolves their features."""
-    listing = cargo("tree", "--quiet", "--target", target, *(f"-p={p}" for p in PROGRAMS),
+    listing = cargo("tree", "--quiet", "--color", "never", "--target", target, *(f"-p={p}" for p in PROGRAMS),
                     "--edges", "normal,no-proc-macro", "--prefix", "none", "--format", "{p}")
     built = {}
     for line in filter(None, listing.splitlines()):

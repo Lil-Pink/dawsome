@@ -3,22 +3,30 @@
 //! player's next call on, and drawn in the piano roll from then on. When the take stops, the notes
 //! still held end there and the whole take becomes one undo step.
 //!
-//! In pattern mode the take writes into the selected pattern as it loops: a note starts where
+//! In pattern mode the take writes into the selected pattern as it loops (a take with notes
+//! selected gets a new blank pattern first, a blank take is made a pattern):
+//! a note starts where
 //! it was heard within the pattern, moved to the nearest snap line when quantizing (a start
-//! snapped onto the pattern's end wraps to its start). In song mode the take makes a pattern of
-//! its own, "<channel> take N", and one clip of it from the song marker ([`takes::song_take`]):
-//! a note starts where it was heard from the marker (quantized the same way, never wrapped), and
-//! the pattern and its clip grow by whole bars as the playhead goes ([`NoteTake::follow`]),
-//! holding the bar it is in; at the stop they hold what was played, and a take with no note takes
-//! them out again (nothing is recorded). Either way a note is as long as it was played,
+//! snapped onto the pattern's end wraps to its start). In song mode the take records into the
+//! blank take selected, else makes a take of its own, "<channel> take N"
+//! ([`takes::take_pattern`]), one bar long and placed nowhere (the
+//! user places it on a track afterwards): its bar 1 is the song marker, where the song plays
+//! from when Record starts it; a note starts where it was heard from there (quantized the same
+//! way, never wrapped), and the pattern grows by whole bars as the playhead goes
+//! ([`NoteTake::follow`]), holding the bar it is in; at the stop it holds what was played, and a
+//! take with no note takes it out again (nothing is recorded). Either way a note is as long as it was played,
 //! unquantized, so quantizing moves only the start; its velocity is the one it was played at; a
-//! note on the same tick and key replaces the one there. Notes heard during the count-in, and
-//! notes on a channel that plays no notes (an audio clips' channel), are not recorded.
+//! note on the same tick and key replaces the one there. A key struck in the count-in and still
+//! held when bar 1 begins starts at the take's first tick (its release sets the length); one
+//! let go of in the count-in, and notes on a channel that plays no notes (an audio clips'
+//! channel), are not recorded. Whatever readied the take's pattern (a pattern or a
+//! take added, a blank one made the other kind or renamed) is part of the take: a take with no
+//! note takes it back.
 
 use std::collections::BTreeMap;
 
 use dawsome_engine::edit::{takes, Edit};
-use dawsome_engine::project::{ChannelId, ClipId, Note, PatternId, Project, TrackId};
+use dawsome_engine::project::{ChannelId, Note, PatternId, Project};
 use dawsome_engine::realtime::EngineEvent;
 use dawsome_engine::time::{self, Ticks};
 
@@ -30,12 +38,9 @@ use crate::ui::note_gesture::snap_nearest;
 enum Into {
     /// The selected pattern, as it loops.
     Pattern(PatternId),
-    /// The take's own pattern and its clip from tick `start`, `bars` long so far.
+    /// The take's own pattern, its tick 0 at song tick `start`, `bars` long so far.
     Song {
         pattern: PatternId,
-        clip: ClipId,
-        /// The track the take added, when no track had room.
-        added_track: Option<TrackId>,
         start: Ticks,
         bars: u32,
     },
@@ -47,14 +52,19 @@ pub struct NoteTake {
     into: Into,
     /// The snap unit starts are quantized to; `None` keeps them where they were played.
     quantize: Option<Ticks>,
-    /// The keys held, by channel and key: the tick each was heard from, and its velocity.
-    held: BTreeMap<(ChannelId, u8), (Ticks, f32)>,
+    /// The keys held, by channel and key: the tick each was heard from (`None`: struck in the
+    /// count-in, so from the take's first tick once it gets there), and its velocity.
+    held: BTreeMap<(ChannelId, u8), (Option<Ticks>, f32)>,
     /// The inverses of every edit the take applied so far, oldest first.
     undo: Vec<Edit>,
     /// Notes written so far.
     written: usize,
     /// The furthest playhead tick the take heard of (song mode): what it holds.
     reached: Ticks,
+    /// The document keeps the take's pattern from other edits while it runs (a song take's, and
+    /// one the take added): the take's undo gives an added pattern's ID back, which only the
+    /// pattern as the take left it allows.
+    guarded: bool,
 }
 
 /// What a take of notes left once it stopped.
@@ -76,34 +86,72 @@ impl NoteTake {
             undo: Vec::new(),
             written: 0,
             reached: Ticks(0),
+            guarded: false,
         }
     }
 
-    /// A take in song mode from tick `start`: its pattern `name` and its clip, a bar long, on
-    /// `track` (the armed one) when the project has it, else as [`takes::song_take`] places it,
-    /// applied now so the roll and the playlist show them.
+    /// A take into `pattern` as it loops (pattern mode) once `first` readied it: a blank take
+    /// made a pattern, or the pattern added for the take (`added`), which the document then keeps
+    /// from other edits while the take runs.
+    pub fn new_after(
+        session: &mut Session,
+        pattern: PatternId,
+        first: Edit,
+        added: bool,
+        quantize: Option<Ticks>,
+    ) -> Result<Self, SessionError> {
+        let inverse = session.apply_take(first)?;
+        Ok(Self {
+            undo: vec![inverse],
+            guarded: added,
+            ..Self::new(pattern, quantize)
+        })
+    }
+
+    /// A take in song mode from tick `start` into a new take `name`, a bar long and with no
+    /// clip, applied now so the roll shows it.
     pub fn song(
         session: &mut Session,
         name: String,
         start: Ticks,
-        track: Option<TrackId>,
         quantize: Option<Ticks>,
     ) -> Result<Self, SessionError> {
-        let take = takes::song_take(session.project(), name, start, track, 1)?;
-        let inverse = session.apply_take(take.edit)?;
+        let (edit, pattern) = takes::take_pattern(session.project(), name)?;
+        Self::song_into(session, pattern, Some(edit), start, quantize)
+    }
+
+    /// A take in song mode from tick `start` into `pattern`, blank, once `first` (when set)
+    /// readied it: added, made a take, or renamed for the channel it records. It grows from the
+    /// length the pattern has then.
+    pub fn song_into(
+        session: &mut Session,
+        pattern: PatternId,
+        first: Option<Edit>,
+        start: Ticks,
+        quantize: Option<Ticks>,
+    ) -> Result<Self, SessionError> {
+        let undo = match first {
+            Some(edit) => vec![session.apply_take(edit)?],
+            None => Vec::new(),
+        };
+        // A pattern gone records nothing ([`Self::notes`]), and the take then leaves nothing.
+        let bars = session
+            .project()
+            .patterns
+            .get(&pattern)
+            .map_or(1, |pattern| pattern.length_bars);
         Ok(Self {
             into: Into::Song {
-                pattern: take.pattern,
-                clip: take.clip,
-                added_track: take.added_track.then_some(take.track),
+                pattern,
                 start,
-                bars: 1,
+                bars,
             },
             quantize,
             held: BTreeMap::new(),
-            undo: vec![inverse],
+            undo,
             written: 0,
             reached: start,
+            guarded: true,
         })
     }
 
@@ -123,33 +171,30 @@ impl NoteTake {
         }
     }
 
-    /// The song take's pattern, clip and the track it added, which the document keeps from
-    /// changing under it while it runs; none in pattern mode.
-    pub fn song_parts(&self) -> Option<TakeParts> {
-        match self.into {
-            Into::Song {
-                pattern,
-                clip,
-                added_track,
-                ..
-            } => Some(TakeParts {
-                pattern,
-                clip,
-                track: added_track,
-            }),
-            Into::Pattern(_) => None,
-        }
+    /// The tick where the take's bar 1 begins, which a key held over from the count-in starts
+    /// at: the song tick a song take started at, the pattern's start in pattern mode.
+    fn first_tick(&self) -> Ticks {
+        self.song_start().unwrap_or(Ticks(0))
     }
 
-    /// Takes in one event the player posted: a note heard while the song timeline ran starts,
-    /// and its end writes it into the pattern.
+    /// The take's pattern when the document keeps it from changing under the take while it runs
+    /// (a song take's, and one the take added); none else.
+    pub fn guarded_parts(&self) -> Option<TakeParts> {
+        self.guarded.then(|| TakeParts {
+            pattern: self.pattern(),
+        })
+    }
+
+    /// Takes in one event the player posted: a note heard starts (in the count-in, with no
+    /// tick, from the take's first tick), and its end while the song timeline runs writes it
+    /// into the pattern; a key let go of in the count-in leaves nothing.
     pub fn hear(&mut self, session: &mut Session, event: &EngineEvent) -> Result<(), SessionError> {
         match *event {
             EngineEvent::LiveNoteStarted {
                 channel,
                 key,
                 velocity,
-                tick: Some(tick),
+                tick,
                 ..
             } => {
                 self.held.insert((channel, key), (tick, velocity));
@@ -161,14 +206,28 @@ impl NoteTake {
                 tick: Some(tick),
                 ..
             } => match self.held.remove(&(channel, key)) {
-                Some((on, velocity)) => self.write(session, channel, key, on, velocity, tick),
+                Some((on, velocity)) => {
+                    let on = on.unwrap_or_else(|| self.first_tick());
+                    self.write(session, channel, key, on, velocity, tick)
+                }
                 None => Ok(()),
             },
+            EngineEvent::LiveNoteEnded {
+                channel,
+                key,
+                tick: None,
+                ..
+            } => {
+                if matches!(self.held.get(&(channel, key)), Some((None, _))) {
+                    self.held.remove(&(channel, key));
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
 
-    /// The playhead is at `playhead`: a song take's pattern and clip grow to hold the bar it is
+    /// The playhead is at `playhead`: a song take's pattern grows to hold the bar it is
     /// in (a pattern take holds its pattern's length). Returns whether they grew.
     pub fn follow(&mut self, session: &mut Session, playhead: Ticks) -> Result<bool, SessionError> {
         let Into::Song { start, bars, .. } = self.into else {
@@ -182,29 +241,34 @@ impl NoteTake {
     }
 
     /// Stops the take: the notes still held end at `tick`, and everything written becomes one
-    /// undo step. A song take then holds the bars of what was played and of every note, and
-    /// one with no note is taken out again. A note that could not be written is reported after
-    /// the rest are.
+    /// undo step. A song take then holds the bars of what was played and of every note. A take
+    /// with no note takes back all it did (a song take's pattern goes). A note that could not
+    /// be written is reported after the rest are.
     pub fn finish(mut self, session: &mut Session, tick: Ticks) -> Result<Finished, SessionError> {
+        let first = self.first_tick();
         let mut result = Ok(());
         for ((channel, key), (on, velocity)) in std::mem::take(&mut self.held) {
+            // Struck in the count-in: only once the take got past its first tick.
+            let on = match on {
+                Some(on) => on,
+                None if tick > first => first,
+                None => continue,
+            };
             let written = self.write(session, channel, key, on, velocity, tick);
             if result.is_ok() {
                 result = written;
             }
         }
+        if self.written == 0 {
+            self.abandon(session)?;
+            return result.map(|()| Finished::Nothing);
+        }
         if let Into::Song {
             pattern,
-            clip,
             start,
             bars,
-            ..
         } = self.into
         {
-            if self.written == 0 {
-                self.abandon(session)?;
-                return result.map(|()| Finished::Nothing);
-            }
             let ppq = session.project().ppq;
             let reached = self.reached.max(tick);
             let last = session.project().patterns.get(&pattern).map_or(0, |held| {
@@ -217,16 +281,16 @@ impl NoteTake {
             let held = takes::bars_holding(Ticks(reached.0 - start.0), ppq)
                 .max(takes::bars_holding(Ticks(last + 1), ppq));
             if held != bars {
-                let edit = takes::take_length(pattern, clip, held, ppq);
+                let edit = Edit::SetPatternBars {
+                    pattern,
+                    bars: held,
+                };
                 match session.apply_take(edit) {
                     Ok(inverse) => self.undo.push(inverse),
                     Err(error) if result.is_ok() => result = Err(error),
                     Err(_) => {}
                 }
             }
-        }
-        if self.undo.is_empty() {
-            return result.map(|()| Finished::Nothing);
         }
         // Undone newest first: a note that replaced an earlier note of the take brings that
         // one back before it goes too, and a song take's notes go before its pattern does.
@@ -245,11 +309,10 @@ impl NoteTake {
         session.apply_take(Edit::Transaction(self.undo)).map(drop)
     }
 
-    /// Makes a song take's pattern and clip `bars` long when that is more than they are.
+    /// Makes a song take's pattern `bars` long when that is more than it is.
     fn grow_to(&mut self, session: &mut Session, bars: u32) -> Result<(), SessionError> {
         let Into::Song {
             pattern,
-            clip,
             bars: ref mut held,
             ..
         } = self.into
@@ -259,8 +322,7 @@ impl NoteTake {
         if bars <= *held {
             return Ok(());
         }
-        let edit = takes::take_length(pattern, clip, bars, session.project().ppq);
-        let inverse = session.apply_take(edit)?;
+        let inverse = session.apply_take(Edit::SetPatternBars { pattern, bars })?;
         *held = bars;
         self.undo.push(inverse);
         Ok(())
@@ -470,15 +532,19 @@ mod tests {
         }
     }
 
-    // A note heard in the count-in (no tick) is not recorded, nor its end; a note held at Stop
-    // ends at the stop tick; a second note on a tick and key replaces the first, and the undo
-    // brings back what the pattern held before the take.
+    // A key struck in the count-in (no tick) and let go of there leaves nothing; one still held
+    // when bar 1 begins (before, it was dropped too) starts at tick 0, as long as it was held
+    // into the take (60: let go of at 10, so 0 for
+    // 10). A note held at Stop ends at the stop tick; a second note on a tick and key replaces
+    // the first, and the undo brings back what the pattern held before the take.
     #[test]
-    fn count_in_notes_are_skipped_held_notes_end_at_stop_and_replacements_undo() {
+    fn count_in_keys_held_into_bar_1_start_it_held_notes_end_at_stop_and_replacements_undo() {
         let mut session = p9_record();
         let before = session.project().clone();
         let mut take = NoteTake::new(PatternId(1), Some(Ticks(24)));
         for event in [
+            started(65, 0.5, None),
+            ended(65, None),
             started(60, 0.5, None),
             ended(60, Some(10)),
             started(62, 0.5, Some(47)),
@@ -491,8 +557,38 @@ mod tests {
         }
         take.finish(&mut session, Ticks(730)).expect("finished");
         // 47 and 50 both quantize to 48; 700 mod 384 = 316 → 312, held 30 ticks to Stop.
-        assert_eq!(notes(&session), [(48, 2, 62, 0.25), (312, 30, 64, 1.0)]);
+        assert_eq!(
+            notes(&session),
+            [(0, 10, 60, 0.5), (48, 2, 62, 0.25), (312, 30, 64, 1.0)]
+        );
         assert!(session.undo().expect("undoes"));
+        assert_eq!(session.project(), &before);
+    }
+
+    // A take stopped in its count-in with a key held: bar 1 never began, so nothing is
+    // recorded and no undo step is left; a song take's pattern goes with it.
+    #[test]
+    fn a_key_held_over_a_take_stopped_in_the_count_in_records_nothing() {
+        let mut session = p9_record();
+        let before = session.project().clone();
+        let mut take = NoteTake::new(PatternId(1), None);
+        take.hear(&mut session, &started(60, 0.5, None))
+            .expect("heard");
+        assert_eq!(
+            take.finish(&mut session, Ticks(0)).expect("finished"),
+            Finished::Nothing
+        );
+        assert_eq!(session.project(), &before);
+        assert_eq!(session.history().undo_len(), 0);
+
+        let mut take = NoteTake::song(&mut session, "keys take 1".to_owned(), Ticks(768), None)
+            .expect("starts");
+        take.hear(&mut session, &started(60, 0.5, None))
+            .expect("heard");
+        assert_eq!(
+            take.finish(&mut session, Ticks(768)).expect("finished"),
+            Finished::Nothing
+        );
         assert_eq!(session.project(), &before);
     }
 
@@ -520,11 +616,11 @@ mod tests {
         assert_eq!(session.history().undo_len(), 0);
     }
 
-    // A song take from tick 0 of p9_record (8 empty tracks): its pattern "keys take 1" and the
-    // clip on track 1, a bar long; the playhead at 300 keeps one bar. A note played 380..390
+    // A song take from tick 0 of p9_record (8 empty tracks): its pattern "keys take 1", a bar
+    // long and placed nowhere; the playhead at 300 keeps one bar. A note played 380..390
     // snaps to 384, the pattern's end, so the take grows to two bars to hold it. Stopped at 400
-    // the take holds two bars (ceil(400 / 384)); one undo step takes pattern, clip and note out,
-    // byte for byte.
+    // the take holds two bars (ceil(400 / 384)), still with no clip; one undo step takes pattern
+    // and note out, byte for byte.
     #[test]
     fn a_song_take_grows_to_hold_a_note_snapped_onto_its_end() {
         let mut session = p9_record();
@@ -533,7 +629,6 @@ mod tests {
             &mut session,
             "keys take 1".to_owned(),
             Ticks(0),
-            None,
             Some(Ticks(24)),
         )
         .expect("starts");
@@ -557,18 +652,12 @@ mod tests {
             take.finish(&mut session, Ticks(400)).expect("finished"),
             Finished::Kept
         );
-        let clip = session
-            .project()
-            .playlist
-            .clips
-            .values()
-            .next()
-            .expect("the clip")
-            .clone();
         assert_eq!(
-            (clip.track.0, clip.start, clip.length),
-            (1, Ticks(0), Ticks(768))
+            session.project().playlist.clips,
+            before.playlist.clips,
+            "no clip placed"
         );
+        assert_eq!(session.project().patterns[&PatternId(2)].length_bars, 2);
         assert_eq!(session.history().undo_len(), 1);
         assert!(session.undo().expect("undoes"));
         assert_eq!(session.project(), &before);

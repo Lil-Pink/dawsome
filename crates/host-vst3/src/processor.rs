@@ -330,8 +330,8 @@ impl Vst3Processor {
     /// The values the plugin changed in the block, on their way to the main thread, each held
     /// inside 0..1; a NaN is not sent, so the controller keeps the value it had. Why: the
     /// format's values are normalized, but a plugin's output change is whatever it wrote, and
-    /// its controller and the engine's `value` took it as it was (review 2026-10-26: -0.5, 1.5
-    /// and NaN all came back from `value`).
+    /// its controller and the engine's `value` took it as it was (-0.5, 1.5 and NaN all came
+    /// back from `value`).
     fn take_changes(&mut self) {
         for index in 0.. {
             let Some((id, value)) = self.changed.last_values().nth(index) else {

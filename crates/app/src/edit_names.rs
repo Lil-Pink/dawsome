@@ -3,7 +3,7 @@
 //! and a new kind fails to compile here until it has one.
 
 use dawsome_engine::edit::Edit;
-use dawsome_engine::project::ChannelKind;
+use dawsome_engine::project::{ChannelKind, PatternKind};
 
 /// The name of what applying `edit` does, as a short phrase starting with a capital.
 ///
@@ -38,6 +38,15 @@ pub fn name(edit: &Edit) -> &'static str {
         }
         Edit::SetTempo { .. } => "Tempo",
         Edit::SetPatternBars { .. } => "Pattern length",
+        Edit::SetPatternSwing { .. } => "Swing",
+        Edit::SetPatternKind {
+            kind: PatternKind::Take,
+            ..
+        } => "Pattern to take",
+        Edit::SetPatternKind {
+            kind: PatternKind::Pattern,
+            ..
+        } => "Take to pattern",
         Edit::AddPattern { .. } => "New pattern",
         Edit::UnaddPattern { .. } => "Remove pattern",
         Edit::DeletePattern { .. } => "Delete pattern",
@@ -122,6 +131,21 @@ pub fn name(edit: &Edit) -> &'static str {
             } else {
                 plural(clips, "Link clip back", "Link clips back")
             }
+        }
+        // The right arrow's take in song mode: the pattern added, then made a take.
+        Edit::Transaction(edits)
+            if matches!(
+                edits.as_slice(),
+                [
+                    Edit::AddPattern { .. },
+                    Edit::SetPatternKind {
+                        kind: PatternKind::Take,
+                        ..
+                    }
+                ]
+            ) =>
+        {
+            "New take"
         }
         Edit::Transaction(edits) => edits
             .iter()

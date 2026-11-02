@@ -232,6 +232,8 @@ fn clicks_project(notes: Vec<Note>) -> Project {
             name: "Pattern 1".into(),
             length_bars: 1,
             copied_from: None,
+            swing_tenths: dawsome_engine::time::STRAIGHT_SWING,
+            kind: dawsome_engine::project::PatternKind::Pattern,
             notes,
         },
     );

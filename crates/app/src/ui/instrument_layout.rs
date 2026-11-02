@@ -127,6 +127,15 @@ impl Placed {
         }
     }
 
+    /// Whether a drag on it follows the cursor across, right for more, as a knob's and a
+    /// readout's do; a fader's follows it up, as its cap does.
+    pub fn across(&self) -> bool {
+        match self.look {
+            Look::Fader { .. } => false,
+            Look::Knob { .. } | Look::Light { .. } | Look::Chooser | Look::Readout => true,
+        }
+    }
+
     /// Where its value tip shows: over a knob, its cell's top; over a fader, above its cap at
     /// `position` (0..1 along its travel), no higher than the group's header.
     pub fn tip(&self, position: f32) -> Rectangle {
@@ -389,8 +398,8 @@ pub fn cap_rect(track: Rectangle, position: f32, tall: bool) -> Rectangle {
     )
 }
 
-/// Where a drag `rise` pixels up (down is negative) from `start` (0..1 along the sweep) leaves
-/// a control swept by `pixels`, a tenth as fast when `fine` (Shift); a `detent` control holds
+/// Where a drag `rise` pixels toward more (right, or up on a fader; back is negative) from
+/// `start` (0..1 along the sweep) leaves a control swept by `pixels`, a tenth as fast when `fine` (Shift); a `detent` control holds
 /// its center over [`DETENT`] pixels of the drag first.
 pub fn dragged(start: f32, rise: f32, pixels: f32, fine: bool, detent: bool) -> f32 {
     let pixels = if fine { pixels / FINE } else { pixels };
@@ -524,10 +533,9 @@ mod tests {
         }
     }
 
-    // Asked for in use, 2026-10-26 ("I don't want UI that is saying 'Cut itself'"): no light of any
-    // kind's window is the switch (it is the rack channel menu's "One note at a time" now). A set's
-    // SOUND group is its gate pair alone, and a sampler's Reverse is back on its row under them, at
-    // y 84 under One-shot.
+    // No light of any kind's window is the switch, so no window says "Cut itself": it is the rack
+    // channel menu's "One note at a time". A set's SOUND group is its gate pair alone, and a
+    // sampler's Reverse is back on its row under them, at y 84 under One-shot.
     #[test]
     fn the_sound_group_has_no_cut_itself_light() {
         let center = |strip: &Strip, part| match strip.find(part).expect("placed").look {
@@ -679,7 +687,7 @@ mod tests {
     // Known answers, by hand (python3 -I): a knob sweeps its range over 200 px, so the pan
     // from the center 50 px up is 0.75 of its sweep (50% R), and with Shift 0.525; a fader's
     // cap follows the cursor over its travel (72 px: 36 px up from the foot is half way); the
-    // tune knob holds its center over 8 px: 4 px up or down stays at 0.5, 5 px is 0.505 and
+    // tune knob holds its center over 8 px: 4 px either way stays at 0.5, 5 px is 0.505 and
     // 9 px 0.525 (the first that rounds to +1 semitone; 8 px is 0.52, still 0).
     #[test]
     fn a_drag_moves_a_control_along_its_sweep() {

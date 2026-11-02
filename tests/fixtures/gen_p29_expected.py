@@ -175,7 +175,7 @@ def render_view():
 RENDER = render_view()
 S0, S1 = t2s(24, 48000, 120000), t2s(120, 48000, 120000)
 assert (S0, S1) == (6000, 30000)
-# The spec's probes (vst3-host-phase3.md, W1), to ten digits.
+# The probes precomputed apart from this generator, to ten digits.
 assert ["%.10g" % RENDER[k] for k in (S0, S0 + 1, S1)] == ["0.5", "0.4991708994", "0"]
 # The same frames as gen_p27's sine render (p27_expected.json's sha256 for p27_vst3_sine).
 assert sha256_of(RENDER) == "676f9c7fd3da21008248656b4ef9628e2da5ec61ec9779055be183d61ab8abe1"
@@ -442,7 +442,7 @@ def clap_user_resizes(sizes, fixed_sizes=()):
 
 
 # Told by the window manager (a ConfigureNotify sent as the window manager sends one): wider than
-# its aspect (Surge XT's case seen in use, 2026-10-28), taller, bigger both ways, smaller than least.
+# its aspect (Surge XT's case seen in use), taller, bigger both ways, smaller than least.
 CLAP_USER_RESIZES = clap_user_resizes([(600, 300), (400, 500), (800, 700), (100, 100)], [(500, 500)])
 # By hand: 600x300 holds to 4:3 inside it, 400x300, the size kept: our window back, no set_size;
 # 400x500 likewise; 800x700 to 800x600; 100x100 to the least, 200x150; a fixed one nothing.

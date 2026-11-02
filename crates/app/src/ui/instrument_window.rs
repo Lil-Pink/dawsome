@@ -748,8 +748,8 @@ const LABEL_SIZE: f32 = 10.0;
 
 /// The strip of controls, like a mixer's: draws its groups, knobs, lights and faders, the
 /// value tip over the control under the cursor or held, and turns presses and drags into the
-/// window's messages. A knob or fader moves up with the cursor (down lowers it), a tenth as
-/// fast with Shift, from where it was; a double-click resets it.
+/// window's messages. A knob or readout follows the cursor across (right raises it) and a
+/// fader up, a tenth as fast with Shift, from where it was; a double-click resets it.
 struct Controls<'a> {
     channel: &'a Channel,
     /// The strip's drawing without the tip, kept between frames.
@@ -761,8 +761,9 @@ struct Controls<'a> {
     fine: bool,
 }
 
-/// A knob or fader held down: where along its sweep it started, the cursor's height then,
-/// how many pixels its sweep takes and whether it moves fine.
+/// A knob or fader held down: where along its sweep it started, the cursor's coordinate along
+/// the drag then, how many pixels its sweep takes, whether it moves fine and whether it follows
+/// the cursor across (a knob or readout) or up (a fader).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Held {
     control: Control,
@@ -770,6 +771,27 @@ struct Held {
     anchor: f32,
     sweep: f32,
     fine: bool,
+    across: bool,
+}
+
+impl Held {
+    /// How far the cursor at `at` has gone from the anchor toward more: right, or up on a fader.
+    fn rise(&self, at: Point) -> f32 {
+        if self.across {
+            at.x - self.anchor
+        } else {
+            self.anchor - at.y
+        }
+    }
+}
+
+/// The cursor's coordinate along a drag: x across, y up and down.
+fn along(across: bool, at: Point) -> f32 {
+    if across {
+        at.x
+    } else {
+        at.y
+    }
 }
 
 /// What the strip remembers between events.
@@ -914,12 +936,14 @@ impl canvas::Program<Message> for Controls<'_> {
                     return Some(send(InstrumentMessage::Reset(control)).and_capture());
                 }
                 state.last_press = Some((now, control));
+                let across = placed.across();
                 state.held = Some(Held {
                     control,
                     start: control.position(self.value(control)),
-                    anchor: cursor.position()?.y,
+                    anchor: along(across, cursor.position()?),
                     sweep: placed.sweep(),
                     fine: self.fine,
+                    across,
                 });
                 Some(canvas::Action::request_redraw().and_capture())
             }
@@ -928,10 +952,10 @@ impl canvas::Program<Message> for Controls<'_> {
                     // The cursor, not the event's position: a scrolled body moves the cursor
                     // its content sees, as it did for the anchor, and off the strip's
                     // scrollable the cursor levitates but still says where it is.
-                    let y = cursor.land().position()?.y;
+                    let rise = held.rise(cursor.land().position()?);
                     // Detented at no transposition, so the tune finds its center by feel.
                     let detent = held.control == Control::Semitones;
-                    let at = dragged(held.start, held.anchor - y, held.sweep, held.fine, detent);
+                    let at = dragged(held.start, rise, held.sweep, held.fine, detent);
                     let value = held.control.value_at(at);
                     if value == self.value(held.control) {
                         return None;
@@ -953,10 +977,10 @@ impl canvas::Program<Message> for Controls<'_> {
             // Shift pressed or let go of half way through: the drag goes on from where it is,
             // at the new speed, rather than jumping.
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
-                let anchor = cursor.land().position()?.y;
+                let at = cursor.land().position()?;
                 let held = state.held.as_mut()?;
                 held.start = held.control.position(held.control.value(self.channel));
-                held.anchor = anchor;
+                held.anchor = along(held.across, at);
                 held.fine = modifiers.shift();
                 None
             }
@@ -2037,22 +2061,28 @@ mod tests {
         }
     }
 
-    // v2: the strip's knobs and faders are the mixer's: a press holds one, a move up raises it
-    // from where it was (the pan from the center 50 px up: 0.5), with Shift a tenth as fast
-    // from where it is then, the release ends the drag (one undo step), a second press soon
-    // after resets it; a light's press switches it. A move that keeps the value sends nothing.
+    /// The kick sampler's strip of controls, 536 px across, one-shot, at full speed.
+    fn kick_strip<'a>(channel: &'a Channel, cache: &'a canvas::Cache) -> Controls<'a> {
+        Controls {
+            channel,
+            cache,
+            gate: Gate::OneShot,
+            strip: Strip::of(ChannelKind::Sampler, 536.0),
+            fine: false,
+        }
+    }
+
+    // v2: the strip's knobs and faders are the mixer's: a press holds one, a move right (up, on
+    // a fader) raises it from where it was (the pan from the center 50 px right: 0.5), with
+    // Shift a tenth as fast from where it is then, the release ends the drag (one undo step), a
+    // second press soon after resets it; a light's press switches it. A move that keeps the
+    // value sends nothing.
     #[test]
     fn the_strips_knobs_fade_switch_and_reset_as_the_mixers_do() {
         use crate::ui::instrument_layout::Part;
         let channel = Channel::sampler("kick", "kick.wav");
         let cache = canvas::Cache::new();
-        let controls = Controls {
-            channel: &channel,
-            cache: &cache,
-            gate: Gate::OneShot,
-            strip: Strip::of(ChannelKind::Sampler, 536.0),
-            fine: false,
-        };
+        let controls = kick_strip(&channel, &cache);
         let pan = controls
             .strip
             .find(Part::Control(Control::Pan))
@@ -2062,23 +2092,23 @@ mod tests {
         let mut state = ControlsState::default();
         let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
         // A move's own position is the window's, 300 px off what the strip's cursor says in a
-        // body scrolled down 300 px: the drag goes by the cursor.
-        let moved = |y: f32| {
+        // body scrolled 300 px down and across: the drag goes by the cursor.
+        let moved = |x: f32| {
             Event::Mouse(mouse::Event::CursorMoved {
-                position: Point::new(pan.x, y + 300.0),
+                position: Point::new(x + 300.0, pan.y + 300.0),
             })
         };
         let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
         let instrument = Some;
         assert_eq!(strip_event(&controls, &mut state, press.clone(), pan), None);
         assert_eq!(
-            strip_event(&controls, &mut state, moved(pan.y), pan),
+            strip_event(&controls, &mut state, moved(pan.x), pan),
             None,
             "the value it has"
         );
-        let up = |y: f32| Point::new(pan.x, y);
+        let right = |x: f32| Point::new(x, pan.y);
         assert!(matches!(
-            strip_event(&controls, &mut state, moved(pan.y - 50.0), up(pan.y - 50.0)),
+            strip_event(&controls, &mut state, moved(pan.x + 50.0), right(pan.x + 50.0)),
             Some(InstrumentMessage::Set(Control::Pan, value)) if value == 0.5
         ));
         // Off the strip's scrollable its cursor levitates, and still says where it is.
@@ -2086,9 +2116,9 @@ mod tests {
             use canvas::Program;
             let bounds =
                 Rectangle::new(Point::ORIGIN, Size::new(controls.strip.width, STRIP_HEIGHT));
-            let off = mouse::Cursor::Levitating(up(pan.y - 60.0));
+            let off = mouse::Cursor::Levitating(right(pan.x + 60.0));
             let action = controls
-                .update(&mut state, &moved(pan.y - 60.0), bounds, off)
+                .update(&mut state, &moved(pan.x + 60.0), bounds, off)
                 .expect("a drag off the strip goes on");
             assert!(matches!(
                 action.into_inner().0,
@@ -2103,11 +2133,11 @@ mod tests {
             &controls,
             &mut state,
             shift,
-            Point::new(pan.x, pan.y - 50.0),
+            Point::new(pan.x + 50.0, pan.y),
         );
         // The channel still holds the center here, so fine goes on from it: 50 px is 0.05.
         assert!(matches!(
-            strip_event(&controls, &mut state, moved(pan.y - 100.0), up(pan.y - 100.0)),
+            strip_event(&controls, &mut state, moved(pan.x + 100.0), right(pan.x + 100.0)),
             Some(InstrumentMessage::Set(Control::Pan, value))
                 if (value - 0.05).abs() < 1e-6
         ));
@@ -2157,6 +2187,56 @@ mod tests {
             Some(InstrumentMessage::Set(Control::Attack, value))
                 if (value - 0.5).abs() < 1e-6
         ));
+    }
+
+    // A knob or readout follows the cursor across and a fader follows it up: 50 px along the
+    // other axis moves neither the pan knob, the bend readout nor the attack fader, and 20 px
+    // along its own does.
+    #[test]
+    fn a_strip_knob_follows_the_cursor_across_and_a_fader_up() {
+        use crate::ui::instrument_layout::Part;
+        let channel = Channel::sampler("kick", "kick.wav");
+        let cache = canvas::Cache::new();
+        let controls = kick_strip(&channel, &cache);
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let moved = |at: Point| Event::Mouse(mouse::Event::CursorMoved { position: at });
+        for (control, across) in [
+            (Control::Pan, true),
+            (Control::BendRange, true),
+            (Control::Attack, false),
+        ] {
+            let at = controls
+                .strip
+                .find(Part::Control(control))
+                .expect("placed")
+                .hit
+                .center();
+            let (other, own) = if across {
+                (
+                    Point::new(at.x, at.y - 50.0),
+                    Point::new(at.x + 20.0, at.y - 50.0),
+                )
+            } else {
+                (
+                    Point::new(at.x + 50.0, at.y),
+                    Point::new(at.x + 50.0, at.y - 20.0),
+                )
+            };
+            let mut state = ControlsState::default();
+            let _ = strip_event(&controls, &mut state, press.clone(), at);
+            assert_eq!(
+                strip_event(&controls, &mut state, moved(other), other),
+                None,
+                "{control:?}: 50 px along the other axis"
+            );
+            assert!(
+                matches!(
+                    strip_event(&controls, &mut state, moved(own), own),
+                    Some(InstrumentMessage::Set(set, _)) if set == control
+                ),
+                "{control:?}: 20 px along its own"
+            );
+        }
     }
 
     // v2: the map fills the window across, its keys or pads stretched: 29 white keys take

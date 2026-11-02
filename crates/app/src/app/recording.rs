@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dawsome_engine::edit::takes;
-use dawsome_engine::project::{ChannelId, InsertId, PatternId, TrackId};
+use dawsome_engine::project::{ChannelId, InsertId, PatternId, PatternKind, TrackId};
 use dawsome_engine::realtime::EngineEvent;
 use dawsome_engine::time::Ticks;
 use dawsome_engine::transport::Control;
@@ -31,12 +31,23 @@ use super::{App, PlayMode};
 use crate::notes::{Finished, NoteTake};
 use crate::play_to::RecordSource;
 use crate::record::{self, InputStream};
+use crate::session::SessionError;
 use crate::ui::mixer_state::Meters;
 
 /// What the toolbar says of where a take of the line in went: "Take 2 placed 26 ms early
 /// (measured latency)" (late for a negative latency, "latency set by hand" for a figure set so),
 /// the ms rounded half up at `rate`; "Take 2 not shifted: shorter than the input latency"; none
 /// for a take placed as recorded with no latency kept.
+/// Whether `event` is a live note's start or end heard while the song timeline did not run (no
+/// tick): before a take's bar 1, its count-in.
+fn untimed_note(event: &EngineEvent) -> bool {
+    matches!(
+        event,
+        EngineEvent::LiveNoteStarted { tick: None, .. }
+            | EngineEvent::LiveNoteEnded { tick: None, .. }
+    )
+}
+
 fn shift_words(name: &str, shift: takes::Shift, measured: bool, rate: u32) -> Option<String> {
     match shift {
         takes::Shift::None => None,
@@ -360,38 +371,57 @@ impl App {
     }
 
     /// Play while armed with Notes as the only source: after the count-in, in pattern mode the
-    /// selected pattern loops and the notes played go into it; in song mode the song plays from
-    /// the song marker and they go into a new pattern of the selected channel's and its clip
-    /// there, which the pattern box then shows. Returns false, with the reason shown, when it
-    /// cannot start.
+    /// selected pattern loops and the notes played go into it ([`start_pattern_take`]); in song
+    /// mode the song plays from the song marker (stopped first when it plays) and they go into
+    /// the blank take selected or a new take of the selected channel's, its bar 1 at the marker
+    /// and placed nowhere, which the pattern box then shows ([`start_song_take`]). Returns false,
+    /// with the reason shown, when it cannot start.
+    ///
+    /// [`start_pattern_take`]: Self::start_pattern_take
+    /// [`start_song_take`]: Self::start_song_take
     fn start_note_take(&mut self) -> bool {
         let quantize = self
             .recording
             .quantize
             .then(|| self.roll.snap.unit(&self.roll.view));
+        // The keys play what the take records: the selected channel, not the Library's
+        // preview, whose notes it drops (no channel of the document plays them). Found in use: a
+        // take "wouldn't record" while its keys sounded, until another channel was selected.
+        let ended = self.end_library_preview();
+        self.report(ended);
         // Notes heard before the take are none of its business.
         let _ = self.session.take_events();
         let take = match self.mode {
-            PlayMode::Pattern => {
-                let Some(pattern) = self.pattern else {
-                    self.notice = Some("Note recording needs a pattern".to_owned());
-                    return false;
-                };
-                NoteTake::new(pattern, quantize)
-            }
-            PlayMode::Song => match self.start_song_take(quantize) {
-                Some(take) => take,
-                None => return false,
-            },
+            PlayMode::Pattern => self.start_pattern_take(quantize),
+            PlayMode::Song => self.start_song_take(quantize),
         };
-        let result = self.session.send(Control::Record {
-            count_in: self.recording.count_in,
-            tap_master: false,
+        let Some(take) = take else {
+            return false;
+        };
+        // A song take's bar 1 is the song marker, so the song plays from there, as switching to
+        // song mode puts it. Found in use: Record pressed while the song played made a take 17
+        // bars long at once, its notes after bar 17: a playing player refuses Record and plays
+        // on from where it is, so it stops first.
+        let mut result = Ok(());
+        if self.mode == PlayMode::Song {
+            if self.transport_on || self.session.playing() {
+                result = self.session.send(Control::Stop);
+                self.forget_live_notes();
+            }
+            let marker = self.song_marker;
+            result = result.and_then(|()| self.session.send(Control::Seek(marker)));
+        }
+        let count_in = self.recording.count_in;
+        let result = result.and_then(|()| {
+            self.session.send(Control::Record {
+                count_in,
+                tap_master: false,
+            })
         });
         let started = result.is_ok();
         self.report(result);
         if started {
-            self.session.guard_take(take.song_parts());
+            self.session.guard_take(take.guarded_parts());
             self.recording.note_take = Some(take);
         } else {
             let result = take.abandon(&mut self.session);
@@ -401,31 +431,75 @@ impl App {
         started
     }
 
-    /// A take of notes in song mode from the song marker: its pattern, named after the selected
-    /// channel ("Kick take 1"), and its clip, on the armed track or as the take places it, shown
-    /// in the pattern box. `None`, with the reason shown, when they cannot be added.
-    fn start_song_take(
-        &mut self,
-        quantize: Option<dawsome_engine::time::Ticks>,
-    ) -> Option<NoteTake> {
+    /// A take of notes in pattern mode into the selected pattern as it loops: a take with notes
+    /// is left as it is and a new blank "Pattern N" is added and
+    /// selected for the take; a blank take is made a pattern in place. Either is part of the
+    /// take, so a take with no note leaves the document as it was. `None`, with the reason
+    /// shown, when there is no pattern or the edits are refused.
+    fn start_pattern_take(&mut self, quantize: Option<Ticks>) -> Option<NoteTake> {
         let project = self.session.project();
-        let channel = self
-            .selected_channel
-            .and_then(|id| project.channels.get(&id))
-            .map_or("Notes", |channel| channel.name.as_str());
-        let name = takes::take_name(project, channel);
-        let started = NoteTake::song(
-            &mut self.session,
-            name,
-            self.song_marker,
-            self.recording.track,
-            quantize,
-        );
+        let Some((id, selected)) = self
+            .pattern
+            .and_then(|id| Some((id, project.patterns.get(&id)?)))
+        else {
+            self.notice = Some("Note recording needs a pattern".to_owned());
+            return None;
+        };
+        let started = match (selected.kind, selected.notes.is_empty()) {
+            (PatternKind::Pattern, _) => return Some(NoteTake::new(id, quantize)),
+            (PatternKind::Take, true) => match self.reshape(id, PatternKind::Pattern) {
+                Some(first) => NoteTake::new_after(&mut self.session, id, first, false, quantize),
+                None => return Some(NoteTake::new(id, quantize)),
+            },
+            (PatternKind::Take, false) => self
+                .blank_pattern(PatternKind::Pattern)
+                .map_err(SessionError::from)
+                .and_then(|(add, added)| {
+                    NoteTake::new_after(&mut self.session, added, add, true, quantize)
+                }),
+        };
+        self.show_take(started)
+    }
+
+    /// A take of notes in song mode from the song marker: into the blank pattern selected, made a
+    /// take and named after the selected channel ("Kick take 1") when it is not one already; else
+    /// into a new take of that name, which the pattern box shows. No clip (the user places it).
+    /// `None`, with the reason shown, when the edits are refused.
+    fn start_song_take(&mut self, quantize: Option<Ticks>) -> Option<NoteTake> {
+        let project = self.session.project();
+        let blank = self.pattern.filter(|id| {
+            project
+                .patterns
+                .get(id)
+                .is_some_and(|pattern| pattern.notes.is_empty())
+        });
+        let marker = self.song_marker;
+        let started = match blank {
+            Some(id) => {
+                let first = self.reshape(id, PatternKind::Take);
+                NoteTake::song_into(&mut self.session, id, first, marker, quantize)
+            }
+            None => {
+                let channel = self
+                    .selected_channel
+                    .and_then(|id| project.channels.get(&id))
+                    .map_or("Notes", |channel| channel.name.as_str());
+                let name = takes::take_name(project, channel);
+                NoteTake::song(&mut self.session, name, marker, quantize)
+            }
+        };
+        self.show_take(started)
+    }
+
+    /// The take started: the pattern box shows its pattern (pattern mode plays it), and what it
+    /// showed before when that was another, to show again should the take keep nothing.
+    fn show_take(&mut self, started: Result<NoteTake, SessionError>) -> Option<NoteTake> {
         match started {
             Ok(take) => {
-                self.recording.shown_before = self.pattern;
-                self.pattern = Some(take.pattern());
-                self.roll.forget_notes();
+                if Some(take.pattern()) != self.pattern {
+                    self.recording.shown_before = self.pattern;
+                    self.select_pattern(take.pattern());
+                }
                 self.after_edit(Ok(()));
                 self.clear_panel_caches();
                 Some(take)
@@ -441,8 +515,8 @@ impl App {
     fn show_again_before_take(&mut self) {
         let before = self.recording.shown_before.take();
         if let Some(before) = before.filter(|id| self.session.project().patterns.contains_key(id)) {
-            self.pattern = Some(before);
-            self.roll.forget_notes();
+            // Pattern mode plays it again: a pattern the take added is gone.
+            self.select_pattern(before);
         }
     }
 
@@ -452,16 +526,37 @@ impl App {
         let Some(take) = &mut self.recording.note_take else {
             return;
         };
+        // A song take hears the player once it plays the take: until the player has heard
+        // Record, what it posted is from before, the playhead where the song played (found in
+        // use: past bar 17, which grew the take to 17 bars at once). Only the keys of the
+        // count-in (no tick) count from then: one held into bar 1 starts the take.
+        let before_record =
+            take.song_start().is_some() && self.session.record_clock().recording_from().is_none();
         let mut result = Ok(());
-        for event in events {
+        let mut moved = false;
+        for event in events
+            .iter()
+            .filter(|event| !before_record || untimed_note(event))
+        {
             let heard = take.hear(&mut self.session, event);
             if result.is_ok() {
                 result = heard;
             }
+            // The piano roll keeps each key struck on the channel it shows in view, so what the
+            // take records shows there. Found in use: L (74) was recorded above the rows the roll
+            // showed (5 keys over the channel's highest note), so it looked unrecorded.
+            if let EngineEvent::LiveNoteStarted { channel, key, .. } = *event {
+                if Some(channel) == self.selected_channel {
+                    moved |= self.roll.keep_in_view(key);
+                }
+            }
+        }
+        if moved {
+            self.roll_grid_cache.clear();
         }
         // A song take holds the bar the playhead is in.
         let mut grew = false;
-        if self.session.playing() {
+        if self.session.playing() && !before_record {
             match take.follow(&mut self.session, playhead) {
                 Ok(more) => grew = more,
                 Err(error) if result.is_ok() => result = Err(error),
@@ -933,9 +1028,17 @@ impl App {
 }
 
 #[cfg(test)]
+mod library_preview_take;
+#[cfg(test)]
 mod p17;
 #[cfg(test)]
 mod p23;
+#[cfg(test)]
+mod pattern_kinds;
+#[cfg(test)]
+mod played_keys_in_view;
+#[cfg(test)]
+mod song_take_start;
 
 #[cfg(test)]
 mod tests {
@@ -1043,8 +1146,14 @@ mod tests {
     #[test]
     fn note_takes_play_both_modes_and_end_held_notes_at_stop() {
         let (mut app, mut player) = armed_for_notes();
-        let before = app.session.project().to_json().expect("serializes");
         let _ = app.update(Message::ModeSelected(PlayMode::Song));
+        // The switch made blank Pattern 1 a take, which the take records into.
+        let switched = &app.session.project().patterns[&PatternId(1)];
+        assert_eq!(
+            (switched.name.as_str(), switched.kind),
+            ("keys take 1", PatternKind::Take)
+        );
+        let before = app.session.project().to_json().expect("serializes");
         let _ = app.update(Message::Play);
         assert!(app.recording.taking_notes() && app.transport_on);
         assert_eq!(app.notice, None);
@@ -1289,10 +1398,11 @@ mod tests {
     }
 
     // While a song take runs, the edits its undo step could not take back past are refused with
-    // "Stop the recording first": a new pattern, the take's clip deleted, a note drawn into its
-    // pattern; another channel's volume goes through. After Stop they all do again.
+    // "Stop the recording first": a new pattern, a clip of the take's pattern placed, a note
+    // drawn into its pattern; another channel's volume goes through. The take places no clip
+    // (the user places it). After Stop they all go through again.
     #[test]
-    fn a_song_take_keeps_its_pattern_and_clip_from_other_edits() {
+    fn a_song_take_keeps_its_pattern_from_other_edits() {
         let (mut app, mut player) = armed_for_notes();
         let _ = app.update(Message::ModeSelected(PlayMode::Song));
         let _ = app.update(Message::Play);
@@ -1302,19 +1412,27 @@ mod tests {
         }
         assert!(app.recording.taking_notes());
         let take = app.pattern.expect("the take's pattern");
-        let clip = *app
-            .session
-            .project()
-            .playlist
-            .clips
-            .keys()
-            .last()
-            .expect("the take's clip");
+        assert!(
+            app.session.project().playlist.clips.is_empty(),
+            "no clip placed"
+        );
         let refused = Some("Stop the recording first");
         let _ = app.update(Message::Pattern(PatternMessage::Next));
         assert_eq!(app.error.as_deref(), refused, "a new pattern");
-        app.commit(dawsome_engine::edit::Edit::DeleteClips { ids: vec![clip] });
-        assert_eq!(app.error.as_deref(), refused, "the take's clip");
+        app.commit(dawsome_engine::edit::Edit::PlaceClips {
+            first: app.session.project().playlist.next_clip_id,
+            clips: vec![dawsome_engine::project::Clip::of_pattern(
+                take,
+                dawsome_engine::project::TrackId(1),
+                dawsome_engine::time::Ticks(0),
+                dawsome_engine::time::Ticks(384),
+            )],
+        });
+        assert_eq!(
+            app.error.as_deref(),
+            refused,
+            "a clip of the take's pattern"
+        );
         let note = dawsome_engine::project::Note {
             channel: ChannelId(1),
             start: dawsome_engine::time::Ticks(0),
@@ -1337,12 +1455,6 @@ mod tests {
             value: 0.5,
         });
         assert_eq!(app.error, None, "another change goes through");
-        // A clip unlinked or linked back (clip link) is refused before it reaches the session.
-        app.notice = None;
-        let before = app.session.project().clone();
-        let _ = app.update(Message::ClipLink(super::super::ClipLink::Unlink(clip)));
-        assert_eq!(app.notice.as_deref(), refused, "the take's clip unlinked");
-        assert_eq!(app.session.project(), &before);
         let _ = app.update(Message::Stop);
         let _ = app.update(Message::Pattern(PatternMessage::Next));
         assert_eq!(app.error, None, "after Stop");

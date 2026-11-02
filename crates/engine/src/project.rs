@@ -651,10 +651,36 @@ pub struct Pattern {
     /// version stays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copied_from: Option<PatternId>,
+    /// How late the second 16th of each 8th-note pair plays, as the share of the pair the
+    /// first 16th takes, in tenths of a per cent: [`time::STRAIGHT_SWING`] (500, straight) to
+    /// 750 (dotted), [`time::SWING_RANGE`]. Applied when the pattern compiles
+    /// ([`time::swung_note`]): the notes stay where they were put, and the step grid and the
+    /// piano roll show them there. Written only when not straight, as `copied_from` is: a build
+    /// that knows nothing of swing reads past it (playing the pattern straight, and dropping it
+    /// when it saves), so the format version stays and every file without swing keeps its bytes.
+    #[serde(default = "straight_swing", skip_serializing_if = "is_straight")]
+    pub swing_tenths: u16,
+    /// Whether it is a pattern or a take ([`PatternKind`]). Written only for a take, as
+    /// `swing_tenths` is only when swung: a build that knows nothing of kinds reads past it
+    /// (and saves the take as a pattern), so the format version stays.
+    #[serde(default, skip_serializing_if = "is_pattern")]
+    pub kind: PatternKind,
     /// Sorted by (tick, channel, key), at most one note per channel, tick and key, so a channel
     /// can play a chord. Notes at or past the pattern's end are kept, so shortening a pattern
     /// and lengthening it again loses nothing, but they are silent.
     pub notes: Vec<Note>,
+}
+
+/// What a pattern is to the user, which decides where Record writes and what the right arrow
+/// adds: a pattern, made in pattern mode to loop, or a take, made in song mode by Record or the
+/// right arrow, to be placed on the playlist. A blank one (no notes) becomes the other kind
+/// when the play mode switches; one with notes keeps its kind. The engine plays both the same.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PatternKind {
+    #[default]
+    Pattern,
+    Take,
 }
 
 /// One note in a pattern. A step hit is a note with `length` 0: steps and notes are one
@@ -685,6 +711,18 @@ impl Note {
 
 fn default_key() -> u8 {
     DEFAULT_KEY
+}
+
+fn straight_swing() -> u16 {
+    time::STRAIGHT_SWING
+}
+
+fn is_straight(swing_tenths: &u16) -> bool {
+    *swing_tenths == time::STRAIGHT_SWING
+}
+
+fn is_pattern(kind: &PatternKind) -> bool {
+    *kind == PatternKind::Pattern
 }
 
 fn is_default_key(key: &u8) -> bool {
@@ -1076,6 +1114,8 @@ pub enum ValidationError {
     EmptyPattern { pattern: String },
     #[error("pattern '{pattern}' is a copy of pattern {from}, which is not one made before it")]
     CopyOfLaterPattern { pattern: String, from: u32 },
+    #[error("pattern '{pattern}': swing {swing_tenths} must be 500 to 750 (50.0 to 75.0 %)")]
+    InvalidSwing { pattern: String, swing_tenths: u16 },
     #[error("pattern '{pattern}': a note uses channel {channel}, which does not exist")]
     UnknownChannel { pattern: String, channel: u32 },
     #[error("pattern '{pattern}': a note starts at tick {start}, outside the pattern (ticks 0..{length})")]
@@ -1694,6 +1734,12 @@ impl Project {
                 from: from.0,
             });
         }
+        if !time::SWING_RANGE.contains(&pattern.swing_tenths) {
+            return Err(ValidationError::InvalidSwing {
+                pattern: name(),
+                swing_tenths: pattern.swing_tenths,
+            });
+        }
         for note in &pattern.notes {
             if !self.channels.contains_key(&note.channel) {
                 return Err(ValidationError::UnknownChannel {
@@ -1810,7 +1856,7 @@ mod v1 {
 
     use super::{
         Automations, Channel, ChannelId, LoadError, MidiLinks, Mixer, Note, Pattern, PatternId,
-        Playlist, Project, ValidationError, DEFAULT_KEY,
+        PatternKind, Playlist, Project, ValidationError, DEFAULT_KEY,
     };
     use crate::time::{self, MilliBpm, Ticks};
 
@@ -1949,6 +1995,8 @@ mod v1 {
                 name: self.name,
                 length_bars: self.length_bars,
                 copied_from: None,
+                swing_tenths: time::STRAIGHT_SWING,
+                kind: PatternKind::Pattern,
                 notes,
             })
         }

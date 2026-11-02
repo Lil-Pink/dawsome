@@ -251,6 +251,7 @@ mod tests {
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("locked");
         if fs::File::open(&locked).is_ok() {
             // A privileged user reads it anyway; there is no failure to observe.
+            eprintln!("skipped: this user reads a file without read permission (root?)");
             return;
         }
         let failed = carry_over(&kept_under(&base));

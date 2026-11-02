@@ -160,6 +160,19 @@ pub fn ghost(channel: Color, row: Color) -> Color {
     mix(channel, row, 3, 10)
 }
 
+/// A note the Quantize dialog moves, drawn where it was: 0.15 of the channel's color over 0.85
+/// of the row, half a [`ghost`], so the old place shows through faintly behind where it goes.
+pub fn faint_ghost(channel: Color, row: Color) -> Color {
+    mix(channel, row, 3, 20)
+}
+
+/// The rim round a [`faint_ghost`]: 0.3 of the channel's color over 0.7 of the row, so it reads
+/// as the note's own old place rather than another channel's note. Why no firmer: at 0.6, with
+/// a 0.3 fill, the old places read as solid as the notes.
+pub fn ghost_rim(channel: Color, row: Color) -> Color {
+    mix(channel, row, 3, 10)
+}
+
 pub fn unlit_step(step: u32) -> Color {
     STEP_UNLIT[(step / STEPS_PER_GROUP % 2) as usize]
 }
@@ -184,8 +197,8 @@ pub fn strip(_theme: &Theme) -> container::Style {
 /// The frame round a piece of the toolbar made of parts (the pattern's arrows and its name, Pat
 /// over Song, Notes over Audio): the buttons' edge, its corners rounded as a button's, and the
 /// same color showing between the parts, so they read as one control. Why: each part drew its
-/// own edge, 2 px seams between three boxes of two grays (2026-10-27: the pattern's piece was
-/// called "the ugliest part of the UI").
+/// own edge, 2 px seams between three boxes of two grays, and the pattern's piece looked the
+/// worst of the bar.
 pub fn piece_frame(_theme: &Theme) -> container::Style {
     container::Style {
         border: Border {
@@ -444,6 +457,27 @@ mod tests {
         assert_eq!(
             ghost(kick, ROLL_ROW_WHITE).into_rgba8(),
             [0x3C, 0x57, 0x6E, 0xFF]
+        );
+    }
+
+    // The Quantize preview's old places, fill and rim at half a ghost's weight and a ghost's,
+    // on a white-key and a black-key row (the kick, rounded half up, from Python).
+    #[test]
+    fn quantize_ghosts_are_faint_on_both_rows() {
+        let kick = channel_color(1);
+        let drawn = |row| {
+            (
+                faint_ghost(kick, row).into_rgba8(),
+                ghost_rim(kick, row).into_rgba8(),
+            )
+        };
+        assert_eq!(
+            drawn(ROLL_ROW_WHITE),
+            ([0x38, 0x47, 0x55, 0xFF], [0x3C, 0x57, 0x6E, 0xFF])
+        );
+        assert_eq!(
+            drawn(ROLL_ROW_BLACK),
+            ([0x32, 0x41, 0x4F, 0xFF], [0x37, 0x53, 0x68, 0xFF])
         );
     }
 }

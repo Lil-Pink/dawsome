@@ -1,6 +1,6 @@
 # Dawsome
 
-The reference for Dawsome 0.1.0: every panel, gesture and setting. The README is the short introduction.
+The reference for Dawsome 0.1.1: every panel, gesture and setting. The README is the short introduction.
 
 Dawsome is a pattern-based digital audio workstation for Linux and Windows. Program beats in the
 channel rack, write melodies in the piano roll, arrange patterns, audio and automation in the
@@ -13,14 +13,14 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
 ## Features
 
 - **Channel rack**: sampler channels with a step grid (16 steps a bar), volume and pan, patterns
-  of 1 to 32 bars; plugin instruments (CLAP or VST3) as channels. A channel that plays notes
+  of 1 to 32 bars, each with its own swing (see **Swing**); plugin instruments (CLAP or VST3) as channels. A channel that plays notes
   starts at −5 dB, so a few notes together stay clear of the master; audio
   and input channels start at 0 dB.
 - **Piano roll**: draw, move, resize and delete notes, a velocity lane, selections, duplicate,
   snap and zoom, the other channels' notes shown faintly; a sample plays at the pitch of its key.
   Selection and editing: click, Shift+click and box selection, arrows to transpose and nudge,
   copy, cut and paste, and a notes menu (right-click, or the strip's Notes button) with Quantize
-  (grid, strength, starts or ends), Chop, Glue, Legato, Reverse, Invert and Humanize; velocity
+  (grid, strength, swing, starts or ends), Chop, Glue, Legato, Reverse, Invert and Humanize; velocity
   painted across stems or drawn as a ramp (Alt); a scale chooser that shades the keys outside it
   and folds the rows; the notes you play live (keyboard, MIDI) shown as they sound, and a
   take's light while recording them.
@@ -79,9 +79,17 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   pan and mixer insert like any channel, playing or stopped (Library → Instruments → External
   input).
 - **Recording**: one Record button and a switch beside it saying what a take records, Notes or
-  Audio, after a one-bar count-in. Notes go into the piano roll the moment each ends: in pattern
-  mode over the pattern as it loops, each pass adding (delete first to replace); in song mode
-  into a new pattern of the channel's, "Kick take 1", whose clip grows by whole bars as you play.
+  Audio, after a one-bar count-in (a key struck there and held into bar 1 starts on bar 1). Notes
+  go into the piano roll the moment each ends, which scrolls up or down to show each key struck
+  on the channel it shows: in pattern mode over the pattern as it loops, each
+  pass adding (delete first to replace; a take with notes selected gets a new pattern, a blank
+  take becomes a pattern); in song mode into the blank take selected, else a new take of the
+  channel's, "Kick take 1", which starts one bar long at the song marker (Record plays from
+  there) and grows by whole bars as you play; no clip is placed, so put the take on a track
+  yourself. Patterns and takes: the pattern box's right arrow, past the last, makes a pattern in
+  pattern mode and a take in song mode; switching modes turns a blank pattern into a blank take
+  and back, and leaves one with notes as it is. While a take of notes runs, a click in the
+  Library previews nothing until Stop.
   Audio records what you hear (the master) or the line in (the selected input channel's device,
   else the default input) into "<project> take N.wav": one pass of the pattern in pattern mode,
   until Stop in song mode, a clip from the song marker; the takes' channels fold under one
@@ -117,6 +125,56 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   plugin's as `.vstpreset` data), and kept when the plugin is missing. A VST3 plugin that delays
   its sound says so in its parameter window and its hint (CLAP plugins report no delay here).
 - **Undo**: every edit, 500 steps back.
+
+## Swing
+
+Swing plays every second 16th note of a pattern late, for a shuffle. Each pattern has its own,
+set with the **Swing** knob at the top of the Channel rack, right of **+ Instrument…**; the
+readout beside it shows the swing of the pattern in the pattern box.
+
+- **The scale**: how much of each pair of 16ths (one 8th note) the first 16th takes. 50 % is
+  straight, 66.7 % a triplet feel (2:1), 75 % dotted (3:1), the most it goes. A new pattern
+  starts straight; a clip unlinked into a copy keeps its pattern's swing.
+- **What moves**: only a note that starts exactly on the second 16th of a pair, the 2nd, 4th,
+  6th… step of each bar. Notes on the beats and the 8ths, and notes placed between the steps in
+  the piano roll, stay where they are. A moved note keeps its length, so it ends late too; a
+  step's hit still ends where the next step starts.
+- **Turning it**: drag left or right, 1 % per 4 pixels (0.1 % with Shift held); the mouse wheel
+  moves it 1 % a notch (0.1 % with Shift). A double-click sets it straight again. You hear it
+  change while you drag, and the whole drag is one undo step; each wheel notch is one.
+- **What you hear**: with 96 ticks to a beat, the late note moves in whole ticks, so 13
+  positions sound between 50 and 75 %: the second 16th plays from 0 to 12 ticks late, the first
+  tick late at 52.1 %, 8 ticks (the exact triplet) at 66.7 %, 12 at 75 %. With the pointer on
+  the knob, the hint bar shows how many ticks late it plays beside the per cent.
+- **Drawn straight, played swung**: the step grid and the piano roll draw the notes where they
+  are stored, on the grid; playback, plugins, MIDI out, renders and stems play them swung.
+- **Exports carry it**: the song's MIDI file, a pattern's MIDI file and DAWproject put the late
+  notes where you hear them, so another program plays the same groove.
+- **Not swung**: notes you play live on the keyboard or a MIDI device, the metronome, and audio
+  clips. A take of notes records them where you played them.
+- **Older builds**: a Dawsome from before swing opens such a project and plays it straight, and
+  saving it there drops the swing.
+
+**Quantize with swing** (in the piano roll, Notes → Quantize…) swings the grid itself: every
+second line of the grid sits late by the swing you choose there, and the notes move toward the
+nearest line, as far as Strength says. While the dialog is open the piano roll previews each
+choice on the notes as they were, with their old places drawn faint, and the dialog says how
+many notes would land on another and merge; nothing changes until you press Quantize, and Cancel
+leaves the notes as they were. Playback meanwhile plays the notes as they are, not the preview.
+
+- **The Swing row**: under Strength, a slider from 50 % (straight) to 75 % (dotted) in steps of
+  0.1 %, its value beside it, and a **Triplet** button that sets 66.7 %, the exact triplet (lit
+  while set). It starts straight, and the dialog remembers it with the grid and the strength. On
+  the 1/16 grid the late lines fall where the knob plays the second 16ths at the same per cent.
+- **It moves the notes**: quantize writes the late ticks into the pattern, and the piano roll
+  draws them there; one undo step puts them back. A note half way between two lines goes to the
+  later one; with **Starts + ends**, each end moves toward its own nearest line.
+- **It leaves the step grid**: the step grid lights only notes that start exactly on a step, so
+  a note quantized late (8 ticks after its step, at 66.7 % on 1/16) no longer shows there; it
+  lives in the piano roll.
+- **Use one**: quantize with swing moves the notes; the knob moves only notes still on a
+  straight second 16th. On one part, use one: the knob for step patterns, quantize for played
+  parts you want to edit as you hear them.
 
 ## What is included
 
@@ -216,7 +274,7 @@ programs are given shows the windows a little softer.
 | Key | Does |
 |-|-|
 | Space | play / stop |
-| L | pattern or song mode |
+| L (Shift+L while the computer keyboard plays notes) | pattern or song mode |
 | 1, 2, 3, 4, 5, 6 | channel rack, playlist, piano roll, mixer, Library, the Settings window |
 | F5, F6, F7, F8, F9, F10 | playlist, channel rack, piano roll, Library, mixer, the Settings window |
 | F1 | the Help window |
@@ -230,7 +288,7 @@ programs are given shows the windows a little softer.
 | Ctrl+C, Ctrl+X, Ctrl+V | piano roll: copy, cut and paste notes |
 | Enter | open the selected plugin channel's window |
 | Ctrl+L | play the selected channel into the mixer's selected insert |
-| R | arm recording |
+| R (Shift+R while the computer keyboard plays notes) | arm recording |
 | Ctrl+P | count-in on or off |
 | Ctrl+Shift+R | Capture: the notes played in the last 30 s into notes |
 | Ctrl+T | computer keyboard as a piano (A is C5, middle C; Z and X an octave down and up; Tab sustains; Backspace ends every note) |
@@ -365,7 +423,7 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
 
 ## Contributing and license
 
-See `CONTRIBUTING.md` for how to build, test and send changes, and `arc.md` for the architecture.
+See `CONTRIBUTING.md` for how to build, test and send changes.
 
 Dawsome is free software: you can redistribute it and/or modify it under the terms of the GNU
 General Public License as published by the Free Software Foundation, either version 3 of the

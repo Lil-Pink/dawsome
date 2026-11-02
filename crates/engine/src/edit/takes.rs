@@ -1,7 +1,7 @@
 //! Takes: the edits a recording makes, built from the plain edits so each has its exact inverse.
-//! A take of notes in song mode is a new pattern and one clip of it ([`song_take`]), which grow
-//! together by whole bars as the take plays ([`take_length`]), and the notes written into it as
-//! they end; an audio take is an audio channel and one clip of its file ([`audio_take`]); a
+//! A take of notes in song mode is a new pattern of its own with no clip ([`take_pattern`]),
+//! which grows by whole bars as the take plays, and the notes written into it as they end; the
+//! user places it; an audio take is an audio channel and one clip of its file ([`audio_take`]); a
 //! Capture is notes laid into a pattern ([`capture_into`]) or a new pattern and its clip
 //! ([`capture_song`]); a take of the line in is placed where it was played when its input
 //! records late ([`input_take`]). The caller applies each live and keeps the inverses, newest
@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use super::{Edit, EditError};
-use crate::project::{Clip, Note, PatternId, Project, TrackId};
+use crate::project::{Clip, Note, PatternId, PatternKind, Project, TrackId};
 use crate::time::{self, Ticks};
 
 /// The first track, top to bottom, that holds no clip over ticks `start..end`.
@@ -73,7 +73,38 @@ pub fn take_name(project: &Project, channel: &str) -> String {
         .unwrap_or_else(|| format!("{channel} take"))
 }
 
-/// A take of notes in song mode as its first edit: what it adds and under which IDs.
+/// A take of notes in song mode as its first edit, and the right arrow's new take: its pattern
+/// `name`, one bar long, added after the others as a take ([`PatternKind::Take`]), and nothing
+/// else (no clip: the user places the take). Its inverse takes the pattern out again and gives
+/// its ID back.
+pub fn take_pattern(project: &Project, name: String) -> Result<(Edit, PatternId), EditError> {
+    let pattern = project
+        .next_pattern_id()
+        .ok_or(EditError::PatternIdsExhausted)?;
+    let edit = Edit::Transaction(vec![
+        Edit::AddPattern {
+            id: pattern,
+            name,
+            bars: 1,
+            copied_from: None,
+        },
+        as_take(pattern),
+    ]);
+    Ok((edit, pattern))
+}
+
+/// Makes the pattern just added a take. Why an edit of its own and not a field of
+/// `AddPattern`: as with swing, the add stays the exact inverse of `UnaddPattern`, which takes
+/// out only a pattern as added.
+fn as_take(pattern: PatternId) -> Edit {
+    Edit::SetPatternKind {
+        pattern,
+        kind: PatternKind::Take,
+    }
+}
+
+/// Capture's new pattern and its clip in song mode ([`capture_song`]) as its first edit: what it
+/// adds and under which IDs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SongTake {
     pub edit: Edit,
@@ -84,7 +115,7 @@ pub struct SongTake {
     pub added_track: bool,
 }
 
-/// The pattern `name` of `bars` bars, added after the others, and one clip of it from `start`
+/// The take `name` of `bars` bars, added after the others, and one clip of it from `start`
 /// as long as it, on `track` (the armed one) when the project has it, else on the first track
 /// with no clip over its first bar, else on a new track: one transaction, whose inverse takes
 /// them out again and gives their IDs back.
@@ -104,12 +135,15 @@ pub fn song_take(
     let added_track = add_track.is_some();
     let clip = project.playlist.next_clip_id;
     let length = time::bars_to_ticks(bars, project.ppq);
-    let mut edits = vec![Edit::AddPattern {
-        id: pattern,
-        name,
-        bars,
-        copied_from: None,
-    }];
+    let mut edits = vec![
+        Edit::AddPattern {
+            id: pattern,
+            name,
+            bars,
+            copied_from: None,
+        },
+        as_take(pattern),
+    ];
     edits.extend(add_track);
     edits.push(Edit::PlaceClips {
         first: clip,
@@ -122,18 +156,6 @@ pub fn song_take(
         track,
         added_track,
     })
-}
-
-/// A take's pattern and its clip made `bars` bars long together: the pattern's bars, then the
-/// clip's length. Its inverse sets both back.
-pub fn take_length(pattern: PatternId, clip: crate::project::ClipId, bars: u32, ppq: u16) -> Edit {
-    Edit::Transaction(vec![
-        Edit::SetPatternBars { pattern, bars },
-        Edit::ResizeClip {
-            id: clip,
-            length: time::bars_to_ticks(bars, ppq),
-        },
-    ])
 }
 
 /// A new file of `frames` frames (an audio take, or a file dropped), named `sample` as the

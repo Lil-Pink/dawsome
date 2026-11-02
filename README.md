@@ -1,27 +1,39 @@
 # Dawsome
+<img width="1600" height="847" alt="main-window" src="https://github.com/user-attachments/assets/319e4ecd-dcf2-41bd-bc3a-38e128f55859" />
 
-Dawsome is a free, open-source music maker for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
 
-To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lmao. But it's free to use, soo.
+Dawsome is a free, open-source music making software for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
 
-Dawsome is not affiliated with Dawesome, the plugin company. The names just sound the same.
+To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lol. But hey, it's free to use as you like.
+
+
+Dawsome is not affiliated with Dawesome, the plugin company.
 
 ## What you can actually do with it
 
-Open it, drag a drum from the Library onto the rack, click some steps, and you have a beat. Double-click an instrument to play it from your computer keyboard (Tab is the sustain pedal) or a MIDI keyboard, and draw or record notes into the piano roll. Make a few patterns, switch to Song mode, lay them out on the playlist, and hit export.
+Open it, drag a drum from the Library onto the rack, click some steps, and you have a beat. Double-click an instrument to play it from your computer keyboard (Tab is the sustain pedal) or a MIDI, and draw or record notes into the piano roll. Make a few patterns, switch to Song mode, lay them out on the playlist, make a song or two.
 
 Some of the features that I think are kinda nice:
 
-- **Patterns are linked.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it into its own, unique copy, and one click links it back.
-- **Audio clips you can mess with.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
-- **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it goes round. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
+- **Create set patterns while also allowing for unique adjustments.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it from the main pattern and vise-versa.
+
+
+- **A reactive piano roll.** Play any instrument, sample, or plug-in channel on the piano roll with real time input feedback. Keyboard is automatically set up as your MIDI with keys set to match a keyboard.
+
+
+- **Drag and drop audio clip imports and audio clip/sample editing.** Drag a sound file from your file manager straight onto a track. Trim it, stretch it to fit, pitch it, and open it in the sample editor to crop, fade, reverse or normalize it, without touching the original file. (Finer adjustments and sample tuning will be added in the future.)
+  
+- **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it loops. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
+- **Swing.** Each pattern gets its own swing knob at the top of the channel rack, from straight (50%) up to 75%, and it nudges every second 16th note late for that shuffle feel. What you hear is what you export, WAV, stems and MIDI files included. Quantize in the piano roll has a swing setting too, and it previews where your notes will land before you commit (the originals stay as faint ghosts until you hit Quantize).
 - **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go.
 - **Plugins.** CLAP and VST3 instruments and effects both work, their windows open in Dawsome. Plugins without a window of their own get a generated one with every parameter automatable.
 - **Virtual instruments in the box.** A piano, electric piano, three basses, acoustic and electric guitar, organ, two pads, strings, marimba and two drum kits, all made by me or public domain (CC0), plus Surge XT as a bundled synth. Bring your own SFZ instruments and sample folders.
+- **Easy to use UI windows** - All UI windows are toggleable and adjustable. Creating an easy to use and easy to digest audio workstation. (Some of this UI is intended to cleaned up in the future, some small things bother me about it) 
 - **Export anywhere.** WAV (16, 24 or 32-bit float), MP3, MIDI, stems, and DAWproject so a song can move to another program if needed.
 - **A nice little Help guide** inside the app (F1) that walks through the entire app, with pictures :)
+  
 
-## Getting it
+## How to Use/ Install
 
 Grab the zip for your system from the Releases page, unpack it anywhere, and run `dawsome-app`.
 
@@ -33,12 +45,12 @@ The full reference, every panel and setting, is in [docs/manual.md](docs/manual.
 
 ## What's missing (and what's next)
 
-Compared to the paid DAWs, Dawsome still lacks: swing/groove, a big bundle of built-in effects (only six and one synth), audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though macOS probably not and VST2 definitely not (Steinberg no longer licenses it to anyone).
+Compared to the paid DAWs, Dawsome still lacks: a big bundle of built-in effects (only six and one synth), audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though macOS probably not and VST2 definitely not (Steinberg no longer licenses it to anyone).
 
-Roughly in the order I plan to do them:
+Roughly in the order I plan to add these features:
 
-1. **Swing.** A knob for it on the step grid and in quantize.
-2. **More built-in effects and a simple synth.** Chorus, phaser, flanger, distortion, a filter, a gate, stereo width.
+1. **More built-in effects and a simple synth.** Chorus, phaser, flanger, distortion, a filter, a gate, stereo width.
+2. **UI Clean-up** Because I built the app in Linux and on a 4k monitor, I realize the UI is not uniform across OSs/monitors. Planning to tidy this up and make the UI in general easier on the eyes.
 3. **Sample chopping** and finer, precision sample editing.
 4. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.
 5. **Piano roll helpers.** Chord, arpeggiate, strum, and a preset browser for plugin patches.
@@ -47,10 +59,6 @@ Roughly in the order I plan to do them:
 8. **Take comping.**
 9. **A clip launcher** for playing live.
 10. **macOS**, if I get my hands on a Mac or receive outside help.
-
-## If you'd like to play with the code
-
-The engine is its own crate, and offline rendering and live playback go through the exact same function, so what the tests render is what you hear. The audio thread never allocates, and a test proves it. Expected values in the tests come from Python generators that compute the answer independently of the Rust code, so if you change the sound you find out straight away. There's a command-line renderer too, which is handy for scripts.
 
 `CONTRIBUTING.md` has the build and the one check command that runs everything. Effects would be nice first contributions (an effect is one type implementing one trait, and there are two Airwindows ports to copy from) and anything on the list above. If you find a bug, one line with what you did, what you expected, and what happened is plenty.
 

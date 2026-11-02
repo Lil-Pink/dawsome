@@ -110,7 +110,7 @@ pub use export::{ExportKind, ExportMessage};
 pub use files::{Choice, FileMessage, Start};
 pub use key_input::KeyInput;
 pub use landing::{at_start as landing_at_start, Landing};
-pub use patterns::{PatternMessage, RENAME_INPUT as PATTERN_RENAME_INPUT};
+pub use patterns::{PatternMessage, RENAME_INPUT as PATTERN_RENAME_INPUT, SWING_STEP};
 use plugins::PluginDrag;
 pub use recording::{RecordMessage, TakeKind};
 
@@ -149,6 +149,9 @@ const KNOB_DRAG_PIXELS: f32 = 200.0;
 
 /// Pixels of vertical drag per tempo step.
 const TEMPO_DRAG_PIXELS: f32 = 2.0;
+
+/// Pixels of vertical drag per swing step ([`SWING_STEP`], or a tenth of it with Shift).
+const SWING_DRAG_PIXELS: f32 = 4.0;
 
 /// How much slower a mixer control moves with Shift held.
 const FINE_DRAG: f32 = 0.1;
@@ -199,10 +202,12 @@ pub enum Message {
     },
     TempoPressed,
     TempoScrolled(mouse::ScrollDelta),
+    /// A press on the rack header's swing: a drag of the selected pattern's swing.
+    SwingPressed,
     /// The tempo's box, opened by a click on the tempo: its text, and Enter.
     TempoEdited(String),
     TempoSubmitted,
-    /// The cursor moved to this window y (or x, on a slider) while a drag is held.
+    /// The cursor moved to this window x (or y, on the mixer's fader) while a drag is held.
     DragMoved(f32),
     DragEnded,
     ModifiersChanged(Modifiers),
@@ -463,31 +468,44 @@ enum DragTarget {
         knob: Knob,
     },
     Tempo,
+    /// The rack header's swing knob, for `pattern`.
+    Swing {
+        pattern: PatternId,
+    },
     Mixer(MixerDrag),
     /// A plugin parameter's slider, in the parameter window or the mixer's slot panel.
     Plugin(PluginDrag),
 }
 
 impl DragTarget {
-    /// Whether the drag moves left to right (a slider) rather than up and down.
+    /// Whether the drag moves left to right (a knob, the tempo or a slider) rather than up and
+    /// down (the mixer's fader). Why across: a knob reads as following the cursor, right for
+    /// more, and dragged up and down the knobs felt inverted.
     fn horizontal(self) -> bool {
         match self {
             DragTarget::Mixer(drag) => drag.horizontal(),
-            DragTarget::Plugin(_) => true,
-            DragTarget::Knob { .. } | DragTarget::Tempo => false,
+            DragTarget::Knob { .. }
+            | DragTarget::Tempo
+            | DragTarget::Swing { .. }
+            | DragTarget::Plugin(_) => true,
         }
     }
 }
 
-/// A drag in progress: up (or right, on a slider) raises the value.
+/// A drag in progress: right (or up, on the mixer's fader) raises the value.
 #[derive(Debug, Clone, PartialEq)]
 struct Drag {
     target: DragTarget,
-    /// The value when the drag started, as a knob value or milli-BPM.
+    /// The value the drag moves from: as it started, or as it was when fine control restarted
+    /// it ([`App::restart_mixer_drag`]); a knob value, milli-BPM or a swing in tenths.
     start: f32,
+    /// The value before the drag, which its one undo step goes back to. Why apart from
+    /// `start`: Shift pressed and the button let go with no move between left the change
+    /// applied but unrecorded, as the restart had made `start` the value let go at.
+    origin: f32,
     /// The cursor coordinate along the drag of the first move. Moves are measured from it
     /// rather than from the press, so no panel's scroll offset enters the arithmetic.
-    anchor_y: Option<f32>,
+    anchor: Option<f32>,
     /// How far the cursor has gone from the first move, at most: a press let go of with the
     /// value unchanged and less than [`CLICK_TRAVEL`] gone is a click.
     travel: f32,
@@ -1417,6 +1435,12 @@ impl App {
                 self.start_drag(DragTarget::Knob { channel, knob });
             }
             Message::TempoPressed => self.start_drag(DragTarget::Tempo),
+            Message::SwingPressed => {
+                self.focus = Panel::Rack;
+                if let Some(pattern) = self.pattern {
+                    self.start_drag(DragTarget::Swing { pattern });
+                }
+            }
             Message::TempoScrolled(delta) => {
                 // Up raises the tempo one step per scroll event, whatever its size.
                 let rise = match delta {
@@ -1933,7 +1957,10 @@ impl App {
             layers.push(self.callout_view());
         }
         if let Some(form) = &self.quantize_form {
-            layers.push(dialog::overlay(dialog::quantize(form)));
+            layers.push(dialog::overlay_undimmed(dialog::quantize(
+                form,
+                self.quantize_merges(),
+            )));
         }
         if let Some(content) = self.dialog_view() {
             layers.push(dialog::overlay(content));
@@ -2414,6 +2441,10 @@ impl App {
     }
 
     fn piano_roll_view(&self) -> Element<'_, Message> {
+        self.piano_roll().view()
+    }
+
+    fn piano_roll(&self) -> PianoRoll<'_> {
         PianoRoll {
             project: self.session.project(),
             pattern: self.pattern,
@@ -2430,8 +2461,8 @@ impl App {
             menu_foot: self.hint_bar_height(),
             live: &self.live_notes,
             recording_notes: self.recording.taking_notes(),
+            quantize: self.quantize_form,
         }
-        .view()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -2460,8 +2491,7 @@ impl App {
             Subscription::none()
         };
         let drag = match &self.drag {
-            Some(drag) if drag.target.horizontal() => event::listen_with(slider_drag_message),
-            Some(_) => event::listen_with(drag_message),
+            Some(drag) => event::listen_with(drag_listener(drag.target)),
             None => Subscription::none(),
         };
         let autosave = if self.host.autosaves() {
@@ -2796,8 +2826,9 @@ impl App {
         self.after_edit(result);
     }
 
-    /// Runs a piano-roll key command (Delete, Ctrl+B) while the piano roll is open.
-    fn note_command(&mut self, command: fn(&Roll, &Target) -> Option<Commit>) {
+    /// Runs a piano-roll command (Delete, Ctrl+B, the Quantize dialog's Apply) while the piano
+    /// roll is open.
+    fn note_command(&mut self, command: impl FnOnce(&Roll, &Target) -> Option<Commit>) {
         if !self.panels.piano_roll {
             return;
         }
@@ -2821,20 +2852,21 @@ impl App {
             self.drag = Some(Drag {
                 target,
                 start,
-                anchor_y: None,
+                origin: start,
+                anchor: None,
                 travel: 0.0,
                 undo: None,
             });
         }
     }
 
-    /// Sets the dragged value for the cursor at `along` (window y, or x for a slider), live and
-    /// without an undo step.
+    /// Sets the dragged value for the cursor at `along` (window x, or y for the mixer's fader),
+    /// live and without an undo step.
     fn drag_to(&mut self, along: f32) {
         let Some(drag) = &mut self.drag else {
             return;
         };
-        let anchor = *drag.anchor_y.get_or_insert(along);
+        let anchor = *drag.anchor.get_or_insert(along);
         drag.travel = drag.travel.max((along - anchor).abs());
         let (target, start) = (drag.target, drag.start);
         let rise = if target.horizontal() {
@@ -2856,6 +2888,19 @@ impl App {
                 // `start` holds a tempo in milli-BPM, which an f32 represents exactly.
                 let mbpm = self.step_tempo(MilliBpm(start as u32), steps);
                 (mbpm.0 as f32, Edit::SetTempo { mbpm }, None)
+            }
+            // Not a live parameter, as the tempo: the swing moves the compiled notes, so each
+            // move recompiles the one pattern and sends a plan.
+            DragTarget::Swing { pattern } => {
+                let steps = (rise / SWING_DRAG_PIXELS).round() as i64;
+                let tenths = steps.saturating_mul(SWING_STEP.into());
+                // `start` holds a swing in tenths, which an f32 represents exactly.
+                let swing_tenths = self.moved_swing(start as u16, tenths);
+                let edit = Edit::SetPatternSwing {
+                    pattern,
+                    swing_tenths,
+                };
+                (f32::from(swing_tenths), edit, None)
             }
             DragTarget::Mixer(control) => {
                 let range = control.range(project, self.session.registry());
@@ -2885,7 +2930,7 @@ impl App {
             }
         };
         // Why skip a move that keeps the value (the first move, which only sets the anchor, or
-        // a sideways one): applying it would send the player a value it already has.
+        // one across the drag's axis): applying it would send the player a value it already has.
         if self.drag_value(target) == Some(value) {
             return;
         }
@@ -2921,12 +2966,12 @@ impl App {
             self.after_edit(Err(error));
             return;
         }
-        // Why compare with the start: a drag that comes back to it changed nothing, and
-        // recording it would still empty the redo stack. A control whose channel, insert or
-        // effect is gone has nothing left to restore.
+        // Why compare with the value before the drag: one that comes back to it changed
+        // nothing, and recording it would still empty the redo stack. A control whose channel,
+        // insert, effect or pattern is gone has nothing left to restore.
         let changed = self
             .drag_value(drag.target)
-            .is_some_and(|now| now != drag.start);
+            .is_some_and(|now| now != drag.origin);
         if !changed {
             return;
         }
@@ -2935,24 +2980,24 @@ impl App {
         }
     }
 
-    /// Fine control switched on or off half way through a mixer drag: the drag goes on from
-    /// where it is, at the new speed, rather than jumping.
+    /// Fine control switched on or off half way through a mixer or swing drag: the drag goes
+    /// on from where it is, at the new speed, rather than jumping.
     fn restart_mixer_drag(&mut self) {
         let Some(drag) = &self.drag else {
             return;
         };
-        if !matches!(drag.target, DragTarget::Mixer(_)) {
+        if !matches!(drag.target, DragTarget::Mixer(_) | DragTarget::Swing { .. }) {
             return;
         }
         let now = self.drag_value(drag.target);
         if let (Some(now), Some(drag)) = (now, &mut self.drag) {
             drag.start = now;
-            drag.anchor_y = None;
+            drag.anchor = None;
         }
     }
 
-    /// The dragged control's value now, as a knob value, milli-BPM or the mixer control's
-    /// value; `None` once its channel, insert or effect is gone.
+    /// The dragged control's value now, as a knob value, milli-BPM, a swing in tenths or the
+    /// mixer control's value; `None` once its channel, insert, effect or pattern is gone.
     fn drag_value(&self, target: DragTarget) -> Option<f32> {
         let project = self.session.project();
         match target {
@@ -2962,6 +3007,10 @@ impl App {
                 .map(|shown| knob.value(shown)),
             // Tempos stay below 2^24 milli-BPM, so the f32 is exact.
             DragTarget::Tempo => Some(project.tempo.0 as f32),
+            DragTarget::Swing { pattern } => project
+                .patterns
+                .get(&pattern)
+                .map(|shown| f32::from(shown.swing_tenths)),
             DragTarget::Mixer(control) => control.value(project, self.session.registry()),
             DragTarget::Plugin(plugin) => self.plugin_value(plugin),
         }
@@ -2986,6 +3035,8 @@ impl App {
         self.keep_take("Take kept: the play mode changed");
         self.mode = mode;
         self.send_mode();
+        // After the mode is sent, so the plan the edit publishes, the newest, plays the new mode.
+        self.reshape_selected_for_mode();
         let from = match mode {
             PlayMode::Pattern => Ticks(0),
             PlayMode::Song => self.song_marker,
@@ -3186,7 +3237,7 @@ impl App {
     fn close_panel_menu(&mut self) -> bool {
         let closed = [
             self.roll.menu.take().is_some(),
-            self.quantize_form.take().is_some(),
+            self.close_quantize(),
             self.sampler_menu.take().is_some(),
             self.automate.take().is_some(),
             self.arranger.track_menu.take().is_some(),
@@ -3705,7 +3756,7 @@ fn editor_gain_message(
 ) -> Option<Message> {
     let message = match event {
         Event::Mouse(mouse::Event::CursorMoved { position }) => {
-            SampleEditorMessage::GainMoved(position.y)
+            SampleEditorMessage::GainMoved(position.x)
         }
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
             SampleEditorMessage::GainReleased
@@ -3715,8 +3766,22 @@ fn editor_gain_message(
     Some(Message::SampleEditor(message))
 }
 
-/// Cursor moves and the button release, while an up-and-down drag is held.
-fn drag_message(event: Event, _status: event::Status, _window: window::Id) -> Option<Message> {
+/// What turns the window's events into a drag of `target`: one reading the cursor's x for a
+/// left-to-right drag, its y for the fader's up-and-down one.
+fn drag_listener(target: DragTarget) -> fn(Event, event::Status, window::Id) -> Option<Message> {
+    if target.horizontal() {
+        horizontal_drag_message
+    } else {
+        vertical_drag_message
+    }
+}
+
+/// Cursor moves and the button release, while the fader's up-and-down drag is held.
+fn vertical_drag_message(
+    event: Event,
+    _status: event::Status,
+    _window: window::Id,
+) -> Option<Message> {
     match event {
         Event::Mouse(mouse::Event::CursorMoved { position }) => {
             Some(Message::DragMoved(position.y))
@@ -3726,8 +3791,9 @@ fn drag_message(event: Event, _status: event::Status, _window: window::Id) -> Op
     }
 }
 
-/// Cursor moves and the button release, while a slider drag is held.
-fn slider_drag_message(
+/// Cursor moves and the button release, while a left-to-right drag is held: a knob, the tempo
+/// or a slider.
+fn horizontal_drag_message(
     event: Event,
     _status: event::Status,
     _window: window::Id,
@@ -3995,11 +4061,11 @@ mod tests {
             channel: ChannelId(1),
             knob: Knob::Volume,
         });
-        // Measured from the first move: 50 pixels up is a quarter of the sweep, gain +1.0.
+        // Measured from the first move: 50 pixels right is a quarter of the sweep, gain +1.0.
         let _ = app.update(Message::DragMoved(300.0));
-        let _ = app.update(Message::DragMoved(250.0));
+        let _ = app.update(Message::DragMoved(350.0));
         assert_eq!(volume(&app), 2.0);
-        let _ = app.update(Message::DragMoved(100_000.0));
+        let _ = app.update(Message::DragMoved(-100_000.0));
         assert_eq!(volume(&app), 0.0, "pinned at the left stop");
         let _ = app.update(Message::DragEnded);
         let _ = app.update(Message::Undo);
@@ -4072,6 +4138,161 @@ mod tests {
         assert_eq!(header(&app), (Some(32), true, false));
         nudge_bars(&mut app, -1);
         assert_eq!(bars(&app), 31);
+    }
+
+    fn swing(app: &App) -> u16 {
+        app.session.project().patterns[&PatternId(1)].swing_tenths
+    }
+
+    // Swing (spec swing.md §5, §7): the rack header's knob, dragged right from F1's straight 500,
+    // goes 1 % (10 tenths) per 4 px from the first move: 0, 32 and 40 px give 500, 580 and 600,
+    // each move applied live (a plan sent: the pattern recompiles) with no undo step until the
+    // release, which leaves one. Left past the stop holds at 500.
+    #[test]
+    fn a_swing_drag_applies_live_and_undoes_in_one_step() {
+        let (mut app, _player) = f1_app();
+        assert_eq!(swing(&app), 500);
+        assert_eq!(app.rack_header().swing, Some(500));
+        let undo_len = app.session.history().undo_len();
+        let _ = app.update(Message::SwingPressed);
+        let plans = app.session.plans_sent();
+        for (x, expected, sent) in [(300.0, 500, 0), (332.0, 580, 1), (340.0, 600, 2)] {
+            let _ = app.update(Message::DragMoved(x));
+            assert_eq!(swing(&app), expected, "{}px right", x - 300.0);
+            assert_eq!(
+                app.session.plans_sent(),
+                plans + sent,
+                "{}px right",
+                x - 300.0
+            );
+        }
+        assert_eq!(app.rack_header().swing, Some(600));
+        assert_eq!(
+            app.session.history().undo_len(),
+            undo_len,
+            "nothing recorded yet"
+        );
+        let _ = app.update(Message::DragEnded);
+        assert_eq!(app.session.history().undo_len(), undo_len + 1);
+        assert_eq!(app.session.history().undo_name(), Some("Swing"));
+        let _ = app.update(Message::Undo);
+        assert_eq!(swing(&app), 500, "the whole drag in one step");
+        let _ = app.update(Message::SwingPressed);
+        let _ = app.update(Message::DragMoved(300.0));
+        let _ = app.update(Message::DragMoved(200.0));
+        assert_eq!(swing(&app), 500, "pinned at straight");
+        let _ = app.update(Message::DragMoved(600.0));
+        assert_eq!(swing(&app), 750, "pinned at dotted");
+        let _ = app.update(Message::DragEnded);
+    }
+
+    // With Shift held a swing step is 0.1 % (1 tenth) per 4 px: 8 px right gives 502. Shift
+    // pressed half way through a drag goes on from where it is, and the release still leaves
+    // one undo step back to where the drag began, even when the cursor never moved after it.
+    #[test]
+    fn a_swing_drag_with_shift_moves_a_tenth_as_far() {
+        let (mut app, _player) = f1_app();
+        let _ = app.update(Message::ModifiersChanged(Modifiers::SHIFT));
+        let _ = app.update(Message::SwingPressed);
+        let _ = app.update(Message::DragMoved(300.0));
+        let _ = app.update(Message::DragMoved(308.0));
+        assert_eq!(swing(&app), 502);
+        let _ = app.update(Message::DragEnded);
+        let _ = app.update(Message::Undo);
+        assert_eq!(swing(&app), 500);
+
+        let _ = app.update(Message::ModifiersChanged(Modifiers::empty()));
+        let _ = app.update(Message::SwingPressed);
+        let _ = app.update(Message::DragMoved(300.0));
+        let _ = app.update(Message::DragMoved(340.0));
+        assert_eq!(swing(&app), 600);
+        let _ = app.update(Message::ModifiersChanged(Modifiers::SHIFT));
+        let _ = app.update(Message::DragMoved(340.0));
+        assert_eq!(swing(&app), 600, "no jump when Shift goes down");
+        let _ = app.update(Message::DragMoved(348.0));
+        assert_eq!(swing(&app), 602, "then 0.1 % per 4 px");
+        let _ = app.update(Message::DragEnded);
+        let _ = app.update(Message::Undo);
+        assert_eq!(swing(&app), 500, "one step back to the drag's start");
+
+        let _ = app.update(Message::ModifiersChanged(Modifiers::empty()));
+        let undo_len = app.session.history().undo_len();
+        let _ = app.update(Message::SwingPressed);
+        let _ = app.update(Message::DragMoved(300.0));
+        let _ = app.update(Message::DragMoved(340.0));
+        let _ = app.update(Message::ModifiersChanged(Modifiers::SHIFT));
+        let _ = app.update(Message::DragEnded);
+        assert_eq!(swing(&app), 600);
+        assert_eq!(
+            app.session.history().undo_len(),
+            undo_len + 1,
+            "Shift, then let go"
+        );
+        let _ = app.update(Message::Undo);
+        assert_eq!(swing(&app), 500);
+    }
+
+    // The wheel on the swing moves it 1 % a notch (0.1 % with Shift), each notch one undo step;
+    // a double press sets it straight, one step; at a stop or already straight, nothing.
+    #[test]
+    fn the_swing_wheel_and_double_press_each_take_one_step() {
+        let (mut app, _player) = f1_app();
+        let undo_len = app.session.history().undo_len();
+        let send = |app: &mut App, message| {
+            let _ = app.update(Message::Pattern(message));
+        };
+        for _ in 0..3 {
+            send(&mut app, PatternMessage::SwingBy(SWING_STEP));
+        }
+        assert_eq!(swing(&app), 530);
+        assert_eq!(app.session.history().undo_len(), undo_len + 3);
+        let _ = app.update(Message::ModifiersChanged(Modifiers::SHIFT));
+        send(&mut app, PatternMessage::SwingBy(-SWING_STEP));
+        assert_eq!(swing(&app), 529);
+        let _ = app.update(Message::ModifiersChanged(Modifiers::empty()));
+        let _ = app.update(Message::Undo);
+        assert_eq!(swing(&app), 530);
+        for expected in [520, 510, 500] {
+            let _ = app.update(Message::Undo);
+            assert_eq!(swing(&app), expected);
+        }
+        assert_eq!(
+            app.session.history().undo_len(),
+            undo_len,
+            "three steps, all undone"
+        );
+        send(&mut app, PatternMessage::SwingBy(-SWING_STEP));
+        send(&mut app, PatternMessage::SwingReset);
+        assert_eq!(
+            app.session.history().undo_len(),
+            undo_len,
+            "nothing at straight"
+        );
+        for _ in 0..30 {
+            send(&mut app, PatternMessage::SwingBy(SWING_STEP));
+        }
+        assert_eq!(swing(&app), 750, "held at the dotted stop");
+        assert_eq!(app.session.history().undo_len(), undo_len + 25);
+        send(&mut app, PatternMessage::SwingReset);
+        assert_eq!(swing(&app), 500);
+        assert_eq!(app.session.history().undo_len(), undo_len + 26);
+        let _ = app.update(Message::Undo);
+        assert_eq!(swing(&app), 750, "the reset is one step");
+    }
+
+    // Without a pattern the header's swing is dim and nothing moves it.
+    #[test]
+    fn without_a_pattern_the_swing_does_nothing() {
+        let (mut app, _player) = f1_app();
+        app.pattern = None;
+        assert_eq!(app.rack_header().swing, None);
+        let undo_len = app.session.history().undo_len();
+        let _ = app.update(Message::SwingPressed);
+        assert!(app.drag.is_none(), "no drag starts");
+        let _ = app.update(Message::Pattern(PatternMessage::SwingBy(SWING_STEP)));
+        let _ = app.update(Message::Pattern(PatternMessage::SwingReset));
+        assert_eq!(swing(&app), 500);
+        assert_eq!(app.session.history().undo_len(), undo_len);
     }
 
     // "+ Sampler…" makes a sampler channel of the file picked, as a file dropped on the rack
@@ -4159,13 +4380,13 @@ mod tests {
         assert!(app.automate.is_none(), "the sampler's menu instead");
     }
 
-    // Asked for in use, 2026-10-26: the switch is the channel menu's
-    // "One note at a time", shown on a sampler's and a set's menu (the kinds with sound
-    // settings), after "Change sample…" and "Edit sample…", and not on an input channel's. A press switches the
-    // channel's `cut_itself` in one undo step named as the other sound settings and closes the
-    // menu; opened again, the row is ticked. The file then names "cut_itself":true last in the
-    // sampler's sound at the version it had; pressed again it is off and the file as before;
-    // undo takes each back. On an input channel the command changes nothing.
+    // The switch is the channel menu's "One note at a time", shown on a sampler's and a set's menu
+    // (the kinds with sound settings), after "Change sample…" and "Edit sample…", and not on an
+    // input channel's. A press switches the channel's `cut_itself` in one undo step named as the
+    // other sound settings and closes the menu; opened again, the row is ticked. The file then
+    // names "cut_itself":true last in the sampler's sound at the version it had; pressed again it
+    // is off and the file as before; undo takes each back. On an input channel the command changes
+    // nothing.
     #[test]
     fn the_channel_menu_switches_one_note_at_a_time() {
         use crate::ui::hint::ChannelRow as R;
@@ -4521,11 +4742,13 @@ mod tests {
             channel: ChannelId(1),
             knob: Knob::Volume,
         };
-        let gestures: [(Message, &[f32]); 4] = [
+        let gestures: [(Message, &[f32]); 6] = [
             (knob.clone(), &[300.0]),
             (knob, &[300.0, 250.0, 300.0]),
             (Message::TempoPressed, &[300.0]),
             (Message::TempoPressed, &[300.0, 250.0, 300.0]),
+            (Message::SwingPressed, &[300.0]),
+            (Message::SwingPressed, &[300.0, 250.0, 300.0]),
         ];
         for (press, moves) in gestures {
             let (mut app, _player) = f1_app();
@@ -4538,8 +4761,8 @@ mod tests {
             let undo_len = app.session.history().undo_len();
             let gesture = format!("{press:?}, moves {moves:?}");
             let _ = app.update(press);
-            for &y in moves {
-                let _ = app.update(Message::DragMoved(y));
+            for &along in moves {
+                let _ = app.update(Message::DragMoved(along));
             }
             let _ = app.update(Message::DragEnded);
             assert_eq!(app.session.project(), &before, "{gesture}");
@@ -5948,7 +6171,7 @@ mod tests {
         assert_eq!(document(&app), fixture("p5_gain.json"));
     }
 
-    // A lit send knob drags the send's amount: insert 4 sends 0.5 to insert 5, and 20 px up
+    // A lit send knob drags the send's amount: insert 4 sends 0.5 to insert 5, and 20 px right
     // adds a tenth of the range, 0.6.
     #[test]
     fn a_send_knob_drags_the_amount() {
@@ -5958,10 +6181,69 @@ mod tests {
         let knob = mix::send_rect(strip_left(InsertId(5), 0.0), app.mixer.size().height).center();
         left_click(&mut app, knob);
         let _ = app.update(Message::DragMoved(100.0));
-        let _ = app.update(Message::DragMoved(80.0));
+        let _ = app.update(Message::DragMoved(120.0));
         let _ = app.update(Message::DragEnded);
         assert_eq!(insert_of(&app, 4).routes.get(&InsertId(5)), Some(&0.6));
         one_undo_restores(&mut app, "p5_gain.json");
+    }
+
+    // A knob follows the cursor across and the fader follows it up and down: the listener a
+    // drag gets reads the one coordinate its control takes, so 200 px along the other axis
+    // changes nothing. Then 50 px right is a quarter of the volume knob's sweep (1.0 to 2.0),
+    // and 20 px up a tenth of insert 2's fader (0.63496 to 0.73496).
+    #[test]
+    fn knobs_follow_the_cursor_across_and_the_fader_up_and_down() {
+        fn cursor_at(app: &mut App, x: f32, y: f32) {
+            let target = app.drag.as_ref().expect("a drag is held").target;
+            let moved = Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(x, y),
+            });
+            let listen = drag_listener(target);
+            let message = listen(moved, event::Status::Ignored, window::Id::unique());
+            let _ = app.update(message.expect("a cursor move is a drag move"));
+        }
+        let (mut app, _player) = f1_app();
+        let _ = app.update(Message::KnobPressed {
+            channel: ChannelId(1),
+            knob: Knob::Volume,
+        });
+        cursor_at(&mut app, 300.0, 300.0);
+        cursor_at(&mut app, 300.0, 100.0);
+        assert_eq!(volume(&app), 1.0, "200 px up turns no knob");
+        cursor_at(&mut app, 350.0, 100.0);
+        assert_eq!(volume(&app), 2.0, "50 px right");
+        let _ = app.update(Message::DragEnded);
+
+        let (mut app, _player) = p5_app("p5_gain.json");
+        let fader = insert_of(&app, 2).fader;
+        let at = cap(&app, 2);
+        left_click(&mut app, at);
+        cursor_at(&mut app, 300.0, 300.0);
+        cursor_at(&mut app, 500.0, 300.0);
+        assert_eq!(
+            insert_of(&app, 2).fader,
+            fader,
+            "200 px right moves no fader"
+        );
+        cursor_at(&mut app, 500.0, 280.0);
+        assert!(
+            (insert_of(&app, 2).fader - 0.734_96).abs() < 1e-6,
+            "20 px up"
+        );
+        let _ = app.update(Message::DragEnded);
+    }
+
+    // The sample editor's Gain box follows the cursor across as the knobs do: a move held on
+    // it carries the cursor's x.
+    #[test]
+    fn the_gain_box_drag_reads_the_cursor_across() {
+        let moved = Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(350.0, 100.0),
+        });
+        assert!(matches!(
+            editor_gain_message(moved, event::Status::Ignored, window::Id::unique()),
+            Some(Message::SampleEditor(SampleEditorMessage::GainMoved(x))) if x == 350.0
+        ));
     }
 
     // The add menu's rows 4 and 5 are the ported compressor and saturator, at their own defaults,
@@ -6241,8 +6523,12 @@ mod tests {
             knob: Knob::Pan,
         });
         let _ = app.update(Message::DragMoved(300.0));
-        let _ = app.update(Message::DragMoved(500.0));
-        assert_eq!(app.session.project().channels[&ChannelId(1)].pan, -1.0);
+        let _ = app.update(Message::DragMoved(100.0));
+        assert_eq!(
+            app.session.project().channels[&ChannelId(1)].pan,
+            -1.0,
+            "200 px left"
+        );
         assert_eq!(
             app.session.plans_sent(),
             plans,
@@ -6966,7 +7252,7 @@ mod tests {
         assert_eq!(app.session.project().tempo, MilliBpm(87_500));
         let _ = app.update(Message::TempoPressed);
         let _ = app.update(Message::DragMoved(300.0));
-        let _ = app.update(Message::DragMoved(290.0));
+        let _ = app.update(Message::DragMoved(310.0));
         let _ = app.update(Message::DragEnded);
         assert_eq!(app.tempo_edit, None, "a drag opens no box");
         assert_ne!(app.session.project().tempo, MilliBpm(87_500), "and drags");
@@ -7016,7 +7302,7 @@ mod tests {
             knob: Knob::Volume,
         });
         let _ = app.update(Message::DragMoved(200.0));
-        let _ = app.update(Message::DragMoved(180.0));
+        let _ = app.update(Message::DragMoved(220.0));
         let _ = app.update(Message::DragEnded);
         assert_eq!(
             app.edit_menu_view().undo.as_deref(),
@@ -7677,8 +7963,7 @@ mod tests {
     // the grown keyboard switch and Record, and a click in the middle of Record's ring arms it.
     // At 2259 and 4510 px the groups stand left, 45 px apart, and at each width a
     // click in the notices' cell past their text and Retry, halfway from there to File (the first
-    // of the menus since 2026-10-27; Edit was),
-    // publishes nothing too.
+    // of the menus), publishes nothing too.
     #[test]
     fn the_grown_toolbars_controls_take_their_clicks_where_it_lays_them_out() {
         use crate::ui::hint::{Hover, HoverMessage, Tool};
@@ -7689,7 +7974,7 @@ mod tests {
             let spread = app.toolbar().spread();
             assert_eq!(spread.sizes().scale, 1.6, "{width} px");
             let y = layout::TOOLBAR_HEIGHT / 2.0;
-            // At 0.9 of the size (asked 2026-10-27): 38 → 61 px buttons (were 42 → 67),
+            // At 0.9 of the size: 38 → 61 px buttons (were 42 → 67),
             // the Audio row y 23..37 (9 + 14; was 26..42), 16 + 2 × 6 px panel buttons (were
             // 19 + 2 × 6).
             let play = spread.left(Group::Transport).expect("shown") + 61.0 / 2.0;

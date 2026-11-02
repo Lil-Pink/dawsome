@@ -18,8 +18,7 @@ use dawsome_engine::midi_out::MidiOutReader;
 use dawsome_engine::plan::{PlanUpdate, PlayMode};
 use dawsome_engine::processor::Registry;
 use dawsome_engine::project::{
-    AutomationId, Channel, ChannelId, Clip, ClipId, ClipStretch, InsertId, PatternId,
-    ProcessorOwner, Project, TrackId,
+    AutomationId, Channel, ChannelId, ClipStretch, InsertId, PatternId, ProcessorOwner, Project,
 };
 use dawsome_engine::realtime::{
     self, ControlRingFull, EngineEvent, MidiInbox, PlanQueueFull, Player, Position, RealtimeLink,
@@ -53,14 +52,11 @@ pub enum SessionError {
     Recording,
 }
 
-/// What a running song take keeps from other edits: its pattern and its clip, and the track it
-/// added when no track had room (its undo takes that track out, which it refuses for a muted
-/// track or one holding clips).
+/// What a running song take keeps from other edits: its pattern (it places no clip and adds no
+/// track).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TakeParts {
     pub pattern: PatternId,
-    pub clip: ClipId,
-    pub track: Option<TrackId>,
 }
 
 /// The id the Library's preview channel plays under in the plans: one no document gives out,
@@ -372,26 +368,9 @@ impl Session {
             return Err(SessionError::Recording);
         }
         // Whatever its kind, an edit that changes the take's own
-        // pattern or clip (a rename, a move, a mute) is taken back and refused, so no step the
-        // take's undo could not get past lands under it. So is one that
-        // changes the track the take added (its mute, name or clips), which its undo removes.
-        let take_parts = |project: &Project| {
-            let track = parts.track.map(|track| {
-                let clips: Vec<(ClipId, Clip)> = project
-                    .playlist
-                    .clips
-                    .iter()
-                    .filter(|(_, clip)| clip.track == track)
-                    .map(|(&id, clip)| (id, clip.clone()))
-                    .collect();
-                (project.playlist.tracks.get(&track).cloned(), clips)
-            });
-            (
-                project.patterns.get(&parts.pattern).cloned(),
-                project.playlist.clips.get(&parts.clip).cloned(),
-                track,
-            )
-        };
+        // pattern (a rename, its bars) is taken back and refused, so no step the
+        // take's undo could not get past lands under it.
+        let take_parts = |project: &Project| project.patterns.get(&parts.pattern).cloned();
         let before = take_parts(&self.project);
         let Applied { inverse, touched } = edit::apply(&mut self.project, edit)?;
         if take_parts(&self.project) != before {
@@ -859,16 +838,16 @@ fn compile(
         })
 }
 
-/// Whether `edit` would leave a song take into `pattern` and `clip` unable to be taken back in
-/// one undo step: its step takes out the take's notes one by one, then its clip and pattern by
-/// giving their IDs back (`UnplaceClips`, `UnaddPattern`), and a track it added the same way, so
-/// while it runs no other pattern, clip or track may be added or taken out and no channel
-/// deleted (its notes go from every pattern). The take's own pattern and clip are kept from any
-/// change by comparing them around the edit ([`Session::apply_live`]); these kinds are refused
-/// before they apply. Everything else (sounds, mixer, notes of other patterns, other clips
+/// Whether `edit` would leave a song take into `pattern` unable to be taken back in one undo
+/// step: its step takes out the take's notes one by one, then its pattern by giving its ID back
+/// (`UnaddPattern`), so while it runs no other pattern may be added or taken out, no channel
+/// deleted (its notes go from every pattern), and, as before song takes stopped placing a clip,
+/// no clip or track added or taken out (a clip of the take's pattern would hold it). The take's
+/// own pattern is kept from any change by comparing it around the edit
+/// ([`Session::apply_live`]); these kinds are refused before they apply. Everything else (sounds, mixer, notes of other patterns, other clips
 /// moved) goes through.
 fn refused_under_take(edit: &Edit, parts: TakeParts) -> bool {
-    let TakeParts { pattern, clip, .. } = parts;
+    let TakeParts { pattern } = parts;
     match edit {
         Edit::Transaction(edits) => edits.iter().any(|edit| refused_under_take(edit, parts)),
         Edit::AddPattern { .. }
@@ -892,9 +871,10 @@ fn refused_under_take(edit: &Edit, parts: TakeParts) -> bool {
         | Edit::RestoreChannel { .. } => true,
         Edit::ReplaceNotes { pattern: id, .. }
         | Edit::ToggleStep { pattern: id, .. }
-        | Edit::SetPatternBars { pattern: id, .. } => *id == pattern,
-        Edit::DeleteClips { ids } => ids.contains(&clip),
-        Edit::ResizeClip { id, .. } | Edit::SetClipPattern { id, .. } => *id == clip,
+        | Edit::SetPatternBars { pattern: id, .. }
+        | Edit::SetPatternSwing { pattern: id, .. }
+        | Edit::SetPatternKind { pattern: id, .. } => *id == pattern,
+        Edit::SetClipPattern { pattern: id, .. } => *id == pattern,
         _ => false,
     }
 }

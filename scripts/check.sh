@@ -3,13 +3,14 @@
 # tests. Exits non-zero on any failure.
 set -euo pipefail
 
-# Test folders go under the target dir, never /tmp, which is often memory (on 2026-10-26 some
-# 2900 stale dawsome-* test folders held 14 GB of it), so runs with separate target dirs keep
-# apart; folders a day old are removed first.
-export TMPDIR="${TMPDIR:-${CARGO_TARGET_DIR:-target}/tmp}"
+# Test folders go under the target dir, never /tmp, which is often memory (once some 2900
+# stale dawsome-* test folders held 14 GB of it), so runs with separate target dirs keep
+# apart; folders a day old are removed first. An absolute path: rustc runs in each dependency's
+# own folder, where a relative one (CI's, with no CARGO_TARGET_DIR) names no folder at all.
+cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")/.."
+export TMPDIR="${TMPDIR:-$(scripts/target-dir.sh)/tmp}"
 mkdir -p "$TMPDIR"
 find "$TMPDIR" -mindepth 1 -maxdepth 1 -name 'dawsome-*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
-cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")/.."
 scripts/lint-names.sh
 # licenses/THIRD_PARTY.md and licenses/NOTICE against the crates the programs are built from, on every target.
 scripts/license-check.sh
@@ -85,6 +86,10 @@ scripts/python.sh -I tests/fixtures/gen_p29_expected.py --check tests/fixtures
 # reverse): the sounds and projects, the frames each list gives, the renders, the clips' moved
 # offsets, every op's undo step and the zero-crossing search, as their generator writes them.
 scripts/python.sh -I tests/fixtures/gen_p30_expected.py --check tests/fixtures
+# Swing: the sounds and projects, the renders a pattern's swing gives (the second 16th of each
+# pair late, the note's end with it, a swung note passing a hand-placed one, a song clip's
+# window on the swung ticks), as their generator writes them.
+scripts/python.sh -I tests/fixtures/gen_p31_expected.py --check tests/fixtures
 # The Help window's pictures against what they are made from (scripts/help-shots.sh remakes them).
 scripts/python.sh -I scripts/help_shots.py check
 # The DAWproject schema checker finds the faults planted in its own documents, and the known
@@ -97,6 +102,9 @@ if command -v xmllint >/dev/null; then
 else
     echo "xmllint not installed: second schema validation skipped"
 fi
+# The fetch of the instrument sets lands the kit at its commit, and fetches a kit folder whose .git
+# is no repository again without touching the repository around it (repositories of its own).
+scripts/python.sh -I -B tests/scripts/fetch_kit_test.py
 # The fetch of the bundled plugin keeps only the files locks/surge.lock pins and takes only the plugin
 # and its factory data, from archives of the tests' own (no network).
 scripts/python.sh -I -B tests/scripts/fetch_surge_test.py

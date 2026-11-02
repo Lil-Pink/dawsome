@@ -994,10 +994,10 @@ mod tests {
         })
     }
 
-    // A stale clock (found 2026-10-23): another output chosen while a take records
-    // from an input channel opens the output again, but the take keeps the input's device; once
-    // the take ends, the input opens again for the new output (its clock and block), so the
-    // next take's frames are lined up by the output that plays them.
+    // A stale clock: another output chosen while a take records from an input channel opens the
+    // output again, but the take keeps the input's device; once the take ends, the input opens
+    // again for the new output (its clock and block), so the next take's frames are lined up by the
+    // output that plays them.
     #[test]
     fn an_output_opened_again_during_a_take_reopens_the_input_after_it() {
         let dir = temp_dir("output_during_take");

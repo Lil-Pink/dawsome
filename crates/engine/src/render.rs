@@ -631,9 +631,8 @@ impl Runtime {
     /// of the next block.
     ///
     /// Why muted too: the plugin keeps the bend for its next notes, and a muted plugin that
-    /// missed the bend's return to rest played bent once unmuted, with the device at rest (found
-    /// 2026-10-26). A muted channel is sent no new notes,
-    /// so the bend alone sounds nothing.
+    /// missed the bend's return to rest played bent once unmuted, with the device at rest. A
+    /// muted channel is sent no new notes, so the bend alone sounds nothing.
     pub(crate) fn live_bend(
         &mut self,
         plan: &PlayPlan,
@@ -2850,8 +2849,7 @@ mod tests {
     }
 
     // A muted plugin channel is sent the bend and the wheel, off rest and back, as an unmuted one
-    // is (found 2026-10-26): its plugin holds what the device
-    // does when it is unmuted. It is sent no note.
+    // is: its plugin holds what the device does when it is unmuted. It is sent no note.
     #[test]
     fn a_muted_plugin_channel_is_sent_the_bend_and_the_wheel() {
         let mut plan = plan_with_sample(10, 1.0);

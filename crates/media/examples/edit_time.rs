@@ -2,7 +2,7 @@
 //! (28,800,000 frames, 230 MB as f32) through 200 ops, applied from scratch (what an undo, a
 //! redo or a project's opening costs) and one op at a time on the sound held (what appending an
 //! op costs), then the long result written into an edited cache folder and found there again,
-//! with the file's size. Numbers for docs/performance.md, not a test.
+//! with the file's size. Numbers for the performance figures, not a test.
 //!
 //! ```text
 //! cargo run --release -p dawsome-media --example edit_time -- <scratch folder>

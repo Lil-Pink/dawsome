@@ -1489,7 +1489,7 @@ mod tests {
     }
 
     /// What cpal 0.18.2's PipeWire host (the app's host while PipeWire runs: its `pipewire`
-    /// feature) listed among the outputs on a desktop machine on 2026-10-27, in its order: the
+    /// feature) listed among the outputs on a desktop machine, in its order: the
     /// name it gives each (a node's description) and its id (the node's name). Captured with a
     /// probe printing `device` and `device.id()`; `pactl list short sinks` named the same seven
     /// sinks. The playback streams of two browsers are nodes without a description.
@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     // What cpal 0.18.2's ALSA host (the app's host when no PipeWire runs) listed among the
-    // outputs on the same machine on 2026-10-27, by name and PCM id: its first 54 rows (the
+    // outputs on the same machine, by name and PCM id: its first 54 rows (the
     // capture was cut there).
     // Settings offers the cards: the default and the sound servers' PCMs (which "System
     // default" stands for), the null sink, the rate converters, the Speex and channel mixing

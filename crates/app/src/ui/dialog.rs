@@ -52,11 +52,22 @@ fn actions<'a>(buttons: Vec<Element<'a, Message>>) -> Element<'a, Message> {
 
 /// `content` in a dialog box over the dimmed window.
 pub fn overlay<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    let dialog = container(content)
+    opaque(container(boxed(content)).center(Fill).style(style::scrim))
+}
+
+/// As [`overlay`], without dimming the window: for a dialog whose effect shows behind it, as
+/// the Quantize dialog's preview shows in the piano roll. Clicks still stop at it.
+pub fn overlay_undimmed<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    opaque(container(boxed(content)).center(Fill))
+}
+
+/// A dialog's box: its width, margin and face.
+fn boxed<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    container(content)
         .width(DIALOG_WIDTH)
         .padding(18)
-        .style(style::dialog);
-    opaque(container(dialog).center(Fill).style(style::scrim))
+        .style(style::dialog)
+        .into()
 }
 
 /// "Save changes to <name>?" with Save, Don't Save and Cancel.
@@ -263,10 +274,18 @@ pub fn export<'a>(form: ExportForm<'a>) -> Element<'a, Message> {
     content.push(buttons).into()
 }
 
-/// The Quantize dialog: the grid (the snap or a note value), the strength, whether the ends
-/// move too, Quantize and Cancel. Each control says what it is in the hint bar.
-pub fn quantize<'a>(form: &QuantizeForm) -> Element<'a, Message> {
+/// The Quantize dialog: the grid (the snap or a note value), the strength, the swing (with a
+/// Triplet button, lit at 66.7 %), whether the ends move too, how many notes its preview
+/// merges (in the warning color when any do), Quantize and Cancel. Each control says what it
+/// is in the hint bar.
+pub fn quantize<'a>(
+    form: &QuantizeForm,
+    merges: Option<crate::ui::roll::QuantizeMerges>,
+) -> Element<'a, Message> {
+    use dawsome_engine::time::{SWING_RANGE, TRIPLET_SWING};
+
     use crate::ui::hint::QuantizePart;
+    use crate::ui::rack::swing_text;
     use crate::ui::roll::{QuantizeGrid, QuantizeMessage};
     let send = Message::Quantize;
     let grid = pick_list(QuantizeGrid::ALL, Some(form.grid), move |grid| {
@@ -284,6 +303,21 @@ pub fn quantize<'a>(form: &QuantizeForm) -> Element<'a, Message> {
     ]
     .spacing(10)
     .align_y(Center);
+    // The readout has a width of its own, so the Triplet button stays put as the digits change.
+    let swing = row![
+        slider(SWING_RANGE, form.swing_tenths, move |value| send(
+            QuantizeMessage::Swing(value)
+        ))
+        .step(1u16)
+        .width(200),
+        text(swing_text(form.swing_tenths)).size(13).width(44),
+        button(text("Triplet").size(12))
+            .padding([5, 8])
+            .style(style::tool_button(form.swing_tenths == TRIPLET_SWING))
+            .on_press(send(QuantizeMessage::Swing(TRIPLET_SWING))),
+    ]
+    .spacing(10)
+    .align_y(Center);
     let choice = |label: &'a str, lit: bool, ends: bool| {
         button(text(label).size(12))
             .padding([5, 8])
@@ -295,6 +329,14 @@ pub fn quantize<'a>(form: &QuantizeForm) -> Element<'a, Message> {
         choice("Starts + ends", form.ends, true),
     ]
     .spacing(2);
+    let merges = merges.map(|merges| {
+        let color = if merges.merged == 0 {
+            style::TEXT_DIM
+        } else {
+            style::WARNING
+        };
+        text(merges.to_string()).size(12).color(color)
+    });
     column![
         text("Quantize").size(15),
         field(
@@ -306,17 +348,22 @@ pub fn quantize<'a>(form: &QuantizeForm) -> Element<'a, Message> {
             hover_area(strength, Hover::Quantize(QuantizePart::Strength))
         ),
         field(
+            "Swing",
+            hover_area(swing, Hover::Quantize(QuantizePart::Swing))
+        ),
+        field(
             "Moves",
             hover_area(moves, Hover::Quantize(QuantizePart::Ends))
         ),
-        actions(vec![
-            hover_area(
-                action("Quantize", Some(send(QuantizeMessage::Apply))),
-                Hover::Quantize(QuantizePart::Apply)
-            ),
-            action("Cancel", Some(send(QuantizeMessage::Cancel))),
-        ]),
     ]
+    .push(merges)
+    .push(actions(vec![
+        hover_area(
+            action("Quantize", Some(send(QuantizeMessage::Apply))),
+            Hover::Quantize(QuantizePart::Apply),
+        ),
+        action("Cancel", Some(send(QuantizeMessage::Cancel))),
+    ]))
     .spacing(10)
     .into()
 }

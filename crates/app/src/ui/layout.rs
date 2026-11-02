@@ -16,10 +16,9 @@ use iced::{Point, Rectangle, Size};
 /// Window size when `--window-size` is not given.
 pub const DEFAULT_WINDOW_SIZE: Size = Size::new(1000.0, 560.0);
 
-/// The toolbar's height: 64 px (was 56 since the first commit; a bigger bar was asked for
-/// twice, and growing what sat inside the 56 px was not enough: 72 px, until the bar was asked
-/// about 10 % smaller both ways on 2026-10-27; 64.8 would leave its
-/// groups a half pixel off center).
+/// The toolbar's height: 64 px (was 56, too small even with what sat inside it grown; then
+/// 72 px, until the bar was made about 10 % smaller both ways; 64.8 would leave its groups a
+/// half pixel off center).
 pub const TOOLBAR_HEIGHT: f32 = 64.0;
 
 /// The hint bar along the window's foot, while it shows.
@@ -29,7 +28,8 @@ pub const HINT_BAR_HEIGHT: f32 = 22.0;
 pub const TOOLBAR_SIDE_PADDING: f32 = 8.0;
 
 /// The rack's header strip: its title, the selected pattern's bar count between "−" and "+",
-/// and "+ Sampler…". It stays put while the rows under it scroll.
+/// "+ Sampler…", and the pattern's swing knob with its readout. It stays put while the rows
+/// under it scroll.
 pub const RACK_HEADER_HEIGHT: f32 = 24.0;
 
 /// Where the header's "Bars" label starts, and its "−", count and "+" (left edge, width).
@@ -39,6 +39,12 @@ const BARS_COUNT: (f32, f32) = (160.0, 36.0);
 const BARS_UP: (f32, f32) = (196.0, 20.0);
 /// The header's "+ Sampler…" button, from the steps' left edge.
 const ADD_SAMPLER_WIDTH: f32 = 100.0;
+/// Where the header's "Swing" label starts, and its knob and readout (left edge, width). Why
+/// right of the add button and the readout beside the knob, not under it: there is no room
+/// between "+" and the button, and the strip is 24 px tall.
+pub const SWING_LABEL_X: f32 = 334.0;
+const SWING_KNOB: (f32, f32) = (376.0, 20.0);
+const SWING_COUNT: (f32, f32) = (400.0, 48.0);
 
 /// Space between the rack's header and the first rack row.
 pub const RACK_PADDING_TOP: f32 = 8.0;
@@ -88,6 +94,9 @@ const _: () = assert!(
     BARS_DOWN.0 + BARS_DOWN.1 <= BARS_COUNT.0
         && BARS_COUNT.0 + BARS_COUNT.1 <= BARS_UP.0
         && BARS_UP.0 + BARS_UP.1 < STEPS_X
+        && STEPS_X + ADD_SAMPLER_WIDTH < SWING_LABEL_X
+        && SWING_LABEL_X < SWING_KNOB.0
+        && SWING_KNOB.0 + SWING_KNOB.1 <= SWING_COUNT.0
 );
 
 /// `point`, in rack coordinates, in window coordinates while the rack is the top panel and the
@@ -115,6 +124,21 @@ pub fn add_sampler_rect() -> Rectangle {
     header_rect((STEPS_X, ADD_SAMPLER_WIDTH))
 }
 
+/// The header's swing knob, a control tall and as wide: square.
+pub fn swing_knob_rect() -> Rectangle {
+    header_rect(SWING_KNOB)
+}
+
+/// The swing's readout, right of its knob.
+pub fn swing_count_rect() -> Rectangle {
+    header_rect(SWING_COUNT)
+}
+
+/// What a press or the wheel on the swing takes: its knob and its readout.
+pub fn swing_rect() -> Rectangle {
+    header_rect((SWING_KNOB.0, SWING_COUNT.0 + SWING_COUNT.1 - SWING_KNOB.0))
+}
+
 /// A header control from its left edge and width, 2 px clear of the strip's top and bottom.
 fn header_rect((x, width): (f32, f32)) -> Rectangle {
     Rectangle::new(
@@ -129,6 +153,8 @@ pub enum HeaderHit {
     BarsDown,
     BarsUp,
     AddSampler,
+    /// The swing's knob or its readout.
+    Swing,
 }
 
 /// Finds the header control under `point`, header coordinates.
@@ -137,6 +163,7 @@ pub fn header_hit_test(point: Point) -> Option<HeaderHit> {
         (bars_down_rect(), HeaderHit::BarsDown),
         (bars_up_rect(), HeaderHit::BarsUp),
         (add_sampler_rect(), HeaderHit::AddSampler),
+        (swing_rect(), HeaderHit::Swing),
     ]
     .into_iter()
     .find(|(rect, _)| rect.contains(point))
@@ -401,6 +428,41 @@ mod tests {
         assert_eq!(at(219.0, 12.0), None, "between \"+\" and the button");
         assert_eq!(at(150.0, 1.0), None, "above the buttons");
         assert_eq!(at(40.0, 12.0), None, "the title");
+    }
+
+    // The swing, written out (spec swing.md §5): knob 376..396, readout 400..448, one hit over
+    // both, 2..22 down the strip; the "Swing" label at 334 takes no press. The whole header
+    // stays left of step 16's edge, so it never sits past the rack's 16 steps.
+    #[test]
+    fn the_swing_takes_presses_on_its_knob_and_its_readout() {
+        let at = |x, y| header_hit_test(Point::new(x, y));
+        assert_eq!(
+            at(377.0, 3.0),
+            Some(HeaderHit::Swing),
+            "the knob's top left"
+        );
+        assert_eq!(at(386.0, 12.0), Some(HeaderHit::Swing), "the knob's center");
+        assert_eq!(
+            at(398.0, 12.0),
+            Some(HeaderHit::Swing),
+            "between knob and readout"
+        );
+        assert_eq!(
+            at(447.0, 21.0),
+            Some(HeaderHit::Swing),
+            "the readout's bottom right"
+        );
+        assert_eq!(at(375.0, 12.0), None, "left of the knob");
+        assert_eq!(at(449.0, 12.0), None, "right of the readout");
+        assert_eq!(at(424.0, 1.0), None, "above the readout");
+        assert_eq!(at(424.0, 23.0), None, "under the readout");
+        assert_eq!(at(340.0, 12.0), None, "the label");
+        let knob = swing_knob_rect();
+        assert_eq!(knob.center(), Point::new(386.0, 12.0));
+        assert_eq!((knob.width, knob.height), (20.0, 20.0));
+        let count = swing_count_rect();
+        assert_eq!((count.x, count.width), (400.0, 48.0));
+        assert!(count.x + count.width < step_left(16));
     }
 
     // The rows sit under the toolbar (64) and the header (24): step 1 of row 1 is centered on

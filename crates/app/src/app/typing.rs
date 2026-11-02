@@ -521,8 +521,8 @@ mod tests {
 
     // Stop ends every live note in the player, so the keys the keyboard holds are forgotten: A's
     // release after it sends nothing, A pressed again plays, and Tab held through Stop sends the
-    // pedal down again on its next press (2026-10-28: a plugin note whose release never arrived
-    // came back on every Play).
+    // pedal down again on its next press (a plugin note whose release never arrived came back
+    // on every Play).
     #[test]
     fn stop_forgets_the_keys_held_and_they_play_again_when_pressed() {
         let (mut app, mut player) = f1_app();

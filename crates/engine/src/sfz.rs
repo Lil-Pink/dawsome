@@ -964,9 +964,8 @@ mod tests {
     }
 
     // A file that includes itself under other spellings is read again under each one that is
-    // not open yet: six spellings would be 326 reads, factorial in the spellings (found
-    // 2026-10-22: twelve aborted the program). Reads stop at
-    // MAX_INCLUDE_READS, with one problem saying so.
+    // not open yet: six spellings would be 326 reads, factorial in the spellings (twelve aborted
+    // the program). Reads stop at MAX_INCLUDE_READS, with one problem saying so.
     #[test]
     fn include_reads_stop_at_the_budget() {
         let spellings = [

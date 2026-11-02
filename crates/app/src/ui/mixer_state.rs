@@ -244,9 +244,13 @@ impl MixerDrag {
         }
     }
 
-    /// Whether the control moves left to right (a slider) rather than up and down.
+    /// Whether the control moves left to right (a pan or send knob, a slider) rather than up
+    /// and down (the fader).
     pub fn horizontal(self) -> bool {
-        matches!(self, MixerDrag::Param { .. })
+        match self {
+            MixerDrag::Fader(_) => false,
+            MixerDrag::Pan(_) | MixerDrag::Send { .. } | MixerDrag::Param { .. } => true,
+        }
     }
 
     /// The edit that sets the control to `value`.

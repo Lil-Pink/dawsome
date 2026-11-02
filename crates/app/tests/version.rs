@@ -12,7 +12,7 @@ fn version_names_the_program_and_its_version() {
     assert!(output.status.success(), "--version failed");
     let line = String::from_utf8(output.stdout).expect("utf-8");
     assert!(
-        line.starts_with("dawsome-app 0.1.0") && line.ends_with('\n') && line.lines().count() == 1,
+        line.starts_with("dawsome-app 0.1.1") && line.ends_with('\n') && line.lines().count() == 1,
         "unexpected --version output: {line:?}"
     );
 }

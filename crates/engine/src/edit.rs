@@ -22,9 +22,9 @@ use thiserror::Error;
 use crate::project::{
     Automation, AutomationId, AutomationPoint, AutomationTarget, Channel, ChannelId, ChannelKind,
     Clip, ClipId, ClipStretch, Controller, Curve, EffectId, InputSource, InsertId, LoopRange,
-    MidiOut, Note, Pattern, PatternId, ProcessorOwner, ProcessorRef, Project, Sound, SoundEdits,
-    SoundSource, Track, TrackId, ValidationError, DEFAULT_KEY, MAX_KEY, MAX_VOLUME, PAN_RANGE,
-    TEMPO_RANGE,
+    MidiOut, Note, Pattern, PatternId, PatternKind, ProcessorOwner, ProcessorRef, Project, Sound,
+    SoundEdits, SoundSource, Track, TrackId, ValidationError, DEFAULT_KEY, MAX_KEY, MAX_VOLUME,
+    PAN_RANGE, TEMPO_RANGE,
 };
 use crate::time::{self, MilliBpm, Ticks};
 
@@ -101,6 +101,19 @@ pub enum Edit {
         pattern: PatternId,
         bars: u32,
     },
+    /// Sets how late the pattern plays the second 16th of each pair
+    /// ([`Pattern::swing_tenths`]); refused outside [`time::SWING_RANGE`]. Its inverse is the
+    /// same edit with the old swing.
+    SetPatternSwing {
+        pattern: PatternId,
+        swing_tenths: u16,
+    },
+    /// Makes the pattern a pattern or a take ([`Pattern::kind`]). Its inverse is the same edit
+    /// with the old kind.
+    SetPatternKind {
+        pattern: PatternId,
+        kind: PatternKind,
+    },
     /// Adds an empty pattern of `bars` bars after the others, a copy of pattern `copied_from`
     /// when that is set (an ID below `id`; [`copies::unlink`] adds the notes after it). `id` must
     /// be [`Project::next_pattern_id`]: the caller reads it from there, so redoing an add gives
@@ -113,8 +126,8 @@ pub enum Edit {
     },
     /// Takes the pattern added last out again and gives its ID back; the inverse of
     /// [`Edit::AddPattern`]. Accepted only for the last ID given out, while the pattern is as
-    /// added (no notes, no clip plays it), so that its own inverse restores the project byte
-    /// for byte.
+    /// added (no notes, straight, no clip plays it), so that its own inverse restores the
+    /// project byte for byte.
     UnaddPattern {
         id: PatternId,
     },
@@ -618,6 +631,8 @@ pub enum EditError {
     TempoOutOfRange(u32),
     #[error("a pattern needs at least 1 bar")]
     NoBars,
+    #[error("swing {0} must be 500 to 750 (50.0 to 75.0 %)")]
+    InvalidSwing(u16),
     #[error("a new pattern must take the next free id {expected}, not {got}")]
     NotNextPatternId { got: u32, expected: u32 },
     #[error("every pattern id has been used")]
@@ -625,7 +640,7 @@ pub enum EditError {
     #[error("the project already has the most patterns it can hold, 999")]
     TooManyPatterns,
     #[error(
-        "pattern {0} cannot be taken out: only the pattern added last, without notes or clips, can be"
+        "pattern {0} cannot be taken out: only the pattern added last, straight and without notes or clips, can be"
     )]
     PatternNotRemovable(u32),
     #[error("the only pattern cannot be deleted")]
@@ -842,6 +857,28 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
             }
             let old = mem::replace(&mut pattern_mut(project, pattern)?.length_bars, bars);
             let inverse = Edit::SetPatternBars { pattern, bars: old };
+            Ok(Applied::pattern(inverse, pattern))
+        }
+        Edit::SetPatternSwing {
+            pattern,
+            swing_tenths,
+        } => {
+            if !time::SWING_RANGE.contains(&swing_tenths) {
+                return Err(EditError::InvalidSwing(swing_tenths));
+            }
+            let old = mem::replace(
+                &mut pattern_mut(project, pattern)?.swing_tenths,
+                swing_tenths,
+            );
+            let inverse = Edit::SetPatternSwing {
+                pattern,
+                swing_tenths: old,
+            };
+            Ok(Applied::pattern(inverse, pattern))
+        }
+        Edit::SetPatternKind { pattern, kind } => {
+            let old = mem::replace(&mut pattern_mut(project, pattern)?.kind, kind);
+            let inverse = Edit::SetPatternKind { pattern, kind: old };
             Ok(Applied::pattern(inverse, pattern))
         }
         Edit::AddPattern {

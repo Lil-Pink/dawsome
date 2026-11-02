@@ -17,13 +17,13 @@ Expected values come from the rules written out below, never from engine code:
             its own start, so a key held a whole pattern or more covers the pattern once; a note
             within the pattern stays one
   song      a take in song mode makes pattern "<selected channel> take N" (the first N no
-            pattern is named with) and one clip of it from the song marker, on the armed track,
-            else the first track with no clip over the take's first bar, else a new track; while
-            it plays the pattern and its clip are as many whole bars as hold the bar the playhead
-            is in (floor((T - start)/384) + 1); at the stop, as many as hold start..stop
+            pattern is named with), a take ("kind": "take"), its bar 1 at the song marker,
+            where Record plays the song from, and places no clip (the user places it); while it
+            plays the pattern is as many whole bars as hold the bar the playhead is in
+            (floor((T - start)/384) + 1); at the stop, as many as hold start..stop
             (ceil((stop - start)/384), at least 1, and at least the bar of the last note's
             start); notes at T - start, quantized to the step as above (no wrap); the song's end
-            moves with the clip; a take with no note leaves the document as it was
+            stays; a take with no note leaves the document as it was
   audio     a take of what is heard goes to the project's recordings folder (samples/ beside it)
             as "<project> take N.wav", N the first number with no such file; in song mode it runs
             from the song marker until the stop, in pattern mode for one pass of the pattern
@@ -37,7 +37,9 @@ Expected values come from the rules written out below, never from engine code:
             quantized to the step as above; in pattern mode they go into the selected pattern
             from its first bar's start, the pattern growing by whole bars to hold every note's
             end; in song mode a new pattern and clip as a song take's, from the bar start
-            nearest the song marker (half up)
+            nearest the song marker (half up); there song mode was chosen with blank Pattern 1
+            selected, which made it a take "Keys take 1" in place, so
+            Capture's take is "Keys take 2"
   undo      every take and every Capture is one undo step, which gives the document back byte
             for byte; its redo gives the document after it byte for byte
 
@@ -247,15 +249,11 @@ def song_take(marker, script, calls, sr=S_SR):
     bars = bars_holding(stop - marker)
     bars = max(bars, max(n["tick"] for n in notes) // BAR + 1)
     doc = copy.deepcopy(base)
-    track = free_track(doc, marker, marker + BAR)
     doc["patterns"].append({"id": 2, "name": "Kick take 1", "length_bars": bars,
-                            "notes": sorted_notes(notes)})
+                            "kind": "take", "notes": sorted_notes(notes)})
     pl = doc["playlist"]
-    pl["clips"].append({"id": 2, "track": track, "start": marker, "length": bars * BAR,
-                        "kind": "pattern", "pattern": 2})
-    pl["next_clip_id"] = 3
     checkpoints = [[c, (position(c + 1) - marker) // BAR + 1] for c in S_CHECKPOINTS if c < calls]
-    return doc, {"bars": bars, "track": track, "stop": stop, "checkpoints": checkpoints,
+    return doc, {"bars": bars, "stop": stop, "checkpoints": checkpoints,
                  "song_end": max(c["start"] + c["length"] for c in pl["clips"])}, stop
 
 
@@ -346,8 +344,11 @@ def capture_docs():
     pattern["patterns"][0]["length_bars"] = max(1, bars)
     pattern["patterns"][0]["notes"] = notes
     song = copy.deepcopy(capture_base())
+    song["patterns"][0] = {"id": 1, "name": "Keys take 1", "length_bars": 1, "kind": "take",
+                           "notes": []}
     start = (C_SONG_MARKER + BAR // 2) // BAR * BAR
-    song["patterns"].append({"id": 2, "name": "Keys take 1", "length_bars": bars, "notes": notes})
+    song["patterns"].append({"id": 2, "name": "Keys take 2", "length_bars": bars, "kind": "take",
+                             "notes": notes})
     pl = {"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(),
           "clips": [{"id": 1, "track": 1, "start": start, "length": bars * BAR,
                      "kind": "pattern", "pattern": 2}]}
@@ -393,9 +394,9 @@ def files():
                          "notes_on": pattern_wrap(True)},
         "song": {"project": "p17_song.json", "events": "p17_song_events.json",
                  "marker": S_MARKER, "calls": S_CALLS, "pattern": 2, "name": "Kick take 1",
-                 "clip": 2, "document": "p17_song_after.json", **song},
+                 "document": "p17_song_after.json", **song},
         "song_past_end": {"project": "p17_song.json", "events": "p17_song_past_end_events.json",
-                          "marker": PAST_MARKER, "calls": PAST_CALLS, "pattern": 2, "clip": 2,
+                          "marker": PAST_MARKER, "calls": PAST_CALLS, "pattern": 2,
                           "document": "p17_song_past_end_after.json", **past},
         "song_empty": {"project": "p17_song.json", "marker": S_MARKER, "calls": EMPTY_CALLS},
         "audio_song": {"project": "p17_audio48.json", "marker": A_SONG_MARKER,
@@ -437,8 +438,8 @@ def main():
     print("  quantize on %s" % J(w["notes_on"]))
     for case in ("song", "song_past_end"):
         s = expected[case]
-        print("%s: from %d, %d bars on track %d, stop %d, song end %d, checkpoints %s" % (
-            case, s["marker"], s["bars"], s["track"], s["stop"], s["song_end"],
+        print("%s: from %d, %d bars, no clip, stop %d, song end %d, checkpoints %s" % (
+            case, s["marker"], s["bars"], s["stop"], s["song_end"],
             s["checkpoints"]))
     for take in expected["audio_song"]["takes"]:
         print("audio (song): %s" % J(take))

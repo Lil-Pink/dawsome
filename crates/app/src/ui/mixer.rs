@@ -753,10 +753,10 @@ impl canvas::Program<Message> for Desk<'_> {
             return mouse::Interaction::default();
         };
         match mixer_layout::hit_test(at, self.desk(bounds.size())) {
-            Some(Hit::Fader(_) | Hit::Pan(_) | Hit::Send(_)) => {
-                mouse::Interaction::ResizingVertically
+            Some(Hit::Fader(_)) => mouse::Interaction::ResizingVertically,
+            Some(Hit::Pan(_) | Hit::Send(_) | Hit::Param(_)) => {
+                mouse::Interaction::ResizingHorizontally
             }
-            Some(Hit::Param(_)) => mouse::Interaction::ResizingHorizontally,
             Some(Hit::Strip(_) | Hit::Name(_)) | None => mouse::Interaction::default(),
             Some(_) => mouse::Interaction::Pointer,
         }

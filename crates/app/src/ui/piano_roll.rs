@@ -28,7 +28,9 @@ use crate::ui::piano_layout::{
     self, View, BAR_LINE_WIDTH, HANDLE_HEIGHT, KEY_COLUMN_WIDTH, LABEL_RIGHT, LABEL_SIZE,
     LINE_WIDTH, NOTE_BORDER, PLAYHEAD_WIDTH, ROW_HEIGHT, SELECTED_BORDER, STRIP_HEIGHT,
 };
-use crate::ui::roll::{NoteEdit, QuantizeMessage, Roll, RollMessage, MENU_FROM_RIGHT};
+use crate::ui::roll::{
+    NoteEdit, QuantizeForm, QuantizeMessage, Roll, RollMessage, MENU_FROM_RIGHT,
+};
 use crate::ui::scale::{Root, Scale, ScaleMode};
 use crate::ui::scroll::{self, Scrollbar};
 use crate::ui::style;
@@ -77,6 +79,8 @@ pub struct PianoRoll<'a> {
     pub recording_notes: bool,
     /// The window's last pixels a menu keeps clear of (the hint bar while it shows).
     pub menu_foot: f32,
+    /// The Quantize dialog's choice while it is open: the grid previews it.
+    pub quantize: Option<QuantizeForm>,
 }
 
 /// The notes menu's width: its longest row, "Chop at snap", and a margin.
@@ -120,6 +124,10 @@ pub(crate) fn live_from(
     (keys, playhead.map(from_origin))
 }
 
+/// A note's start, length and key, as tests compare what the grid draws.
+#[cfg(test)]
+pub(crate) type Placed = (i64, i64, u8);
+
 /// A note as the canvases draw it.
 #[derive(Debug, Clone)]
 struct Shown {
@@ -146,7 +154,7 @@ impl<'a> PianoRoll<'a> {
                 (note.clone(), color)
             })
             .collect();
-        let shown = self.shown_notes(&target);
+        let (shown, before) = self.shown_notes(&target);
         let end = target.end();
         let (live, song_tick) = live_from(self.live, target.channel, self.playhead, self.origin);
         let grid = canvas::Canvas::new(Grid {
@@ -154,6 +162,7 @@ impl<'a> PianoRoll<'a> {
             end,
             shown: shown.clone(),
             ghosts,
+            before,
             color,
             playhead: self
                 .playhead
@@ -307,16 +316,27 @@ impl<'a> PianoRoll<'a> {
         )
     }
 
-    /// The channel's notes as they would be if the held drag were released now.
-    fn shown_notes(&self, target: &Target) -> Vec<Shown> {
-        let Some((change, selection)) = self.roll.preview(target, self.modifiers) else {
-            return target
+    /// The channel's notes as they would be if the held drag were released now, or the open
+    /// Quantize dialog applied; and, for the dialog, the notes it takes out, where they are now.
+    fn shown_notes(&self, target: &Target) -> (Vec<Shown>, Vec<Note>) {
+        let quantizing = || {
+            let (change, selection) = self.roll.quantize_preview(target, self.quantize?)?;
+            Some((change, selection, true))
+        };
+        let preview = self
+            .roll
+            .preview(target, self.modifiers)
+            .map(|(change, selection)| (change, selection, false))
+            .or_else(quantizing);
+        let Some((change, selection, quantize)) = preview else {
+            let shown = target
                 .channel_notes()
                 .map(|note| Shown {
                     selected: self.roll.selection.contains(&key_of(note)),
                     note: note.clone(),
                 })
                 .collect();
+            return (shown, Vec::new());
         };
         let removed: BTreeSet<NoteKey> = change.remove.iter().map(key_of).collect();
         let mut notes: Vec<Note> = target
@@ -326,13 +346,32 @@ impl<'a> PianoRoll<'a> {
             .chain(change.add)
             .collect();
         notes.sort_by_key(|note| (note.start, note.key));
-        notes
+        let before = if quantize { change.remove } else { Vec::new() };
+        let shown = notes
             .into_iter()
             .map(|note| Shown {
                 selected: selection.contains(&key_of(&note)),
                 note,
             })
-            .collect()
+            .collect();
+        (shown, before)
+    }
+
+    /// The channel's notes as the grid draws them and, while the Quantize dialog is open, the
+    /// notes it moves where they were: each as (start, length, key), by start then key.
+    #[cfg(test)]
+    pub(crate) fn drawn(&self) -> (Vec<Placed>, Vec<Placed>) {
+        let Some(target) = Target::of(self.project, self.pattern, self.channel) else {
+            return (Vec::new(), Vec::new());
+        };
+        let (shown, before) = self.shown_notes(&target);
+        let place = |note: &Note| (note.start.0, note.length.0, note.key);
+        let mut before: Vec<_> = before.iter().map(place).collect();
+        before.sort_by_key(|&(start, _, key)| (start, key));
+        (
+            shown.iter().map(|shown| place(&shown.note)).collect(),
+            before,
+        )
     }
 }
 
@@ -389,6 +428,9 @@ struct Grid<'a> {
     shown: Vec<Shown>,
     /// The other channels' notes in the pattern, with their rack colors.
     ghosts: Vec<(Note, Color)>,
+    /// The notes the open Quantize dialog moves, where they are in the document: drawn as
+    /// faint ghosts of the channel's color with a firmer rim, under where they go.
+    before: Vec<Note>,
     color: Color,
     playhead: Option<Ticks>,
     select_box: Option<(Point, Point)>,
@@ -428,19 +470,31 @@ impl Grid<'_> {
             );
         }
         self.draw_lines(frame, size);
+        let ghost_row = |note: &Note| {
+            let row = scaled_row(note.key, self.scale);
+            if note.start >= self.end {
+                style::dimmed(row)
+            } else {
+                row
+            }
+        };
         for (note, color) in &self.ghosts {
             // Another channel's note on a key the fold leaves out has no row to show in.
             if !view.rows.shows(note.key) {
                 continue;
             }
-            let row = scaled_row(note.key, self.scale);
-            let row = if note.start >= self.end {
-                style::dimmed(row)
-            } else {
-                row
-            };
             let rect = view.note_rect(note);
-            frame.fill_rectangle(rect.position(), rect.size(), style::ghost(*color, row));
+            let fill = style::ghost(*color, ghost_row(note));
+            frame.fill_rectangle(rect.position(), rect.size(), fill);
+        }
+        for note in &self.before {
+            if !view.rows.shows(note.key) {
+                continue;
+            }
+            let row = ghost_row(note);
+            let rim = style::ghost_rim(self.color, row);
+            let fill = style::faint_ghost(self.color, row);
+            fill_bordered(frame, view.note_rect(note), NOTE_BORDER, rim, fill);
         }
         for shown in &self.shown {
             let (edge, border) = if shown.selected {

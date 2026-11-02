@@ -2,8 +2,8 @@
 //! raised and a backtrace to `dawsome/crashes/<seconds since the epoch>.txt` in the state
 //! folder, then the program ends as it did before (the panic still prints to stderr). Why: a
 //! crash in a desktop launch leaves no terminal to read, and a report from a tester with no
-//! evidence cannot be reproduced (2026-10-27: an app that ended while a plugin's parameters
-//! were scrolled left nothing behind).
+//! evidence cannot be reproduced (an app that ended while a plugin's parameters were scrolled
+//! left nothing behind).
 
 use std::fmt::Write as _;
 use std::panic::PanicHookInfo;
@@ -87,7 +87,8 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("message: a known message 7\n"), "{text}");
-        assert!(text.contains("at: crates/app/src/crash.rs:"), "{text}");
+        // As the compiler spells this file's path (with `\` on Windows), as the panic does.
+        assert!(text.contains(&format!("at: {}:", file!())), "{text}");
         assert!(text.ends_with("backtrace:\nframe 0: here\n"), "{text}");
     }
 

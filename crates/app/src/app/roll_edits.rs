@@ -5,12 +5,11 @@
 //! at the playhead while the song plays, else where the grid was last clicked (moved on past
 //! each paste, so pasting again lays the copies end to end).
 
-use dawsome_engine::time::Ticks;
+use dawsome_engine::time::{Ticks, SWING_RANGE};
 
 use super::App;
 use crate::ui::note_gesture::{snap_down, Target};
-use crate::ui::note_ops::Quantize;
-use crate::ui::roll::{NoteEdit, QuantizeMessage, Roll};
+use crate::ui::roll::{NoteEdit, QuantizeMerges, QuantizeMessage, Roll};
 
 impl App {
     /// Carries out `edit` on the piano roll's notes, while it is open.
@@ -48,8 +47,7 @@ impl App {
             }
             NoteEdit::Delete => Roll::delete_selected(&self.roll, &target),
             NoteEdit::Duplicate => Roll::duplicate_selected(&self.roll, &target),
-            NoteEdit::Quantize(_)
-            | NoteEdit::Chop
+            NoteEdit::Chop
             | NoteEdit::Glue
             | NoteEdit::Legato
             | NoteEdit::Reverse
@@ -62,35 +60,54 @@ impl App {
     }
 
     /// The Quantize dialog: opened with the last choice, changed, applied as one edit (and kept
-    /// for the next opening), or put away.
+    /// for the next opening), or put away. While it is open the piano roll previews its choice
+    /// on the notes as they were when it opened, and the document stays as it is.
     pub(super) fn quantize_message(&mut self, message: QuantizeMessage) {
         let form = &mut self.quantize_form;
         match message {
             QuantizeMessage::Open => {
                 self.roll.menu = None;
                 *form = Some(self.roll.quantize);
+                let target =
+                    Target::of(self.session.project(), self.pattern, self.selected_channel);
+                self.roll.hold_quantize_originals(target.as_ref());
             }
             QuantizeMessage::Grid(grid) => form.iter_mut().for_each(|form| form.grid = grid),
             QuantizeMessage::Strength(value) => {
                 form.iter_mut()
                     .for_each(|form| form.strength = value.min(100));
             }
+            QuantizeMessage::Swing(tenths) => {
+                let tenths = tenths.clamp(*SWING_RANGE.start(), *SWING_RANGE.end());
+                form.iter_mut().for_each(|form| form.swing_tenths = tenths);
+            }
             QuantizeMessage::Ends(ends) => form.iter_mut().for_each(|form| form.ends = ends),
-            QuantizeMessage::Cancel => *form = None,
+            QuantizeMessage::Cancel => {
+                self.close_quantize();
+            }
             QuantizeMessage::Apply => {
                 let Some(chosen) = form.take() else {
                     return;
                 };
                 self.roll.quantize = chosen;
-                let snap = self.roll.snap.unit(&self.roll.view);
-                let how = Quantize {
-                    grid: chosen.grid.ticks(snap, self.session.project().ppq),
-                    strength: chosen.strength,
-                    ends: chosen.ends,
-                };
-                self.note_edit(NoteEdit::Quantize(how));
+                self.note_command(|roll, target| roll.quantize_commit(target, chosen));
+                self.roll.drop_quantize_originals();
             }
         }
+    }
+
+    /// Puts the Quantize dialog away unapplied, with the notes it held: whether it was open.
+    pub(super) fn close_quantize(&mut self) -> bool {
+        self.roll.drop_quantize_originals();
+        self.quantize_form.take().is_some()
+    }
+
+    /// How many notes the open Quantize dialog's preview merges, for its line under the
+    /// controls.
+    pub(super) fn quantize_merges(&self) -> Option<QuantizeMerges> {
+        let form = self.quantize_form?;
+        let target = Target::of(self.session.project(), self.pattern, self.selected_channel)?;
+        self.roll.quantize_merges(&target, form)
     }
 
     /// Where a paste lands in `target`'s pattern: the playhead while the song plays (where it
@@ -721,10 +738,9 @@ mod tests {
         undo_redo_round_trip(&mut app, &before);
     }
 
-    // Gate 2026-10-25: on a loaded machine the two clicks above came more than the double-press
-    // time apart by the wall clock, and the second drew a note instead of deleting one. The
-    // test window holds the canvases' clock, so even half a second between the clicks is a
-    // double-click.
+    // On a loaded machine the two clicks above came more than the double-press time apart by the
+    // wall clock, and the second drew a note instead of deleting one. The test window holds the
+    // canvases' clock, so even half a second between the clicks is a double-click.
     #[test]
     fn a_double_click_is_one_however_slowly_the_machine_sends_it() {
         let (mut app, _player) = roll_alone();
@@ -846,6 +862,180 @@ mod tests {
         send(&mut app, QuantizeMessage::Strength(100));
         send(&mut app, QuantizeMessage::Apply);
         assert_eq!(lead(&app), [A, (0, 24, 62), B]);
+    }
+
+    // The Quantize dialog's swing (spec swing.md §6): straight at first, kept inside 50 to 75 %
+    // (499 → 500, 751 → 750), and remembered with the rest. On the 1/16 grid (24 ticks) at
+    // 66.7 %, the Triplet button's value, each pair's late line is floor(48 · 667 / 1000) = 32:
+    // the note of key 62 at 30 goes there (2 from it, 30 from 0). One undo puts it back.
+    #[test]
+    fn the_quantize_dialog_swings_its_grid() {
+        use dawsome_engine::edit::Edit;
+        use dawsome_engine::project::Note;
+        use dawsome_engine::time::TRIPLET_SWING;
+        let (mut app, _player) = p3();
+        app.commit(Edit::ReplaceNotes {
+            pattern: PatternId(1),
+            remove: vec![],
+            add: vec![Note {
+                channel: ChannelId(1),
+                start: Ticks(30),
+                length: Ticks(24),
+                velocity: 0.5,
+                key: 62,
+            }],
+        });
+        select(&mut app, &[]);
+        app.roll.selection = BTreeSet::from([(ChannelId(1), Ticks(30), 62)]);
+        let send = |app: &mut App, message| {
+            let _ = app.update(Message::Quantize(message));
+        };
+        let swing = |app: &App| app.quantize_form.map(|form| form.swing_tenths);
+        send(&mut app, QuantizeMessage::Open);
+        assert_eq!(swing(&app), Some(500), "straight at first");
+        send(&mut app, QuantizeMessage::Swing(499));
+        assert_eq!(swing(&app), Some(500));
+        send(&mut app, QuantizeMessage::Swing(751));
+        assert_eq!(swing(&app), Some(750));
+        send(&mut app, QuantizeMessage::Swing(TRIPLET_SWING));
+        assert_eq!(swing(&app), Some(667));
+        send(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(16)));
+        send(&mut app, QuantizeMessage::Apply);
+        assert_eq!(lead(&app), [A, (32, 24, 62), B]);
+        send(&mut app, QuantizeMessage::Open);
+        assert_eq!(swing(&app), Some(667), "remembered");
+        send(&mut app, QuantizeMessage::Cancel);
+        let _ = app.update(Message::Undo);
+        assert_eq!(lead(&app), [A, (30, 24, 62), B]);
+    }
+
+    /// A message to the Quantize dialog, through the app.
+    fn send_quantize(app: &mut App, message: QuantizeMessage) {
+        let _ = app.update(Message::Quantize(message));
+    }
+
+    /// The open Quantize dialog's merge line.
+    fn merge_line(app: &App) -> Option<String> {
+        app.quantize_merges().map(|merges| merges.to_string())
+    }
+
+    /// The lead with four more notes on key 62, 12 ticks past each of the first four 1/16
+    /// steps, as the grid draws them (by start, then key).
+    const ORIGINALS: [(i64, i64, u8); 6] =
+        [A, (12, 12, 62), (36, 24, 62), (60, 12, 62), (84, 12, 62), B];
+    /// ORIGINALS quantized to 1/2 (4 · 96 / 2 = 192 ticks, straight, 100 %, starts only): each
+    /// start goes to the nearer of 0 and 192, half way to the later. A and the four 62s go to
+    /// 0, B (at 96, half way) to 192; the four 62s land together and the longest, 36's
+    /// 24 ticks, stays. Six notes become three: 3 of 6 merge.
+    const HALVED: [(i64, i64, u8); 3] = [A, (0, 24, 62), (192, 96, 64)];
+
+    /// p3_roll with ORIGINALS on the lead, nothing selected (the dialog acts on the whole
+    /// channel), and the Quantize dialog open; with the document's bytes before it opened.
+    fn quantize_open() -> (App, Player, String) {
+        use dawsome_engine::edit::Edit;
+        use dawsome_engine::project::Note;
+        let (mut app, player) = p3();
+        let note = |start, length| Note {
+            channel: ChannelId(1),
+            start: Ticks(start),
+            length: Ticks(length),
+            velocity: 0.5,
+            key: 62,
+        };
+        app.commit(Edit::ReplaceNotes {
+            pattern: PatternId(1),
+            remove: vec![],
+            add: vec![note(12, 12), note(36, 24), note(60, 12), note(84, 12)],
+        });
+        select(&mut app, &[]);
+        assert_eq!(lead(&app), ORIGINALS);
+        let before = document(&app);
+        send_quantize(&mut app, QuantizeMessage::Open);
+        (app, player, before)
+    }
+
+    // A 1/2 grid merged most of the notes, which read as deleting them, and 1/32 did not bring
+    // them back. Now the dialog previews: at 1/2 the roll draws HALVED, with the six
+    // originals faint where they are, and the dialog says 3 of 6 merge; at 1/32 (12 ticks)
+    // every original start is on a line already, so the preview is the notes as they were
+    // (worked from the originals, not from the 1/2 preview) and none merge. Neither touches
+    // the document or the undo history.
+    #[test]
+    fn the_quantize_dialog_previews_from_the_notes_as_they_were() {
+        let (mut app, _player, before) = quantize_open();
+        let undo_steps = app.session.history().undo_len();
+        send_quantize(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(2)));
+        assert_eq!(
+            app.piano_roll().drawn(),
+            (HALVED.to_vec(), ORIGINALS.to_vec())
+        );
+        assert_eq!(
+            merge_line(&app).as_deref(),
+            Some("3 of 6 notes land on another note and merge: the longest stays.")
+        );
+        assert_eq!(document(&app), before, "the document stays as it is");
+        assert_eq!(app.session.history().undo_len(), undo_steps);
+        send_quantize(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(32)));
+        assert_eq!(
+            app.piano_roll().drawn(),
+            (ORIGINALS.to_vec(), ORIGINALS.to_vec()),
+            "every note back"
+        );
+        assert_eq!(merge_line(&app).as_deref(), Some("No notes merge."));
+        assert_eq!(document(&app), before);
+        assert_eq!(app.session.history().undo_len(), undo_steps);
+    }
+
+    // Cancel, and Esc, put the dialog away: the roll draws the notes as they are, with no
+    // faint originals, and the document and its undo history are as they were.
+    #[test]
+    fn cancelling_the_quantize_dialog_leaves_the_notes_as_they_were() {
+        let (mut app, _player, before) = quantize_open();
+        let undo_steps = app.session.history().undo_len();
+        send_quantize(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(2)));
+        send_quantize(&mut app, QuantizeMessage::Cancel);
+        assert_eq!(app.quantize_form, None);
+        assert_eq!(app.piano_roll().drawn(), (ORIGINALS.to_vec(), Vec::new()));
+        assert_eq!(merge_line(&app), None);
+        send_quantize(&mut app, QuantizeMessage::Open);
+        send_quantize(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(2)));
+        let _ = app.update(Message::ClearSelection);
+        assert_eq!(app.quantize_form, None, "Esc closes it");
+        assert_eq!(app.piano_roll().drawn(), (ORIGINALS.to_vec(), Vec::new()));
+        assert_eq!(document(&app), before);
+        assert_eq!(app.session.history().undo_len(), undo_steps);
+    }
+
+    // Quantize commits what the preview drew, HALVED, as one undo step; the roll then draws
+    // the document with no faint originals, and one undo gives the bytes from before back.
+    #[test]
+    fn applying_the_quantize_dialog_commits_its_preview_as_one_step() {
+        let (mut app, _player, before) = quantize_open();
+        let undo_steps = app.session.history().undo_len();
+        send_quantize(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(2)));
+        let (previewed, _) = app.piano_roll().drawn();
+        send_quantize(&mut app, QuantizeMessage::Apply);
+        assert_eq!(lead(&app), previewed);
+        assert_eq!(lead(&app), HALVED);
+        assert_eq!(app.piano_roll().drawn(), (HALVED.to_vec(), Vec::new()));
+        assert_eq!(app.session.history().undo_len(), undo_steps + 1);
+        let _ = app.update(Message::Undo);
+        assert_eq!(document(&app), before);
+    }
+
+    // An undo while the dialog is open takes the four 62s back out (one step added them): the
+    // preview and the Apply move only the originals still there, A (on 0 already) and B (96,
+    // half way, to 192), and nothing merges.
+    #[test]
+    fn the_quantize_dialog_moves_only_the_originals_still_there() {
+        let (mut app, _player, _) = quantize_open();
+        send_quantize(&mut app, QuantizeMessage::Grid(QuantizeGrid::Note(2)));
+        let _ = app.update(Message::Undo);
+        assert_eq!(lead(&app), [A, B]);
+        assert_eq!(app.piano_roll().drawn().0, [A, (192, 96, 64)]);
+        assert_eq!(merge_line(&app).as_deref(), Some("No notes merge."));
+        send_quantize(&mut app, QuantizeMessage::Apply);
+        assert_eq!(lead(&app), [A, (192, 96, 64)]);
     }
 
     // The menu's rows through the real overlay: a right press on B opens the notes menu on the

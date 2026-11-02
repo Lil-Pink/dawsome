@@ -1,6 +1,8 @@
 //! Musical time: positions in integer ticks, tempo in integer milli-BPM, and the one function
 //! that turns a tick into a sample. Every time conversion in the engine lives here.
 
+use std::ops::RangeInclusive;
+
 use serde::{Deserialize, Serialize};
 
 /// A position or length in musical time, counted in ticks (`ppq` ticks per beat). The default
@@ -47,6 +49,61 @@ pub fn step_to_ticks(step: u32, ppq: u16) -> Ticks {
 /// The length of `bars` bars, in ticks.
 pub fn bars_to_ticks(bars: u32, ppq: u16) -> Ticks {
     Ticks(i64::from(bars) * i64::from(BEATS_PER_BAR) * i64::from(ppq))
+}
+
+/// A pattern's swing when it has none: each 16th takes half of its 8th-note pair.
+pub const STRAIGHT_SWING: u16 = 500;
+
+/// The swing of a triplet feel, 2:1: the first 16th of a pair takes two thirds of it. Why 667
+/// and not 666 or 670: it alone lands the second 16th on the exact triplet at PPQ 96 (tick 32)
+/// and at PPQ 960 (tick 320).
+pub const TRIPLET_SWING: u16 = 667;
+
+/// The swings a pattern takes, in tenths of a per cent of an 8th-note pair the first 16th of it
+/// takes: 50 % (straight) to 75 % (dotted, 3:1).
+pub const SWING_RANGE: RangeInclusive<u16> = STRAIGHT_SWING..=750;
+
+/// Where the second of a pair of notes `unit` ticks apart plays, from the pair's start, when the
+/// first takes `swing_tenths` tenths of a per cent of the pair: `floor(2 · unit · swing / 1000)`.
+/// `unit` itself at [`STRAIGHT_SWING`].
+pub fn swing_offset(unit: Ticks, swing_tenths: u16) -> Ticks {
+    // A unit is ppq/4 < 2^14 ticks, so the product stays far inside an i64.
+    Ticks((2 * unit.0 * i64::from(swing_tenths)).div_euclid(1000))
+}
+
+/// The tick a note stored at `start` plays on in a pattern swung by `swing_tenths`: a note on
+/// the second 16th of an 8th-note pair (`start mod ppq/2 == ppq/4`) moves to
+/// `start − ppq/4 + swing_offset(ppq/4, swing)`; every other note (on-beats, notes off the step
+/// grid) stays. Why only those: a step sequencer's swing, by long convention, moves the steps,
+/// and no rule says where a hand-placed note between steps would go.
+pub fn swung(start: Ticks, swing_tenths: u16, ppq: u16) -> Ticks {
+    let unit = step_to_ticks(1, ppq);
+    // `checked_rem_euclid` is `None` for a pair of 0 ticks (a PPQ below 4): nothing swings.
+    if start.0.checked_rem_euclid(2 * unit.0) != Some(unit.0) {
+        return start;
+    }
+    let offset = swing_offset(unit, swing_tenths);
+    Ticks(start.0.saturating_sub(unit.0).saturating_add(offset.0))
+}
+
+/// How long a step hit that swing moved late lasts: `2 · unit − swing_offset(unit, swing)`, so
+/// it still ends where the next step starts, as an unmoved step hit (one `unit`) does. Why not
+/// one step: its note-off would then fall after the next step's note-on, and on a plugin or a
+/// MIDI out that note-off of the same key would silence the next hit.
+pub fn swung_step_gate(unit: Ticks, swing_tenths: u16) -> Ticks {
+    Ticks(2 * unit.0 - swing_offset(unit, swing_tenths).0)
+}
+
+/// A pattern note stored at `start`, `length` ticks long (0 for a step hit, which lasts one
+/// step), as it plays in a pattern swung by `swing_tenths`: its tick ([`swung`]) and its length,
+/// its own unless it is a step hit swing moved, which lasts [`swung_step_gate`]. The one rule
+/// playback, the song's notes and the MIDI exports swing a note by.
+pub fn swung_note(start: Ticks, length: Ticks, swing_tenths: u16, ppq: u16) -> (Ticks, Ticks) {
+    let tick = swung(start, swing_tenths, ppq);
+    if length.0 > 0 || tick == start {
+        return (tick, length);
+    }
+    (tick, swung_step_gate(step_to_ticks(1, ppq), swing_tenths))
 }
 
 /// The absolute sample where `tick` falls:
@@ -302,6 +359,131 @@ mod tests {
         // A 2-bar pattern holds 32 steps: step 32 is exactly where it ends.
         assert_eq!(step_to_ticks(32, PPQ), bars_to_ticks(2, PPQ));
         assert_eq!(bars_to_ticks(2, PPQ), Ticks(768));
+    }
+
+    // Known answers worked by hand (the swing design's table, checked with Python's integers):
+    // a note at t with t mod 2U = U plays at t − U + floor(2U·S/1000), U = ppq/4; any other
+    // note stays.
+    #[test]
+    fn the_second_sixteenth_of_each_pair_plays_late() {
+        let at = |start, swing, ppq| swung(Ticks(start), swing, ppq).0;
+        let ppq_96 = [
+            (500, 24, 24),
+            (521, 24, 25),
+            (520, 24, 24),
+            (666, 24, 31),
+            (667, 24, 32),
+            (750, 24, 36),
+            (750, 72, 84),
+            (667, 0, 0),
+            (667, 30, 30),
+            (667, 48, 48),
+        ];
+        for (swing, start, want) in ppq_96 {
+            assert_eq!(
+                at(start, swing, PPQ),
+                want,
+                "{swing} at tick {start}, PPQ 96"
+            );
+        }
+        for (swing, start, want) in [
+            (667, 240, 320),
+            (750, 240, 360),
+            (505, 240, 242),
+            (667, 250, 250),
+        ] {
+            assert_eq!(
+                at(start, swing, 960),
+                want,
+                "{swing} at tick {start}, PPQ 960"
+            );
+        }
+        // A PPQ too small for a step (never a valid project's) swings nothing.
+        assert_eq!(at(1, 750, 2), 1);
+        assert_eq!(at(0, 750, 0), 0);
+    }
+
+    // 2:1 exactly at PPQ 96 and 960: the triplet's second 16th on 32 of 48 and 320 of 480 ticks.
+    // Straight, the offset is the unit itself. At PPQ 96 the ear hears 13 positions over the
+    // range: delay d first sounds at S = ceil(1000·(24 + d)/48).
+    #[test]
+    fn the_swing_offset_has_thirteen_steps_at_ppq_96() {
+        assert_eq!(swing_offset(Ticks(24), TRIPLET_SWING), Ticks(32));
+        assert_eq!(swing_offset(Ticks(240), TRIPLET_SWING), Ticks(320));
+        assert_eq!(swing_offset(Ticks(24), STRAIGHT_SWING), Ticks(24));
+        let firsts = [
+            500, 521, 542, 563, 584, 605, 625, 646, 667, 688, 709, 730, 750,
+        ];
+        for (delay, first) in (0..).zip(firsts) {
+            assert_eq!(swing_offset(Ticks(24), first), Ticks(24 + delay), "{first}");
+            if first > *SWING_RANGE.start() {
+                assert_eq!(
+                    swing_offset(Ticks(24), first - 1),
+                    Ticks(23 + delay),
+                    "{first}"
+                );
+            }
+        }
+    }
+
+    // A swung step hit lasts U − d: 16 at 66.7 % and 12 at 75 % (PPQ 96), one step straight; so
+    // it ends where the next pair starts, for every swing and PPQ.
+    #[test]
+    fn a_swung_step_hit_ends_on_the_next_step() {
+        let gate = |unit, swing| swung_step_gate(Ticks(unit), swing).0;
+        assert_eq!([gate(24, 500), gate(24, 667), gate(24, 750)], [24, 16, 12]);
+        assert_eq!(
+            [gate(240, 500), gate(240, 667), gate(240, 750)],
+            [240, 160, 120]
+        );
+        for ppq in [4, 8, 96, 960] {
+            let unit = step_to_ticks(1, ppq);
+            let start = Ticks(3 * 2 * unit.0 + unit.0);
+            for swing in SWING_RANGE {
+                let (tick, length) = swung_note(start, Ticks(0), swing, ppq);
+                if tick == start {
+                    assert_eq!(length, Ticks(0), "unmoved: PPQ {ppq}, {swing}");
+                } else {
+                    assert_eq!(tick.0 + length.0, 8 * unit.0, "PPQ {ppq}, {swing}");
+                }
+            }
+        }
+    }
+
+    // A note keeps its own length (its end moves with its start); only a step hit swing moved is
+    // given one, and an unmoved one stays a step hit.
+    #[test]
+    fn a_swung_note_keeps_its_length() {
+        let note = |start, length, swing| {
+            let (tick, length) = swung_note(Ticks(start), Ticks(length), swing, PPQ);
+            (tick.0, length.0)
+        };
+        assert_eq!(note(24, 0, 667), (32, 16));
+        assert_eq!(note(24, 12, 667), (32, 12));
+        assert_eq!(note(120, 48, 750), (132, 48));
+        assert_eq!(note(0, 0, 667), (0, 0));
+        assert_eq!(note(30, 0, 750), (30, 0));
+        assert_eq!(note(24, 0, 520), (24, 0), "a swing too small to move it");
+        assert_eq!(note(24, 0, STRAIGHT_SWING), (24, 0));
+    }
+
+    // Why a swung note never leaves its pattern: a moved start pP + U is below the length (a
+    // whole number of bars, so of pairs), and the offset is below a pair, so pP + offset is too.
+    #[test]
+    fn every_swung_note_stays_inside_its_pattern() {
+        for ppq in [4, 8, 96, 960] {
+            let length = bars_to_ticks(1, ppq);
+            for swing in SWING_RANGE {
+                for start in 0..length.0 {
+                    let tick = swung(Ticks(start), swing, ppq);
+                    assert!(
+                        tick.0 >= start && tick < length,
+                        "PPQ {ppq}, {swing}: {start} -> {}",
+                        tick.0
+                    );
+                }
+            }
+        }
     }
 
     #[test]

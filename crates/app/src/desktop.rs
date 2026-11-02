@@ -153,7 +153,7 @@ pub enum WindowSystem {
 /// parent: its settings have none, winit's `with_parent_window` is X11's and Windows', and the
 /// xdg_toplevel, the one handle a parent is set on, never leaves iced's windows), so the
 /// instrument, Settings, Help and parameter windows went under the main window on a click
-/// (found 2026-10-27 on KDE Plasma's Wayland session). On X11 the pop-out windows keep
+/// (seen on KDE Plasma's Wayland session). On X11 the pop-out windows keep
 /// `_NET_WM_STATE_ABOVE` while the app has the keyboard, as the plugin windows (X11 always)
 /// did, and all of them share one server. Measured on that desktop: on Wayland the instrument
 /// window went under the main window once it was activated; on X11 it stayed above (KWin's
@@ -245,7 +245,7 @@ fn decode(png: &[u8]) -> Result<(Vec<u8>, u32, u32), IconError> {
 mod tests {
     use super::*;
 
-    // Where the windows open, the table worked out from the rule (2026-10-27):
+    // Where the windows open, the table worked out from the rule:
     // a desktop run under a Wayland session with XWayland opens on X11, a scripted one as the
     // toolkit picks; an X11 session or a Wayland one without X11 as the toolkit picks; the
     // variable's x11 (any case, spaces round it) on X11 where there is an X11 display, scripted

@@ -3,8 +3,7 @@
 # for a warm-up and then a sampling window, and writes <out-dir>/results.json and results.md.
 # Per scenario: CPU % of one core (process total, UI thread, audio callback thread, the rest),
 # peak RSS, the process's GPU SM % and VRAM (nvidia-smi pmon), context switches per second, and
-# the worst audio callback (the app's --stats). Method: scripts/measure.py; numbers and host
-# in docs/performance.md.
+# the worst audio callback (the app's --stats). Method and tables: scripts/measure.py.
 #
 # Usage: scripts/measure.sh [out-dir] [scenario..]
 #   (out-dir default: <target dir>/measure; scenarios default: every scenario)

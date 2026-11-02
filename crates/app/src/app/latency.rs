@@ -169,7 +169,7 @@ impl App {
             return;
         }
         // An output chosen in Settings plays from the next Play, and this is one: the clicks
-        // play through the device the figure is kept under (found 2026-10-26). Before the
+        // play through the device the figure is kept under. Before the
         // feeds are taken: an output opened anew opens the input channels' devices anew.
         self.apply_output_choice();
         let (output_name, input_name) = self.line_in_devices();
@@ -274,7 +274,7 @@ impl App {
 
     /// Stops the measurement's recordings: the song stops, the document plays again, the
     /// metronome comes back as the toolbar shows it now (switched while the clicks played, it
-    /// sent the player its new state already; found 2026-10-26), the feeds go back where
+    /// sent the player its new state already), the feeds go back where
     /// they came from; then, when `search`, a
     /// thread looks for the burst, else the files go.
     fn end_latency_recording(&mut self, search: bool) {

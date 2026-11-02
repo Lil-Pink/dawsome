@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dawsome_engine::compile::{ClipHint, ClipSound, Compiler, EditedSound, Sounds};
-use dawsome_engine::dsp::edits::{apply, zero_crossing};
+use dawsome_engine::dsp::edits::{apply, zero_crossing_in};
 use dawsome_engine::dsp::sampler::SampleBuffer;
 use dawsome_engine::edit::{self, sound_edits, Edit, EditError, History, Touched};
 use dawsome_engine::plan::{PlanUpdate, PlayMode};
@@ -179,8 +179,9 @@ fn p30_an_edge_snaps_to_the_crossing_the_generator_finds() {
         };
         let press = case["press"].as_u64().expect("press");
         let reach = case["reach"].as_u64().expect("reach");
+        let sides = usize::from(sound.channels());
         assert_eq!(
-            zero_crossing(&sound, press, reach),
+            zero_crossing_in(sound.samples(), sides, press, reach),
             case["snap"].as_u64().expect("snap"),
             "{} pressed at {press}, reach {reach}",
             case["sound"]
@@ -711,7 +712,14 @@ fn p30_every_project_without_edits_keeps_its_bytes_and_version() {
                 .strip_prefix(r#"{"format_version":"#)
                 .and_then(|rest| rest.split_once(','))
                 .expect("a version first");
-            let file_rest = text
+            // p31_straight writes the default swing (500), which a save leaves out: it saves as
+            // p31_plain's bytes, the same pattern without the field (gen_p31_expected.py's (a)).
+            let want = if name == "p31_straight.json" {
+                fs::read_to_string(path.with_file_name("p31_plain.json")).expect("p31_plain.json")
+            } else {
+                text
+            };
+            let file_rest = want
                 .trim_end_matches('\n')
                 .split_once(',')
                 .expect("fields")

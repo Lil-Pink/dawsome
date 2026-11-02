@@ -1401,7 +1401,7 @@ impl Player {
                 // A jump (Play, Stop, Seek) leaves nothing ringing from the old position: no
                 // voice, no effect tail, no ramp half way, no automated parameter held. Stop ends
                 // the live notes too, so the jump's reset strikes no held key again: a key whose
-                // release never arrived (2026-10-28: a plugin note that came back on every Play)
+                // release never arrived (a plugin note that came back on every Play)
                 // stops for good at Stop, as every note does.
                 other => {
                     if matches!(other, Control::Stop) {

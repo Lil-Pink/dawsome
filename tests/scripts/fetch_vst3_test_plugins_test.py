@@ -201,6 +201,20 @@ class Fetch(unittest.TestCase):
         self.assertEqual(release.fetch("--if-fetched", "dexed", "dpf")[:2], (0, dexed))
         self.assertEqual(release.fetch("--offline", "dexed")[:2], (0, dexed))
 
+    # No NAME means every plugin (Python 3.11's argparse refused the empty list once); a NAME
+    # the script does not take is refused, saying which.
+    def test_no_name_is_every_plugin_and_an_unknown_one_is_refused(self):
+        with tempfile.TemporaryDirectory() as empty:
+            lock = os.path.join(ROOT, "locks", "vst3-test.lock")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                status = plugins.main(["fetch", "--lock", lock, "--dir", empty, "--if-fetched"])
+            self.assertEqual((status, out.getvalue()), (0, ""), err.getvalue())
+            self.assertEqual(os.listdir(empty), [])
+        status, _, err = Release(self).fetch("nosuch")
+        self.assertEqual(status, 2)
+        self.assertIn("'nosuch'", err)
+
     # The real lock pins an asset, with a url of its own, for every plugin the script takes.
     def test_the_lock_pins_every_plugin_taken(self):
         lock = plugins.surge.Lock(os.path.join(ROOT, "locks", "vst3-test.lock"))

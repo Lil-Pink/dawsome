@@ -35,7 +35,15 @@ fn every_current_format_fixture_saves_back_to_its_own_bytes() {
         }
         let project = Project::load_json(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
         let saved = project.to_json().expect("serializes");
-        assert_eq!(saved, text.trim_end_matches('\n'), "{name}");
+        // p31_straight writes the default swing (500), which a save leaves out, as the format
+        // writes every default nowhere (gen_p31_expected.py's case (a)): it saves as
+        // p31_plain's bytes, the same pattern without the field.
+        let want = if name == "p31_straight.json" {
+            fs::read_to_string(path.with_file_name("p31_plain.json")).expect("p31_plain.json")
+        } else {
+            text
+        };
+        assert_eq!(saved, want.trim_end_matches('\n'), "{name}");
         checked.push(name);
     }
     for required in [

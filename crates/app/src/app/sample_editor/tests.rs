@@ -424,7 +424,7 @@ fn every_op_through_the_window_is_one_undo_step_to_the_generators_document() {
             SoundOp::Gain { centi_db, .. } => {
                 send(&mut app, M::GainPressed);
                 send(&mut app, M::GainMoved(300.0));
-                send(&mut app, M::GainMoved(300.0 - centi_db as f32 / 10.0));
+                send(&mut app, M::GainMoved(300.0 + centi_db as f32 / 10.0));
                 assert_eq!(
                     app.sample_editor.as_ref().map(|open| open.gain),
                     Some(centi_db)
@@ -871,7 +871,7 @@ fn long_frame(k: u64, period: u64) -> [f32; 2] {
 // 230,400,000 bytes of frames and 1,800,000 of peaks (the generator's figures), and what
 // opening it left on the heap is that and under 64 KiB more. One op more (Gain over the whole
 // sound) is applied where the frames are: it holds the same, and the op takes nothing more from
-// the heap. The most opening it held on the way is printed, for docs/performance.md.
+// the heap. The most opening it held on the way is printed, for the performance figures.
 /// gen_p30's ten-minute sound ("long") written into the temp folder `name`, beside a copy of
 /// p30_long.json with its clip taken out (the session leaves the sound to the editor: a clip
 /// would make it for playback), and an app on that project: the app, its player, the folder
@@ -1556,12 +1556,32 @@ fn a_quit_while_a_sound_saves_waits_for_the_write() {
 /// Sets the time `path` was last written (a folder's too).
 fn set_written(path: &Path, time: std::time::SystemTime) {
     let file = if path.is_dir() {
-        fs::File::open(path)
+        open_folder(path)
     } else {
         fs::File::options().write(true).open(path)
     };
     file.and_then(|file| file.set_modified(time))
         .expect("dated");
+}
+
+/// A folder opened so its times can be set.
+#[cfg(not(windows))]
+fn open_folder(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+/// A folder opened so its times can be set: Windows opens a folder only with backup semantics,
+/// and sets a time only through a handle that may write attributes (a plain open is refused
+/// with "Access is denied").
+#[cfg(windows)]
+fn open_folder(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    fs::File::options()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
 }
 
 /// The names in `dir`, sorted.

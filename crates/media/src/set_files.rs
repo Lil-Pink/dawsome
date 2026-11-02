@@ -8,12 +8,12 @@
 //! Why: a set comes from anywhere (a download, a folder the user added) and its text decides
 //! which files are opened. Unchecked, a set read files elsewhere on the machine into the report
 //! the app shows, read `/dev/zero` until memory ran out, and waited for ever on a named pipe,
-//! on the UI thread (found 2026-10-22). Why a folder added is
+//! on the UI thread. Why a folder added is
 //! the limit for the sets in it: libraries are commonly laid out `Instruments/x.sfz` beside
 //! `Samples/`, their sets reaching `../Samples/`, and the user chose that whole folder to be
 //! read by adding it. Why not any folder added, and not without a bound: with the home folder
 //! or `/` added, a set downloaded anywhere below read the user's own files (`~/.config/...`)
-//! into its report (found 2026-10-22).
+//! into its report.
 
 use std::fs::{self, File};
 use std::io::Read;
@@ -290,6 +290,8 @@ mod tests {
             Err(NOT_A_FILE.to_owned()),
             "a folder"
         );
+        // Unix's device; Windows has no such path.
+        #[cfg(unix)]
         assert_eq!(
             read_text(Path::new("/dev/zero")),
             Err(NOT_A_FILE.to_owned()),

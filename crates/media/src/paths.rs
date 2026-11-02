@@ -147,6 +147,7 @@ pub fn sound_file_from(dir: &Path, stored: &Path, roots: &ShippedRoots) -> PathB
 }
 
 /// [`sound_file_from`] with `shipped` as the user's folder and no installed sets.
+#[cfg(test)]
 pub fn sound_file_in(dir: &Path, stored: &Path, shipped: Option<&Path>) -> PathBuf {
     let roots = ShippedRoots {
         user: shipped.map(Path::to_path_buf),
@@ -157,8 +158,7 @@ pub fn sound_file_in(dir: &Path, stored: &Path, shipped: Option<&Path>) -> PathB
 
 /// Whether `part` is names alone: no `..`, `.`, root or drive. A shipped reference names a file
 /// inside the shipped folder, so one written otherwise names nothing that can be read (before,
-/// `dawsome:../x` and `dawsome:/abs/x` read files outside it: found
-/// 2026-10-22).
+/// `dawsome:../x` and `dawsome:/abs/x` read files outside it).
 fn plain(part: &str) -> bool {
     !part.is_empty()
         && Path::new(part)
@@ -174,8 +174,8 @@ pub fn sound_file(dir: &Path, stored: &Path) -> PathBuf {
 /// The shipped reference naming `file` when it lies inside `shipped`: [`SHIPPED_PREFIX`] and
 /// its path from there, written with `/`.
 pub fn shipped_reference(file: &Path, shipped: &Path) -> Option<PathBuf> {
-    let file = resolved(file);
-    let inside = file.strip_prefix(resolved(shipped)).ok()?;
+    let file = resolved_existing(file);
+    let inside = file.strip_prefix(resolved_existing(shipped)).ok()?;
     let parts = inside
         .components()
         .map(|part| match part {
@@ -210,6 +210,7 @@ pub fn rebase_samples(project: &mut Project, from: &Path, to: &Path) {
 }
 
 /// [`rebase_samples`] with `shipped` as the user's folder and no installed sets.
+#[cfg(test)]
 pub fn rebase_samples_in(project: &mut Project, from: &Path, to: &Path, shipped: Option<&Path>) {
     let roots = ShippedRoots {
         user: shipped.map(Path::to_path_buf),
@@ -245,6 +246,29 @@ pub fn rebase_samples_from(project: &mut Project, from: &Path, to: &Path, roots:
 /// `path` with links and `..` resolved when it exists, else made absolute as written.
 fn resolved(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| absolute(path))
+}
+
+/// `path` with links and `..` resolved in as much of it as exists, the rest as written.
+///
+/// Why: a file not written yet must compare alike with the folder it goes in, which resolves
+/// (a folder reached through a link; on Windows a short name such as RUNNER~1 against its long
+/// one), or its reference is lost.
+fn resolved_existing(path: &Path) -> PathBuf {
+    let path = absolute(path);
+    let mut existing = path.as_path();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(found) = dunce::canonicalize(existing) {
+            return rest.iter().rev().fold(found, |full, part| full.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                existing = parent;
+            }
+            _ => return path.clone(),
+        }
+    }
 }
 
 fn absolute(path: &Path) -> PathBuf {
@@ -429,6 +453,26 @@ mod tests {
                 &roots
             ),
             installed.join("piano/piano.sfz")
+        );
+    }
+
+    // A file not written yet, in the user's folder reached through a link, is named by its
+    // reference all the same: the part of its path that exists is resolved as the folder is.
+    // (Windows' form of it: the temp folder's short name, RUNNER~1 on CI, against its long one.)
+    #[cfg(unix)]
+    #[test]
+    fn a_file_not_there_yet_under_a_linked_folder_is_named_by_its_reference() {
+        let root = temp("linked");
+        let real = root.join("real");
+        fs::create_dir_all(real.join("starter-kit")).expect("dirs");
+        std::os::unix::fs::symlink(&real, root.join("link")).expect("link");
+        let roots = ShippedRoots {
+            user: Some(root.join("link")),
+            installed: None,
+        };
+        assert_eq!(
+            roots.reference(&root.join("link/starter-kit/Kick 808.wav")),
+            Some(PathBuf::from("dawsome:starter-kit/Kick 808.wav"))
         );
     }
 

@@ -836,7 +836,7 @@ fn port_address(name: &str) -> Option<&str> {
 /// from the text of `/proc/asound/seq/clients` ("Connected From: 14:0, 28:0" under each of our
 /// ports). Why: a device unplugged and plugged back between two listings comes back under the
 /// same name, so the connection is kept, while the kernel dropped its subscription when the
-/// device went; the connection then delivers nothing for good (a real controller, 2026-10-24).
+/// device went; the connection then delivers nothing for good (seen with a real controller).
 fn alive_sources(clients: &str, client: &str) -> std::collections::BTreeSet<String> {
     subscribed(clients, client, "Connected From:")
 }
@@ -844,7 +844,7 @@ fn alive_sources(clients: &str, client: &str) -> std::collections::BTreeSet<Stri
 /// The device addresses the ports of the sequencer clients named `client` send to ("Connecting
 /// To: 28:0" under each of our ports, a time stamp's "[r:0]" left off), read as
 /// [`alive_sources`] reads the other way: the same unplug and plug back leaves a MIDI out's
-/// connection sending to nothing, with no error (review 2026-10-25).
+/// connection sending to nothing, with no error.
 fn alive_destinations(clients: &str, client: &str) -> std::collections::BTreeSet<String> {
     subscribed(clients, client, "Connecting To:")
 }
@@ -974,7 +974,7 @@ mod tests {
 
     use super::*;
 
-    // A real controller unplugged and plugged back between two listings (2026-10-24): the
+    // A real controller unplugged and plugged back between two listings: the
     // kernel's client list showed client 129 with no "Connected From" while the connection
     // object lived on. This is that list, cut to the lines that matter.
     const CLIENTS: &str = "Client info\n  cur  clients : 7\n\nClient   0 : \"System\" [Kernel Legacy]\n  Port   0 : \"Timer\" (Rwe-) [In/Out]\n    Connecting To: 142:0\nClient  14 : \"Midi Through\" [Kernel Legacy]\n  Port   0 : \"Midi Through Port-0\" (RWe-) [In/Out]\n    Connecting To: 128:0\nClient  28 : \"Oriole\" [Kernel Legacy]\n  Port   0 : \"Oriole MIDI 1\" (RWeX) [In/Out]\nClient 128 : \"Dawsome\" [User Legacy]\n  Port   0 : \"Dawsome\" (-We-) [Out]\n    Connected From: 14:0\n  Output pool :\n    Pool size          : 500\nClient 129 : \"Dawsome\" [User Legacy]\n  Port   0 : \"Dawsome\" (-We-) [Out]\n  Input pool :\n    Peak cells in use  : 1\nClient 142 : \"PipeWire-System\" [User Legacy]\n  Port   0 : \"input\" (rwe-) [In/Out]\n    Connected From: 0:1, 0:0\n";
@@ -1001,8 +1001,8 @@ mod tests {
         assert!(alive_sources(CLIENTS, "dawsome-test").is_empty());
     }
 
-    // A MIDI out's connection as the kernel listed it (2026-10-25, a test's own virtual port as
-    // the device): under our client "Connecting To:" with the subscription's time stamp. Once
+    // A MIDI out's connection as the kernel listed it (a test's own virtual port as the
+    // device): under our client "Connecting To:" with the subscription's time stamp. Once
     // the device goes, the line goes, and the connection's port name is dead.
     #[test]
     fn the_clients_list_names_the_devices_this_client_still_sends_to() {

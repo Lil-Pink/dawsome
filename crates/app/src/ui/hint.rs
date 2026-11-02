@@ -1,6 +1,6 @@
 //! The hint bar's words: what the cursor is over ([`Hover`], which each canvas works out with
 //! its own hit test and each toolbar widget says on entering), its value, and what pressing,
-//! dragging or right-clicking it does: "Volume · 80% · drag up or down; right-click to automate
+//! dragging or right-clicking it does: "Volume · 80% · drag left or right; right-click to automate
 //! or link a controller". One table, [`words`], so every control's hint is in one place and a
 //! test walks every hit each panel's hit test gives.
 
@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use dawsome_engine::dsp::laws::fader_gain;
 use dawsome_engine::project::{ChannelKind, ClipId, InsertId, PatternId, ProcessorOwner, Project};
-use dawsome_engine::time::MilliBpm;
+use dawsome_engine::time::{self, MilliBpm};
 
 use crate::app::SelectionLink;
 use crate::keys::{Action, Keys};
@@ -21,6 +21,7 @@ use crate::ui::mixer_layout::Hit as MixerHit;
 use crate::ui::mixer_state::{fader_text, pan_text, percent_text};
 use crate::ui::panels::Panel;
 use crate::ui::playlist_layout::{ClipPart, HeaderHit as TrackHit, RulerBand};
+use crate::ui::rack::swing_text;
 use crate::ui::rack_rows::{RackRow, RackRows};
 use crate::ui::sample_editor::{EditorOp, EditorPart};
 use crate::ui::settings_layout::Hit as SettingHit;
@@ -104,6 +105,8 @@ impl Hover {
 pub enum QuantizePart {
     Grid,
     Strength,
+    /// The swing's slider, readout and Triplet button.
+    Swing,
     Ends,
     Apply,
 }
@@ -111,9 +114,10 @@ pub enum QuantizePart {
 impl QuantizePart {
     /// Every control the dialog has, for the hint table's test.
     #[cfg(test)]
-    pub const ALL: [QuantizePart; 4] = [
+    pub const ALL: [QuantizePart; 5] = [
         QuantizePart::Grid,
         QuantizePart::Strength,
+        QuantizePart::Swing,
         QuantizePart::Ends,
         QuantizePart::Apply,
     ];
@@ -746,6 +750,12 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
         Hover::RackHeader(HeaderHit::BarsUp) => {
             three("Bars", bars(context), "lengthens the pattern by a bar")
         }
+        Hover::RackHeader(HeaderHit::Swing) => three(
+            "Swing",
+            swing(context),
+            "plays every second 16th of this pattern late; drag or wheel, Shift for 0.1 %, \
+             double-click for straight",
+        ),
         Hover::RackHeader(HeaderHit::AddSampler) | Hover::RackAdd => three(
             "+ Instrument\u{2026}",
             None,
@@ -812,12 +822,12 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
                 RackPart::Pan => three(
                     "Pan",
                     Some(pan_text(channel.pan)),
-                    "drag up or down; right-click to automate or link a controller",
+                    "drag left or right; right-click to automate or link a controller",
                 ),
                 RackPart::Volume => three(
                     "Volume",
                     Some(percent_text(channel.volume)),
-                    "drag up or down; right-click to automate or link a controller",
+                    "drag left or right; right-click to automate or link a controller",
                 ),
                 RackPart::Step(step) => {
                     let lit = StepGrid::new(project, context.pattern).is_lit(id, *step);
@@ -917,6 +927,12 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
                 "Strength",
                 None,
                 "how far toward the grid: 100 % all the way, 50 % half way",
+            ),
+            QuantizePart::Swing => three(
+                "Swing",
+                None,
+                "plays every second line of the grid late: 50 % is straight, 66.7 % a triplet \
+                 feel, 75 % dotted",
             ),
             QuantizePart::Ends => three("Moves", None, "the notes' starts only, or their ends too"),
             QuantizePart::Apply => three(
@@ -1133,7 +1149,7 @@ fn editor_parts(part: EditorPart, keys: &Keys) -> [Option<String>; 3] {
         }
         EditorPart::Gain => two(
             "Gain",
-            format!("drag up (louder) or down (quieter), let go to apply; {whole}"),
+            format!("drag right (louder) or left (quieter), let go to apply; {whole}"),
         ),
         EditorPart::Undo => two(
             "Undo",
@@ -1169,12 +1185,13 @@ fn sound_parts(part: SoundPart) -> [Option<String>; 3] {
         SoundPart::Key(key) => three(key_name(key), "click plays it; lower on the key is louder"),
         SoundPart::Control(Control::BendRange) => three(
             Control::BendRange.label().to_owned(),
-            "how far a MIDI keyboard's pitch-bend wheel bends live notes, up and down; drag up or \
-             down; double-click resets (\u{b1}2 st)",
+            "how far a MIDI keyboard's pitch-bend wheel bends live notes, up and down; drag left \
+             or right; double-click resets (\u{b1}2 st)",
         ),
         SoundPart::Control(control) => three(
             control.label().to_owned(),
-            "drag up or down (Shift: fine); double-click resets; one undo step a drag",
+            "drag a knob left or right, a fader up or down (Shift: fine); double-click resets; \
+             one undo step a drag",
         ),
         SoundPart::Flag(Flag::Reverse) => three("Reverse".to_owned(), "plays the sound backwards"),
         SoundPart::Flag(Flag::Filter) => three(
@@ -1246,6 +1263,21 @@ fn bars(context: &Context) -> Option<String> {
     Some(pattern.length_bars.to_string())
 }
 
+/// The selected pattern's swing and how late it plays the second 16ths, in ticks of the
+/// project's PPQ: "66.7% · second 16ths 8 ticks late", or "· straight" while the delay rounds
+/// down to none (50.0 to 52.0 % at PPQ 96).
+fn swing(context: &Context) -> Option<String> {
+    let pattern = context.project.patterns.get(&context.pattern?)?;
+    let unit = time::step_to_ticks(1, context.project.ppq);
+    let late = time::swing_offset(unit, pattern.swing_tenths).0 - unit.0;
+    let heard = match late {
+        0 => "straight".to_owned(),
+        1 => "second 16ths 1 tick late".to_owned(),
+        late => format!("second 16ths {late} ticks late"),
+    };
+    Some(format!("{}{DOT}{heard}", swing_text(pattern.swing_tenths)))
+}
+
 fn tempo_text(tempo: MilliBpm) -> String {
     format!("{}.{:03} BPM", tempo.0 / 1000, tempo.0 % 1000)
 }
@@ -1307,7 +1339,7 @@ fn tool_parts(tool: Tool, context: &Context) -> [Option<String>; 3] {
         Tool::Tempo => three(
             "Tempo",
             Some(tempo_text(context.project.tempo)),
-            "drag up or down, or scroll; Shift for 0.001 steps",
+            "drag left or right, or scroll; Shift for 0.001 steps",
         ),
         Tool::PreviousPattern => three("Previous pattern", None, "shows the pattern before"),
         Tool::PatternName => [
@@ -2026,13 +2058,13 @@ mod tests {
             "mute, name, pan, volume, step and add were all found"
         );
         let mut header = BTreeSet::new();
-        for at in sweep(Size::new(400.0, layout::RACK_HEADER_HEIGHT)) {
+        for at in sweep(Size::new(460.0, layout::RACK_HEADER_HEIGHT)) {
             if let Some(hit) = layout::header_hit_test(at) {
                 header.insert(format!("{hit:?}"));
                 hinted(&Hover::RackHeader(hit), &context);
             }
         }
-        assert_eq!(header.len(), 3);
+        assert_eq!(header.len(), 4, "\"−\", \"+\", add and swing: {header:?}");
         // The piano roll: the key column, notes (bodies and edges), empty grid, the stems.
         let view = piano_layout::View {
             top: 69,
@@ -2331,6 +2363,38 @@ mod tests {
         }
     }
 
+    // Swing (spec swing.md §2.3 and §5): at PPQ 96 a 16th is 24 ticks and the second 16th of a
+    // pair plays floor(48·S/1000) − 24 ticks late: 8 at 66.7 %, 12 at 75 %, 1 at 52.1 %, none
+    // at 52.0 % or straight. Without a pattern the hint has no value.
+    #[test]
+    fn the_swing_hint_says_how_late_the_second_16ths_play() {
+        let mut f1 = project("p3_roll.json");
+        assert_eq!(f1.ppq, 96);
+        let hover = Hover::RackHeader(HeaderHit::Swing);
+        let does = "plays every second 16th of this pattern late; drag or wheel, Shift for \
+                    0.1 %, double-click for straight";
+        let pattern = f1.patterns.keys().next().copied().expect("a pattern");
+        for (swing, value) in [
+            (500, "50.0% \u{b7} straight"),
+            (520, "52.0% \u{b7} straight"),
+            (521, "52.1% \u{b7} second 16ths 1 tick late"),
+            (667, "66.7% \u{b7} second 16ths 8 ticks late"),
+            (750, "75.0% \u{b7} second 16ths 12 ticks late"),
+        ] {
+            f1.patterns
+                .get_mut(&pattern)
+                .expect("the pattern")
+                .swing_tenths = swing;
+            assert_eq!(
+                words(&hover, &context(&f1)),
+                format!("Swing \u{b7} {value} \u{b7} {does}")
+            );
+        }
+        let mut none = context(&f1);
+        none.pattern = None;
+        assert_eq!(words(&hover, &none), format!("Swing \u{b7} {does}"));
+    }
+
     // Known answers, written by hand: a value with its unit between the name and the gestures.
     #[test]
     fn a_hint_names_the_control_its_value_and_its_gestures() {
@@ -2338,11 +2402,11 @@ mod tests {
         let context = context(&f1);
         assert_eq!(
             words(&Hover::Rack { row: 0, part: RackPart::Volume }, &context),
-            "Volume \u{b7} 100% \u{b7} drag up or down; right-click to automate or link a controller"
+            "Volume \u{b7} 100% \u{b7} drag left or right; right-click to automate or link a controller"
         );
         assert_eq!(
             words(&Hover::Tool(Tool::Tempo), &context),
-            "Tempo \u{b7} 120.000 BPM \u{b7} drag up or down, or scroll; Shift for 0.001 steps"
+            "Tempo \u{b7} 120.000 BPM \u{b7} drag left or right, or scroll; Shift for 0.001 steps"
         );
         assert_eq!(
             words(&Hover::Roll(RollPart::Keys { key: 60 }), &context),

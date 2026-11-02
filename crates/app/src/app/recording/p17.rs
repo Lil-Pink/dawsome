@@ -109,7 +109,12 @@ fn notes_json(app: &App, pattern: PatternId) -> serde_json::Value {
 
 /// One undo gives `before` back byte for byte, and its redo `after`.
 fn one_undo_step(app: &mut App, before: &str, after: &str) {
-    assert_eq!(app.session.history().undo_len(), 1, "one undo step");
+    one_more_undo_step(app, 0, before, after);
+}
+
+/// As [`one_undo_step`], with `steps` undo steps there at `before` already (a mode switch's).
+fn one_more_undo_step(app: &mut App, steps: usize, before: &str, after: &str) {
+    assert_eq!(app.session.history().undo_len(), steps + 1, "one undo step");
     let _ = app.update(Message::Undo);
     assert_eq!(document(app), before, "undone");
     let _ = app.update(Message::Redo);
@@ -201,31 +206,31 @@ fn song_take(
         Some(PatternId(2)),
         "the pattern box shows the take"
     );
+    let clips = app.session.project().playlist.clips.clone();
     let mut bars = Vec::new();
     for call in 0..calls {
         play_call(&mut app, &mut player, &device, script, call, CALL);
         let project = app.session.project();
         let held = project.patterns.get(&PatternId(2)).map(|p| p.length_bars);
-        if let (Some(held), Some(clip)) = (held, project.playlist.clips.get(&ClipId(2))) {
-            assert_eq!(
-                clip.length,
-                Ticks(i64::from(held) * 384),
-                "the clip as the pattern"
-            );
-        }
+        assert_eq!(project.playlist.clips, clips, "no clip while the take runs");
         bars.push(held.unwrap_or(0));
     }
     let _ = app.update(Message::Stop);
     assert!(!app.recording.taking_notes());
+    assert_eq!(
+        app.session.project().playlist.clips,
+        clips,
+        "no clip at Stop: the user places the take"
+    );
     (app, before, bars)
 }
 
 // Known answers (2) and (5): a take of notes in song mode from tick 384, three notes over 5.5
-// bars and one held over the stop (it ends at the stop's tick, 2497). Pattern "Kick take 1" and
-// its clip on track 2 (track 1 is taken over the take's first bar) grow by whole bars as the
-// playhead goes: after the checkpoint calls 1, 1, 2, 3, 4, 6 bars; at the stop 6 bars, the clip
-// 2304 ticks from 384, the song ending at 2688. One undo step gives the document back, its redo
-// the take again.
+// bars and one held over the stop (it ends at the stop's tick, 2497). Pattern "Kick take 1"
+// starts one bar long and grows by whole bars as the playhead goes: after the checkpoint calls 1,
+// 1, 2, 3, 4, 6 bars; at the stop 6 bars. No clip is placed (the user places the take), so
+// the song still ends at 1536. One undo step gives the document back, its redo the
+// take again.
 #[test]
 fn p17_a_song_take_grows_by_bars_and_is_one_undo_step() {
     let want = &expected()["song"];
@@ -260,8 +265,8 @@ fn p17_a_song_take_grows_by_bars_and_is_one_undo_step() {
 }
 
 // Known answer (5): a take in song mode from tick 3072, past the song's end (1536). The player
-// plays straight on while it records, so the note lands at its tick; the clip on track 1 (free
-// there), 2 bars, the song ending at 3840.
+// plays straight on while it records, so the note lands at its tick less 3072; the pattern 2
+// bars, no clip, the song still ending at 1536.
 #[test]
 fn p17_a_song_take_past_the_songs_end() {
     let want = &expected()["song_past_end"];
@@ -390,21 +395,23 @@ fn p17_an_audio_take_in_pattern_mode_records_one_pass() {
 
 /// Plays the capture's events with the transport stopped, then Capture in `mode` (with the song
 /// marker at `marker` in song mode).
-fn captured(test: &str, mode: PlayMode, marker: i64) -> (App, String) {
+fn captured(test: &str, mode: PlayMode, marker: i64) -> (App, String, usize) {
     let want = &expected()["capture"];
     let (mut app, mut player, _dir) = open(test, name(&want["project"]));
-    let before = document(&app);
     if mode == PlayMode::Song {
         let _ = app.update(Message::ModeSelected(PlayMode::Song));
         app.move_song_marker(Ticks(marker));
     }
+    // After the switch, which made blank Pattern 1 a take, a step of its own.
+    let before = document(&app);
+    let steps = app.session.history().undo_len();
     let device = Router::new(app.session.midi_inbox(), ControllerQueue::default());
     let script = events(name(&want["events"]));
     for call in 0..number(&want["calls"]) {
         play_call(&mut app, &mut player, &device, &script, call, CALL);
     }
     capture_keys(&mut app);
-    (app, before)
+    (app, before, steps)
 }
 
 // Known answer (4), pattern mode: notes played while stopped (one of them more than 30 s before
@@ -413,25 +420,26 @@ fn captured(test: &str, mode: PlayMode, marker: i64) -> (App, String) {
 #[test]
 fn p17_capture_lays_the_last_phrase_into_the_pattern() {
     let want = &expected()["capture"];
-    let (mut app, before) = captured("capture", PlayMode::Pattern, 0);
+    let (mut app, before, _) = captured("capture", PlayMode::Pattern, 0);
     let after = fixture(name(&want["document"]));
     assert_eq!(document(&app), after);
     one_undo_step(&mut app, &before, &after);
 }
 
-// Known answer (4), song mode: the same phrase becomes pattern "Keys take 1" and its clip from
+// Known answer (4), song mode: the same phrase becomes take "Keys take 2" (the switch made blank
+// Pattern 1 "Keys take 1") and its clip from
 // the bar start nearest the song marker (400 → 384), on track 1. One undo step.
 #[test]
 fn p17_capture_in_song_mode_makes_a_pattern_and_its_clip() {
     let want = &expected()["capture"];
-    let (mut app, before) = captured(
+    let (mut app, before, steps) = captured(
         "capture_song",
         PlayMode::Song,
         number(&want["song_marker"]) as i64,
     );
     let after = fixture(name(&want["song_document"]));
     assert_eq!(document(&app), after);
-    one_undo_step(&mut app, &before, &after);
+    one_more_undo_step(&mut app, steps, &before, &after);
 }
 
 /// An edit during a song take: p17_song with an earlier step (channel 1
@@ -481,14 +489,14 @@ fn edit_during_a_song_take(
     (went_through, refusals, document(&app) == fixture_text)
 }
 
-// While a song take runs, an edit naming its own pattern or clip
-// (renaming the pattern, moving or muting the clip) is refused, so every undo after Stop goes
-// through and the document comes back to the fixture. Renaming another channel still goes
-// through and undoes after the take.
+// While a song take runs, an edit naming its own pattern (renaming it, setting its bars,
+// placing a clip of it, pointing a clip at it) is refused, so every undo after Stop goes through
+// and the document comes back to the fixture. Renaming another channel still goes through and
+// undoes after the take.
 #[test]
-fn edits_naming_the_song_takes_pattern_or_clip_are_refused() {
+fn edits_naming_the_song_takes_pattern_are_refused() {
     use dawsome_engine::edit::Edit;
-    use dawsome_engine::project::TrackId;
+    use dawsome_engine::project::{Clip, TrackId};
     for (test, edit) in [
         (
             "take_rename",
@@ -498,16 +506,29 @@ fn edits_naming_the_song_takes_pattern_or_clip_are_refused() {
             },
         ),
         (
-            "take_move",
-            Edit::MoveClips {
-                moves: vec![(ClipId(2), Ticks(768), TrackId(3))],
+            "take_bars",
+            Edit::SetPatternBars {
+                pattern: PatternId(2),
+                bars: 8,
             },
         ),
         (
-            "take_mute",
-            Edit::SetClipMute {
-                ids: vec![ClipId(2)],
-                muted: true,
+            "take_place",
+            Edit::PlaceClips {
+                first: ClipId(2),
+                clips: vec![Clip::of_pattern(
+                    PatternId(2),
+                    TrackId(3),
+                    Ticks(768),
+                    Ticks(384),
+                )],
+            },
+        ),
+        (
+            "take_point_clip",
+            Edit::SetClipPattern {
+                id: ClipId(1),
+                pattern: PatternId(2),
             },
         ),
     ] {
@@ -553,10 +574,10 @@ fn the_channel_menu_opens_on_the_channels_row() {
     );
 }
 
-/// An edit during a song take that adds a track: p17_song with tracks 2..=8 holding a clip over
-/// 384..768 (one step), so a song take from 384 adds track 9; `edit` committed after call 40,
-/// then Stop and Ctrl+Z down to nothing. As [`edit_during_a_song_take`].
-fn edit_during_a_song_take_on_its_own_track(
+/// An edit during a song take with no track free: p17_song with tracks 2..=8 holding a clip over
+/// 384..768 (one step); a song take from 384 places no clip, so it adds no track either; `edit`
+/// committed after call 40, then Stop and Ctrl+Z down to nothing. As [`edit_during_a_song_take`].
+fn edit_during_a_song_take_with_no_track_free(
     test: &str,
     edit: dawsome_engine::edit::Edit,
 ) -> (bool, Vec<String>, bool) {
@@ -580,8 +601,8 @@ fn edit_during_a_song_take_on_its_own_track(
     assert!(app.recording.taking_notes());
     assert_eq!(
         app.session.project().playlist.tracks.len(),
-        9,
-        "the take added track 9"
+        8,
+        "the take adds no track, even with none free"
     );
     let mut went_through = false;
     for call in 0..60 {
@@ -608,49 +629,21 @@ fn edit_during_a_song_take_on_its_own_track(
     (went_through, refusals, document(&app) == fixture_text)
 }
 
-// A song take that had to add a track keeps that track from changing while it
-// runs: muting it, moving another clip onto it, renaming it are refused, so every undo after
-// Stop goes through and the document comes back to the fixture. Muting track 8 (not the take's)
-// still goes through and undoes.
+// A song take with no track free over its first bar adds no track (it places no clip): muting
+// track 8 while it runs goes through, every undo after Stop goes through, and the document comes
+// back to the fixture.
 #[test]
-fn edits_to_the_track_a_song_take_added_are_refused() {
+fn a_song_take_with_no_track_free_adds_none() {
     use dawsome_engine::edit::Edit;
     use dawsome_engine::project::TrackId;
-    for (test, edit) in [
-        (
-            "added_track_mute",
-            Edit::SetTrackMute {
-                id: TrackId(9),
-                mute: true,
-            },
-        ),
-        (
-            "added_track_clip",
-            Edit::MoveClips {
-                moves: vec![(ClipId(1), Ticks(0), TrackId(9))],
-            },
-        ),
-        (
-            "added_track_rename",
-            Edit::RenameTrack {
-                id: TrackId(9),
-                name: "Mine".to_owned(),
-            },
-        ),
-    ] {
-        let (went_through, refusals, back) = edit_during_a_song_take_on_its_own_track(test, edit);
-        assert!(!went_through, "{test}: refused");
-        assert_eq!(refusals, Vec::<String>::new(), "{test}");
-        assert!(back, "{test}: the document back to the fixture");
-    }
-    let (went_through, refusals, back) = edit_during_a_song_take_on_its_own_track(
+    let (went_through, refusals, back) = edit_during_a_song_take_with_no_track_free(
         "other_track_mute",
         Edit::SetTrackMute {
             id: TrackId(8),
             mute: true,
         },
     );
-    assert!(went_through, "another track's mute goes through");
+    assert!(went_through, "a track's mute goes through");
     assert_eq!(refusals, Vec::<String>::new());
     assert!(back);
 }

@@ -1,11 +1,11 @@
 //! The channel rack: one row per channel with its mute light, name button, pan and volume
-//! knobs, and step buttons, under a header with the selected pattern's bar count and
-//! "+ Instrument…"; under the rows a "+" button opens the same picker. One canvas draws the rows
-//! from [`layout`] positions, another the header. The rows live in a cached layer; the playhead
-//! has a cheap layer of its own, redrawn every frame. A sampler row takes a sound file: dropped
-//! on it (from the browser or the desktop), picked from its name's menu, or picked with a double
-//! press on the name while it has none; while it has none, a dim hint right of its steps says
-//! so.
+//! knobs, and step buttons, under a header with the selected pattern's bar count,
+//! "+ Instrument…" and the pattern's swing knob; under the rows a "+" button opens the same
+//! picker. One canvas draws the rows from [`layout`] positions, another the header. The rows
+//! live in a cached layer; the playhead has a cheap layer of its own, redrawn every frame. A
+//! sampler row takes a sound file: dropped on it (from the browser or the desktop), picked from
+//! its name's menu, or picked with a double press on the name while it has none; while it has
+//! none, a dim hint right of its steps says so.
 
 use std::collections::BTreeMap;
 use std::f32::consts::PI;
@@ -17,15 +17,16 @@ use dawsome_engine::project::{
     AutomationTarget, Channel, ChannelId, ChannelKind, InputSource, PatternId, Project, MAX_VOLUME,
     PAN_RANGE,
 };
+use dawsome_engine::time::SWING_RANGE;
 use dawsome_engine::transport::ParamTarget;
 use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, Path, Stroke, Text};
 use iced::{alignment, mouse, window, Point, Rectangle, Renderer, Size, Theme, Vector};
 
-use crate::app::{MediaMessage, Message, PatternMessage};
+use crate::app::{MediaMessage, Message, PatternMessage, SWING_STEP};
 use crate::ui::hint::{hover_change, Hover, RackPart};
 use crate::ui::layout::{
     self, HeaderHit, RackHit, BARS_LABEL_X, CONTROL_SIZE, PAN_KNOB_X, RACK_HEADER_HEIGHT,
-    VOLUME_KNOB_X,
+    SWING_LABEL_X, VOLUME_KNOB_X,
 };
 use crate::ui::mixer::TIP_HEIGHT;
 use crate::ui::mixer_state::{pan_text, percent_text};
@@ -53,7 +54,8 @@ const AUTOMATED_DOT: f32 = 4.0;
 /// control's box it sits (clear of the automated dot).
 const LINKED_DOT: f32 = 2.0;
 const LINKED_DOT_GAP: f32 = 1.0;
-/// Two presses on one name button this close together open the channel's plugin.
+/// Two presses on one name button this close together open the channel's plugin; on the
+/// header's swing, they set it straight.
 const DOUBLE_PRESS: Duration = Duration::from_millis(400);
 
 /// A channel knob.
@@ -532,8 +534,8 @@ pub fn is_empty_sampler(channel: &Channel) -> bool {
 }
 
 /// The rack's header: its title, the selected pattern's bar count between "−" and "+" (dim where
-/// the count can go no further), and "+ Sampler…". A strip of a few shapes, drawn whole each
-/// frame.
+/// the count can go no further), "+ Sampler…", and the pattern's swing knob with its readout.
+/// A strip of a few shapes, drawn whole each frame.
 pub struct RackHeader {
     /// The selected pattern's length in bars; `None` without a pattern.
     pub bars: Option<u32>,
@@ -543,6 +545,29 @@ pub struct RackHeader {
     pub shorter: bool,
     /// Whether "+" can lengthen it.
     pub longer: bool,
+    /// The selected pattern's swing, in tenths of a per cent; `None` without a pattern, when
+    /// the knob and its readout are dim and take nothing.
+    pub swing: Option<u16>,
+}
+
+/// What the header's cursor was over last, and the last press on its swing, to tell a double
+/// press.
+#[derive(Debug, Default)]
+pub struct HeaderState {
+    hovered: Option<Hover>,
+    last_swing_press: Option<Instant>,
+}
+
+/// A swing as its readout, the hint and the quantize dialog show it: "66.7%". Integer
+/// arithmetic, so every value reads exactly as stored.
+pub fn swing_text(tenths: u16) -> String {
+    format!("{}.{}%", tenths / 10, tenths % 10)
+}
+
+/// Where the swing knob points for `tenths`: 0 at straight, 1 at its far stop.
+fn swing_fraction(tenths: u16) -> f32 {
+    let (low, high) = (*SWING_RANGE.start(), *SWING_RANGE.end());
+    f32::from(tenths.saturating_sub(low)) / f32::from(high - low)
 }
 
 /// The header's text size.
@@ -553,19 +578,27 @@ const HEADER_TEXT_SIZE: f32 = 12.0;
 pub const ADD_INSTRUMENT: &str = "+ Instrument\u{2026}";
 
 impl RackHeader {
+    /// The control under `cursor`: the swing only while there is a pattern to swing.
+    fn hit(&self, bounds: Rectangle, cursor: mouse::Cursor) -> Option<HeaderHit> {
+        let hit = layout::header_hit_test(cursor.position_in(bounds)?)?;
+        (hit != HeaderHit::Swing || self.swing.is_some()).then_some(hit)
+    }
+
     /// The bars "−" or "+" adds now, if it can change the count.
     fn nudge(&self, hit: HeaderHit) -> Option<i32> {
         match hit {
             HeaderHit::BarsDown => self.shorter.then_some(-1),
             HeaderHit::BarsUp => self.longer.then_some(1),
-            HeaderHit::AddSampler => None,
+            HeaderHit::AddSampler | HeaderHit::Swing => None,
         }
     }
 
-    /// What a press on `hit` asks for, if anything.
+    /// What a single press on `hit` asks for, if anything: on the swing, a drag (the window
+    /// runs it, as the tempo's).
     fn message(&self, hit: HeaderHit) -> Option<Message> {
         match hit {
             HeaderHit::AddSampler => Some(Message::OpenPicker(PickerTarget::AddInstrument)),
+            HeaderHit::Swing => self.swing.map(|_| Message::SwingPressed),
             nudge => self
                 .nudge(nudge)
                 .map(|by| Message::Pattern(PatternMessage::Bars(by))),
@@ -573,34 +606,68 @@ impl RackHeader {
     }
 }
 
+/// Whether a press now is the second of a double press after the one at `last`, which then
+/// forgets it, so a third press starts over.
+fn double_press(last: &mut Option<Instant>) -> bool {
+    let now = crate::ui::clock::now();
+    let double = last.is_some_and(|when| now.duration_since(when) < DOUBLE_PRESS);
+    *last = (!double).then_some(now);
+    double
+}
+
 impl canvas::Program<Message> for RackHeader {
-    /// What the cursor was over last.
-    type State = Option<Hover>;
+    type State = HeaderState;
 
     fn update(
         &self,
-        hovered: &mut Option<Hover>,
+        state: &mut HeaderState,
         event: &canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        if let canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
-            let now = cursor
-                .position_in(bounds)
-                .and_then(layout::header_hit_test)
-                .map(Hover::RackHeader);
-            return hover_change(hovered, now);
-        }
-        let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event else {
+        let canvas::Event::Mouse(event) = event else {
             return None;
         };
-        let hit = layout::header_hit_test(cursor.position_in(bounds)?)?;
-        Some(canvas::Action::publish(self.message(hit)?).and_capture())
+        let message = match event {
+            mouse::Event::CursorMoved { .. } => {
+                let now = self.hit(bounds, cursor).map(Hover::RackHeader);
+                return hover_change(&mut state.hovered, now);
+            }
+            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                let hit = self.hit(bounds, cursor)?;
+                let message = self.message(hit)?;
+                if hit == HeaderHit::Swing && double_press(&mut state.last_swing_press) {
+                    Message::Pattern(PatternMessage::SwingReset)
+                } else {
+                    message
+                }
+            }
+            // Up raises the swing 1 % per scroll event, whatever its size (the window makes it
+            // 0.1 % with Shift), as the tempo's wheel.
+            mouse::Event::WheelScrolled { delta } => {
+                if self.hit(bounds, cursor) != Some(HeaderHit::Swing) {
+                    return None;
+                }
+                let rise = match *delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => y,
+                };
+                let by = if rise > 0.0 {
+                    SWING_STEP
+                } else if rise < 0.0 {
+                    -SWING_STEP
+                } else {
+                    return None;
+                };
+                Message::Pattern(PatternMessage::SwingBy(by))
+            }
+            _ => return None,
+        };
+        Some(canvas::Action::publish(message).and_capture())
     }
 
     fn draw(
         &self,
-        _state: &Option<Hover>,
+        _state: &HeaderState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -647,19 +714,41 @@ impl canvas::Program<Message> for RackHeader {
         frame.fill_rectangle(add.position(), add.size(), ADD_FACE);
         let at = Point::new(add.x + 8.0, add.center_y());
         header_text(&mut frame, ADD_INSTRUMENT, at, ADD_LABEL);
+        header_text(
+            &mut frame,
+            "Swing",
+            Point::new(SWING_LABEL_X, middle),
+            style::TEXT_DIM,
+        );
+        let knob = layout::swing_knob_rect();
+        let readout = layout::swing_count_rect();
+        frame.fill_rectangle(readout.position(), readout.size(), style::LCD);
+        match self.swing {
+            Some(swing) => {
+                draw_knob(&mut frame, knob.center(), knob.width, swing_fraction(swing));
+                centered_text(
+                    &mut frame,
+                    &swing_text(swing),
+                    readout.center(),
+                    style::LCD_TEXT,
+                );
+            }
+            // No pattern to swing: a dial with no pointer over an empty readout, as the bars'.
+            None => frame.fill(
+                &Path::circle(knob.center(), knob.width / 2.0),
+                style::KNOB_RING,
+            ),
+        }
         vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(
         &self,
-        _state: &Option<Hover>,
+        _state: &HeaderState,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        let pressable = cursor
-            .position_in(bounds)
-            .and_then(layout::header_hit_test)
-            .and_then(|hit| self.message(hit));
+        let pressable = self.hit(bounds, cursor).and_then(|hit| self.message(hit));
         match pressable {
             Some(_) => mouse::Interaction::Pointer,
             None => mouse::Interaction::default(),
@@ -737,7 +826,7 @@ impl canvas::Program<Message> for ChannelRack<'_> {
         }
         if let canvas::Event::Mouse(mouse::Event::ButtonReleased(_)) = event {
             // A single press on a name only selects: the window opens on a double press
-            // (found in use 2026-10-27: a click that opened a window got in the way).
+            // (a click that opened a window got in the way).
             state.held = None;
             return None;
         }
@@ -1244,7 +1333,7 @@ mod tests {
     }
 
     // P3: a press on a name selects its channel; the release on it, on its own, does nothing
-    // (a click opens no window: asked for in use, 2026-10-27), nor does a release off the name;
+    // (a click opens no window), nor does a release off the name;
     // a second press within the double-press time opens the channel's window, and its release
     // is nothing either.
     #[test]
@@ -1648,6 +1737,111 @@ mod tests {
             Point::new(500.0, 300.0),
         );
         assert_eq!(state.held, None);
+    }
+
+    /// `event` at `at` (header coordinates) on a header whose pattern swings by `swing`: the
+    /// message it publishes and whether it took the event.
+    fn header_event(
+        swing: Option<u16>,
+        state: &mut HeaderState,
+        event: canvas::Event,
+        at: Point,
+    ) -> Option<(Message, bool)> {
+        let header = RackHeader {
+            bars: swing.map(|_| 1),
+            shorter: false,
+            longer: true,
+            swing,
+        };
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(1000.0, RACK_HEADER_HEIGHT));
+        let action = header.update(state, &event, bounds, mouse::Cursor::Available(at))?;
+        let (message, _, status) = action.into_inner();
+        Some((message?, status == iced::event::Status::Captured))
+    }
+
+    fn wheel(y: f32) -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y },
+        })
+    }
+
+    // Swing (spec swing.md §5): a press on the knob or its readout starts a drag; a second
+    // within the double-press time (400 ms) sets it straight, and the press after that starts
+    // over; the wheel up is +1 % (10 tenths), down −1 %, published for the window, which applies
+    // Shift. The swing's wheel is the swing's only.
+    #[test]
+    fn the_swing_takes_a_press_a_double_press_and_the_wheel() {
+        let knob = layout::swing_knob_rect().center();
+        let readout = layout::swing_count_rect().center();
+        let left = press(mouse::Button::Left);
+        let start = Instant::now();
+        let at = |ms| crate::ui::clock::hold(Some(start + Duration::from_millis(ms)));
+        let mut state = HeaderState::default();
+        let mut send = |event: &canvas::Event, point| {
+            header_event(Some(667), &mut state, event.clone(), point)
+        };
+        at(0);
+        assert!(matches!(
+            send(&left, knob),
+            Some((Message::SwingPressed, true))
+        ));
+        at(399);
+        assert!(matches!(
+            send(&left, readout),
+            Some((Message::Pattern(PatternMessage::SwingReset), true))
+        ));
+        at(500);
+        assert!(matches!(
+            send(&left, knob),
+            Some((Message::SwingPressed, true))
+        ));
+        at(900);
+        assert!(
+            matches!(send(&left, knob), Some((Message::SwingPressed, true))),
+            "400 ms later is a press of its own"
+        );
+        crate::ui::clock::hold(None);
+        assert!(matches!(
+            send(&wheel(1.0), knob),
+            Some((Message::Pattern(PatternMessage::SwingBy(10)), true))
+        ));
+        assert!(matches!(
+            send(&wheel(-0.5), readout),
+            Some((Message::Pattern(PatternMessage::SwingBy(-10)), true))
+        ));
+        assert!(send(&wheel(0.0), knob).is_none(), "no rise");
+        let bars_up = layout::bars_up_rect().center();
+        assert!(send(&wheel(1.0), bars_up).is_none(), "the wheel elsewhere");
+        let moved = canvas::Event::Mouse(mouse::Event::CursorMoved { position: knob });
+        let _ = send(&moved, knob);
+        assert_eq!(state.hovered, Some(Hover::RackHeader(HeaderHit::Swing)));
+    }
+
+    // Without a pattern the swing is dim and takes nothing: no press, wheel or hover.
+    #[test]
+    fn without_a_pattern_the_swing_takes_nothing() {
+        let knob = layout::swing_knob_rect().center();
+        let mut state = HeaderState::default();
+        let left = press(mouse::Button::Left);
+        assert!(header_event(None, &mut state, left.clone(), knob).is_none());
+        assert!(header_event(None, &mut state, left, knob).is_none());
+        assert!(header_event(None, &mut state, wheel(1.0), knob).is_none());
+        let moved = canvas::Event::Mouse(mouse::Event::CursorMoved { position: knob });
+        let _ = header_event(None, &mut state, moved, knob);
+        assert_eq!(state.hovered, None);
+        assert_eq!(state.last_swing_press, None);
+    }
+
+    // The readout's text, exact from the stored tenths.
+    #[test]
+    fn a_swing_reads_in_tenths_of_a_per_cent() {
+        assert_eq!(swing_text(500), "50.0%");
+        assert_eq!(swing_text(667), "66.7%");
+        assert_eq!(swing_text(750), "75.0%");
+        assert_eq!(swing_text(521), "52.1%");
+        assert_eq!(swing_fraction(500), 0.0);
+        assert_eq!(swing_fraction(625), 0.5);
+        assert_eq!(swing_fraction(750), 1.0);
     }
 
     // A name longer than its button is cut with an ellipsis to the button's room; one that fits

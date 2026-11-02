@@ -400,9 +400,9 @@ mod tests {
         // The pattern's menu opens where its name's box starts, toolbar coordinates (where
         // the spread across the shot's width puts it). Pin moved: the box is joined to the
         // previous arrow, so 4 px left of it is the arrow's face (above its glyph), not the
-        // toolbar's ground, which starts a pixel left of the arrow. The piece in one frame
-        // (2026-10-27): the name on the readouts' dark glass, the frame's edge at
-        // the piece's left, 4 px under the groups' top (above the arrow's glyph).
+        // toolbar's ground, which starts a pixel left of the arrow. The piece in one frame: the
+        // name on the readouts' dark glass, the frame's edge at the piece's left, 4 px under the
+        // groups' top (above the arrow's glyph).
         let width = shot.width as f32 / shot.scale;
         let spread = crate::ui::toolbar::shot_spread(width, false);
         let name = spread.pattern_name_x();
@@ -678,6 +678,25 @@ mod tests {
                 format!("lane after bar line {}", bar + 1),
                 tracks(line.x + 24.0, lane_8),
                 lane,
+            ));
+        }
+        // Each clip's start line (#1A1C1F) at its first pixel, x 120 and 248, and the mark of
+        // Pattern 1's tick-0 note (#DDE6F0) right of it, never over it: on the line it read as
+        // a note outside the clip. The mark's row: one key in a 47 px lane, so the body under the
+        // 10 px title less 2 px padding each side is 33 px, the mark 4 px high in its middle, y
+        // 26.5..30.5 in the lane, 144.5 at its middle in the window (the lane's 22 is 138).
+        let mark_y = lane_center(0, 28.5);
+        assert_eq!(tracks(0.0, mark_y).y, 144.5);
+        for (clip, start) in [(1, bar_x(0)), (2, bar_x(2))] {
+            points.push((
+                format!("clip {clip} start line"),
+                tracks(start + 0.5, mark_y),
+                [0x1A, 0x1C, 0x1F],
+            ));
+            points.push((
+                format!("clip {clip} first note mark"),
+                tracks(start + 1.5, mark_y),
+                [0xDD, 0xE6, 0xF0],
             ));
         }
         let wrong = wrong_colors(&shot, &points);

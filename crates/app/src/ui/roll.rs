@@ -14,8 +14,10 @@ use std::fmt;
 use std::slice;
 
 use dawsome_engine::edit::Edit;
-use dawsome_engine::project::{self as model, ClipId, Note, PatternId, Project, MAX_KEY};
-use dawsome_engine::time::Ticks;
+use dawsome_engine::project::{
+    self as model, ChannelId, ClipId, Note, PatternId, Project, MAX_KEY,
+};
+use dawsome_engine::time::{Ticks, STRAIGHT_SWING};
 use iced::keyboard::Modifiers;
 use iced::{mouse, Point, Size};
 
@@ -37,9 +39,9 @@ pub const DRAG_SLOP: f32 = 4.0;
 /// edge: its width and the strip's margin.
 pub const MENU_FROM_RIGHT: f32 = 176.0;
 
-/// A piano roll edit asked for by a key, the notes' menu or the Quantize dialog. The keys'
-/// edits act on the selection; the operations from Quantize on act on the selection, or on
-/// every note of the channel when nothing is selected.
+/// A piano roll edit asked for by a key or the notes' menu. The keys' edits act on the
+/// selection; the operations from Chop on act on the selection, or on every note of the
+/// channel when nothing is selected (as the Quantize dialog does, [`Roll::quantize_commit`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteEdit {
     /// The selected notes up (or down) this many semitones.
@@ -51,7 +53,6 @@ pub enum NoteEdit {
     Paste,
     Delete,
     Duplicate,
-    Quantize(Quantize),
     /// Cut at every snap line.
     Chop,
     Glue,
@@ -108,30 +109,82 @@ pub enum QuantizeMessage {
     Grid(QuantizeGrid),
     /// Per cent, 0 to 100.
     Strength(u8),
+    /// Tenths of a per cent, 500 (straight) to 750 (dotted); kept inside that.
+    Swing(u16),
     /// Whether the ends move too.
     Ends(bool),
     Apply,
     Cancel,
 }
 
-/// What the Quantize dialog chooses: the grid, how far toward it (per cent), and whether the
-/// ends move too.
+/// What the Quantize dialog chooses: the grid, how far toward it (per cent), its swing (tenths
+/// of a per cent), and whether the ends move too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuantizeForm {
     pub grid: QuantizeGrid,
     pub strength: u8,
+    pub swing_tenths: u16,
     pub ends: bool,
 }
 
 impl Default for QuantizeForm {
-    /// The snap, all the way, the starts only.
+    /// The snap, all the way, straight, the starts only.
     fn default() -> Self {
         Self {
             grid: QuantizeGrid::Snap,
             strength: 100,
+            swing_tenths: STRAIGHT_SWING,
             ends: false,
         }
     }
+}
+
+impl QuantizeForm {
+    /// The quantize it chooses, on a roll whose snap unit is `snap` in a project of `ppq`.
+    fn how(self, snap: Ticks, ppq: u16) -> Quantize {
+        Quantize {
+            grid: self.grid.ticks(snap, ppq),
+            strength: self.strength,
+            swing_tenths: self.swing_tenths,
+            ends: self.ends,
+        }
+    }
+}
+
+/// How many of the notes the open Quantize dialog acts on would land on another note and
+/// merge with it (the pattern holds one note per tick and key), and how many it acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuantizeMerges {
+    pub merged: usize,
+    pub of: usize,
+}
+
+impl fmt::Display for QuantizeMerges {
+    /// The dialog's line under its controls.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { merged, of } = *self;
+        match merged {
+            0 => f.write_str("No notes merge."),
+            1 => write!(
+                f,
+                "1 of {of} notes lands on another note and merges: the longest stays."
+            ),
+            _ => write!(
+                f,
+                "{merged} of {of} notes land on another note and merge: the longest stays."
+            ),
+        }
+    }
+}
+
+/// The notes the Quantize dialog acts on, as they were when it opened, and where. Each preview
+/// and the Apply are worked from these, never from an earlier preview: a coarse grid that
+/// merges notes, then a fine one, brings every note back.
+#[derive(Debug, Clone)]
+struct QuantizeOriginals {
+    pattern: PatternId,
+    channel: ChannelId,
+    notes: Vec<Note>,
 }
 
 /// What the piano roll's canvases report. Points are in the reporting canvas's coordinates
@@ -251,6 +304,8 @@ pub struct Roll {
     humanized: u64,
     /// The Quantize dialog's choice, kept for its next opening.
     pub quantize: QuantizeForm,
+    /// What the Quantize dialog acts on, while it is open.
+    quantize_originals: Option<QuantizeOriginals>,
     /// The scale the grid shades the keys outside of; none by default.
     pub scale: Scale,
     /// Whether the grid keeps rows only for the keys holding notes and, with a scale, those in
@@ -293,6 +348,7 @@ impl Roll {
             revealed: None,
             humanized: 0,
             quantize: QuantizeForm::default(),
+            quantize_originals: None,
             scale: Scale::default(),
             fold: false,
             clip: None,
@@ -407,13 +463,19 @@ impl Roll {
         self.revealed = Some(first.key);
     }
 
-    /// The top moved, when `key`'s row is not whole in the grid, to 5 keys over `key`.
-    fn keep_in_view(&mut self, key: u8) {
+    /// The top moved, when `key`'s row is not whole in the grid, to 5 keys over `key`. Returns
+    /// whether it moved. A take calls it for each key it hears struck (found in use: L's notes
+    /// were recorded above the rows shown and looked unrecorded).
+    pub fn keep_in_view(&mut self, key: u8) -> bool {
         let y = self.view.row_top(key);
-        if !(0.0..=self.grid_size.height - piano_layout::ROW_HEIGHT).contains(&y) {
-            let top = i32::from(key) + ROWS_ABOVE_NOTES;
-            self.view.top = self.view.clamp_top(top, self.grid_size.height);
+        if (0.0..=self.grid_size.height - piano_layout::ROW_HEIGHT).contains(&y) {
+            return false;
         }
+        let top = i32::from(key) + ROWS_ABOVE_NOTES;
+        let moved = self.view.clamp_top(top, self.grid_size.height);
+        let changed = moved != self.view.top;
+        self.view.top = moved;
+        changed
     }
 
     /// The rows the grid keeps for `target`'s channel: every key, or folded the keys holding
@@ -751,15 +813,23 @@ impl Roll {
         }
     }
 
-    /// Quantize, Chop, Glue, Legato, Reverse, Invert or Humanize on the notes acted on, as one
-    /// edit; a selection stays on the notes it became. Chop cuts at the snap (a step with Snap
-    /// None); Humanize draws
-    /// from its own count, so each run differs and a replay is the same.
+    /// The selection an operation's `change` leaves: on the notes it puts in, or none when
+    /// nothing was selected (it acted on the whole channel).
+    fn operated_selection(&self, change: &Change) -> BTreeSet<NoteKey> {
+        if self.selection.is_empty() {
+            BTreeSet::new()
+        } else {
+            change.added_keys()
+        }
+    }
+
+    /// Chop, Glue, Legato, Reverse, Invert or Humanize on the notes acted on, as one edit; a
+    /// selection stays on the notes it became. Chop cuts at the snap (a step with Snap None);
+    /// Humanize draws from its own count, so each run differs and a replay is the same.
     pub fn operate(&mut self, target: &Target, edit: NoteEdit) -> Option<Commit> {
         let notes = self.acted_on(target);
         let step = self.view.step;
         let change = match edit {
-            NoteEdit::Quantize(how) => note_ops::quantized(target, &notes, how),
             // Snap None would cut a note into single ticks: it chops at the step then.
             NoteEdit::Chop => {
                 let unit = match self.snap {
@@ -779,11 +849,73 @@ impl Roll {
             }
             _ => return None,
         };
-        let selection = if self.selection.is_empty() {
-            BTreeSet::new()
-        } else {
-            change.added_keys()
-        };
+        let selection = self.operated_selection(&change);
+        let edit = change.into_edit(target)?;
+        Some(Commit {
+            edit,
+            selection: Some(selection),
+        })
+    }
+
+    /// The Quantize dialog opens on `target`: the notes it acts on (the selection, or every
+    /// note of the channel) are held as they are now. Without a target it holds none.
+    pub fn hold_quantize_originals(&mut self, target: Option<&Target>) {
+        self.quantize_originals = target.map(|target| QuantizeOriginals {
+            pattern: target.pattern,
+            channel: target.channel,
+            notes: self.acted_on(target),
+        });
+    }
+
+    /// The Quantize dialog closes: the notes it held are let go.
+    pub fn drop_quantize_originals(&mut self) {
+        self.quantize_originals = None;
+    }
+
+    /// What quantizing by `form` would change, worked from the dialog's originals, and how
+    /// many it acts on; `None` unless the dialog is open on `target`'s pattern and channel.
+    fn quantize_change(&self, target: &Target, form: QuantizeForm) -> Option<(Change, usize)> {
+        let held = self
+            .quantize_originals
+            .as_ref()
+            .filter(|held| (held.pattern, held.channel) == (target.pattern, target.channel))?;
+        // Why only the originals the pattern still holds as they were: an edit made while the
+        // dialog is open (an undo, a recorded take) may have changed or taken one out, and
+        // the edit must name only notes that are there.
+        let notes: Vec<Note> = held
+            .notes
+            .iter()
+            .filter(|&note| target.note(key_of(note)) == Some(note))
+            .cloned()
+            .collect();
+        let how = form.how(self.snap.unit(&self.view), target.ppq);
+        Some((note_ops::quantized(target, &notes, how), notes.len()))
+    }
+
+    /// What the open Quantize dialog shows: the change `form` would make, and the selection it
+    /// would leave, as [`preview`](Self::preview) gives a held drag's. No edit is made.
+    pub fn quantize_preview(
+        &self,
+        target: &Target,
+        form: QuantizeForm,
+    ) -> Option<(Change, BTreeSet<NoteKey>)> {
+        let (change, _) = self.quantize_change(target, form)?;
+        let selection = self.operated_selection(&change);
+        Some((change, selection))
+    }
+
+    /// How many notes the preview of `form` merges, of how many.
+    pub fn quantize_merges(&self, target: &Target, form: QuantizeForm) -> Option<QuantizeMerges> {
+        let (change, of) = self.quantize_change(target, form)?;
+        // Every note it takes out is in the pattern and every one it puts in lands on a free
+        // tick and key, so the pattern ends this many notes shorter.
+        let merged = change.remove.len().saturating_sub(change.add.len());
+        Some(QuantizeMerges { merged, of })
+    }
+
+    /// The Quantize dialog's Apply: its preview of `form` as one edit (one undo step).
+    pub fn quantize_commit(&self, target: &Target, form: QuantizeForm) -> Option<Commit> {
+        let (change, selection) = self.quantize_preview(target, form)?;
         let edit = change.into_edit(target)?;
         Some(Commit {
             edit,
@@ -1379,6 +1511,21 @@ mod tests {
     // A ramp whose ends lie on the middles of two stems of notes off the step
     // grid reaches both notes at 8 and 32 px a step (and the default 16): the far end's note
     // takes the end's value. Each pair 1 to 40 ticks off the grid, a beat apart.
+    // The Quantize dialog's merge line: none, one (said in the singular), several.
+    #[test]
+    fn the_quantize_merge_line_counts_the_notes_that_merge() {
+        let line = |merged, of| QuantizeMerges { merged, of }.to_string();
+        assert_eq!(line(0, 4), "No notes merge.");
+        assert_eq!(
+            line(1, 4),
+            "1 of 4 notes lands on another note and merges: the longest stays."
+        );
+        assert_eq!(
+            line(3, 12),
+            "3 of 12 notes land on another note and merge: the longest stays."
+        );
+    }
+
     #[test]
     fn a_ramp_ending_on_an_unquantized_stem_reaches_its_note() {
         for zoom in [2, 4, 6] {

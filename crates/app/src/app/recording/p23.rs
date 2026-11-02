@@ -90,7 +90,6 @@ fn take_feed(frames: usize) -> Vec<f32> {
 fn placement(name: &str) {
     let want = &expected()["place"][name];
     let (mut app, mut player, dir) = open(name, &want["settings"]);
-    let before = document(&app);
     let input = want["source"] == "input";
     let id = ChannelId(1);
     if input {
@@ -105,6 +104,10 @@ fn placement(name: &str) {
     record(&mut app, RecordMessage::Source(source));
     record(&mut app, RecordMessage::ToggleCountIn);
     let _ = app.update(Message::ModeSelected(PlayMode::Song));
+    // The switch made blank Pattern 1 a take, a step of its own; the take's undo gives back the
+    // document from here.
+    let before = document(&app);
+    let steps = app.session.history().undo_len();
     app.move_song_marker(Ticks(number(&want["marker"]) as i64));
     record(&mut app, RecordMessage::ToggleArm);
     let _ = app.update(Message::Play);
@@ -136,7 +139,11 @@ fn placement(name: &str) {
             "{name}: {notice}"
         ),
     }
-    assert_eq!(app.session.history().undo_len(), 1, "{name}: one undo step");
+    assert_eq!(
+        app.session.history().undo_len(),
+        steps + 1,
+        "{name}: one undo step"
+    );
     let _ = app.update(Message::Undo);
     assert_eq!(document(&app), before, "{name}: undone");
     let _ = app.update(Message::Redo);

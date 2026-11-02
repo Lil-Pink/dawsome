@@ -125,7 +125,7 @@ def own_controller_preset(cid, gain):
     return preset(cid, component_state(gain), b"")
 
 
-# The spec's precomputed gain-0.5 sine preset (vst3-host-phase1.md, known answer 4): the
+# A gain-0.5 sine preset precomputed apart from this generator (known answer 4): the
 # generator's layout must give exactly it.
 SPEC_SINE_HALF = ("VlNUMwEAAAA0NDYxNzc3MzZGNkQ2NTU0NjU3Mzc0NTM2OTZFNjUzMUQAAAAAAAAAT1RQMQAAAAAAAOA/T1RDMQ"
                   "AAAABMaXN0AgAAAENvbXAwAAAAAAAAAAwAAAAAAAAAQ29udDwAAAAAAAAACAAAAAAAAAA=")

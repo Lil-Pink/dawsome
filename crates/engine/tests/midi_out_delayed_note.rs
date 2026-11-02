@@ -1,8 +1,8 @@
 //! A MIDI-out note whose note on had to wait for the jump frame (Play, Seek) because it was due
 //! less than its channel's latency after it keeps its full length: its note off comes its gate
-//! after the note on, not its latency before its end (which could leave it a one-frame blip). A
-//! rule decided on 2026-10-25 (the generator tests/fixtures/gen_p19_expected.py states it, table
-//! B's first off follows it).
+//! after the note on, not its latency before its end (which could leave it a one-frame blip).
+//! The generator tests/fixtures/gen_p19_expected.py states the rule, and table B's first off
+//! follows it.
 //!
 //! By hand (44100 Hz, 128 BPM, ppq 96, s(t) = floor(t·60·44100·1000/(128000·96)), 200 ms = 8820
 //! frames): key 41 on tick 24, 12 ticks long (s(36) − s(24) = 7751 − 5167 = 2584 frames, 58 ms),

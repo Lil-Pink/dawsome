@@ -142,8 +142,8 @@ fn best(clicks: &[(usize, Vec<f32>)], signal: &[f32], range: RangeInclusive<i64>
 /// burst (from its first frame to a quarter second past the lead: the preview's buffer), then
 /// the lag in [`lags`] at which the input matches it best, polarity either way (a cable or an
 /// interface may invert it). Each channel is searched, and with two or more their sum too, and
-/// the best match is kept: a pair wired in opposite polarity sums to silence (found
-/// 2026-10-26), a click on one side only is drowned by the other's hum, and the sum of two
+/// the best match is kept: a pair wired in opposite polarity sums to silence, a click on one
+/// side only is drowned by the other's hum, and the sum of two
 /// in phase hears it through noise either alone would not.
 pub fn find(master: &[f32], input: &[Vec<f32>], rate: u32) -> Result<i64, NotFound> {
     let clicks = clicks(rate);

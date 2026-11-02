@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dawsome_engine::dsp::limiter;
 use dawsome_engine::project::{
     Channel, ChannelId, Effect, EffectId, InsertId, LoadError, LoadNote, Pattern, PatternId,
-    ProcessorRef, Project,
+    PatternKind, ProcessorRef, Project,
 };
-use dawsome_engine::time::MilliBpm;
+use dawsome_engine::time::{MilliBpm, STRAIGHT_SWING};
 use thiserror::Error;
 
 /// Why a document could not be opened.
@@ -119,6 +119,8 @@ pub fn new_document() -> Project {
         name: "Pattern 1".to_owned(),
         length_bars: 1,
         copied_from: None,
+        swing_tenths: STRAIGHT_SWING,
+        kind: PatternKind::Pattern,
         notes: Vec::new(),
     };
     project.patterns.insert(PatternId(1), pattern);

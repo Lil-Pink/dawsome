@@ -73,7 +73,7 @@ mod tests {
         start + Duration::from_millis(ms)
     }
 
-    // The settling, by hand, on JS80P's case (a window seen in use, 2026-10-27: kept 996x576, an
+    // The settling, by hand, on JS80P's case (a window seen in use: kept 996x576, an
     // editor that holds a taller window to that size by its aspect). The user drags the window to
     // 996x700, then 996x900, each answered with the kept size (put back at 100 and 200 ms) and
     // each answer lost in the drag; the drag ends with nothing more told. The window manager

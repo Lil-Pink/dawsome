@@ -120,7 +120,7 @@ impl NoteSchedule {
         let end = clock.saturating_add(len as u64);
         // The notes due in this block leave the table before its note-ons look for room, so a
         // reset with the table full (`end_all`: every note ends on frame 0) does not drop the
-        // next block's notes (review 2026-10-26). A held note is never due (its end is
+        // next block's notes. A held note is never due (its end is
         // u64::MAX) and the events change only held notes, so which notes end, and so the
         // events sent, are what they were whenever the table had room.
         self.take_due(end);
@@ -429,8 +429,8 @@ mod tests {
 
     // A reset with the table full (512 notes sounding, then `end_all`) ends them all on frame 0
     // of the next block, so that block's note-ons find room and are all sent, after the offs.
-    // (Review 2026-10-26: the starts were recorded before the ending notes left the table, so
-    // they were dropped.)
+    // (Before, the starts were recorded before the ending notes left the table, so they were
+    // dropped.)
     #[test]
     fn notes_ended_in_a_block_make_room_for_its_note_ons() {
         let dropped = AtomicU64::new(0);

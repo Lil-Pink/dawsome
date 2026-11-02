@@ -320,7 +320,7 @@ fn a_project_saved_with_one_data_folder_renders_the_same_with_another() {
 }
 
 /// A project naming a set that is no longer shipped (`ep-c4`, the electric piano made for
-/// Dawsome until FreePats' `ep` replaced it on 2026-10-27) opens as a project naming any set
+/// Dawsome until FreePats' `ep` replaced it) opens as a project naming any set
 /// that is not there does: it plays its bar (88,200 frames: 384 ticks at 120 BPM and 44.1 kHz)
 /// in silence, a warning names the set's main file where the data folder would hold it (the
 /// installed sets hold no folder of that name), and the project saved keeps the channel, its
@@ -358,7 +358,10 @@ fn a_project_naming_a_set_no_longer_shipped_opens_with_its_channel_kept() {
         Some(&installed),
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let looked = data.join("dawsome/instruments/ep-c4/ep-c4.sfz");
+    // Joined as the program joins it (`ShippedRoots::file`): the user's data folder, then the
+    // reference's own `instruments/ep-c4/ep-c4.sfz` in one piece, so on Windows the separator
+    // after `dawsome` is the platform's and the ones inside the reference stay `/`.
+    let looked = data.join("dawsome").join("instruments/ep-c4/ep-c4.sfz");
     let warning = format!(
         "dawsome-app: warning: instrument {}: 1 problem: it cannot be read",
         looked.display()

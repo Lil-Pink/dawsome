@@ -289,7 +289,7 @@ mod tests {
     /// The app on `dir`'s p8_ui (44.1 kHz, 120 BPM, PPQ 96: a bar is 384 ticks; eight tracks,
     /// track 1 holding an audio clip over 0..768 and track 2 an automation clip over 0..384),
     /// the playlist alone in a 1000 × 560 window, the hint bar off, its canvases laid out: the
-    /// tracks area is 560 − 64 − 24 − 28 − 10 = 434 px tall (the toolbar 64 px since 2026-10-27),
+    /// tracks area is 560 − 64 − 24 − 28 − 10 = 434 px tall (the toolbar 64 px),
     /// so the eight tracks and the "+ Track" row fit lanes of floor(434 / 9) − 1 = 47 px, a row
     /// every 48 px; 64 px a bar
     /// from x 120, scrolled to tick 0.

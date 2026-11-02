@@ -2078,7 +2078,10 @@ mod tests {
         );
         let cli = std::env::current_exe()
             .ok()
-            .and_then(|test| Some(test.parent()?.parent()?.join("dawsome")))
+            .and_then(|test| {
+                let name = format!("dawsome{}", std::env::consts::EXE_SUFFIX);
+                Some(test.parent()?.parent()?.join(name))
+            })
             .filter(|cli| cli.is_file())
             .expect("the command line is built beside the tests: run scripts/check.sh");
         let rendered = dir.join("cli.wav");

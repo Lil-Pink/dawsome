@@ -1,10 +1,12 @@
 //! Patterns in the window: the toolbar's selector, whose next arrow makes a new pattern past
 //! the last and whose name opens a menu to rename or delete the pattern, and the rack header's
-//! bar count for the selected pattern. The selection always names a pattern that exists.
+//! bar count and swing for the selected pattern. The selection always names a pattern that
+//! exists.
 
-use dawsome_engine::edit::{Edit, EditError};
+use dawsome_engine::edit::{takes, Edit, EditError};
 use dawsome_engine::plan;
-use dawsome_engine::project::{ClipId, PatternId};
+use dawsome_engine::project::{ClipId, PatternId, PatternKind};
+use dawsome_engine::time::{STRAIGHT_SWING, SWING_RANGE};
 use iced::widget::{operation, Id};
 use iced::Task;
 
@@ -17,6 +19,10 @@ use crate::ui::step_grid::MAX_STEP_BARS;
 
 /// The text box a pattern's name is edited in.
 pub const RENAME_INPUT: &str = "pattern-rename";
+
+/// One step of the swing knob, a wheel notch or 4 px of drag, in tenths of a per cent: 1 %.
+/// Shift makes it a tenth of that ([`App::moved_swing`]).
+pub const SWING_STEP: i32 = 10;
 
 /// What the pattern controls report.
 #[derive(Debug, Clone)]
@@ -36,6 +42,11 @@ pub enum PatternMessage {
     Delete,
     /// The rack header's "−" (−1) and "+" (1): the selected pattern a bar shorter or longer.
     Bars(i32),
+    /// The wheel on the rack header's swing: the selected pattern's swing moved this many
+    /// tenths of a per cent ([`SWING_STEP`] a notch), a tenth as far with Shift held.
+    SwingBy(i32),
+    /// A double press on the swing: the selected pattern plays straight.
+    SwingReset,
 }
 
 /// The pattern name's menu and rename in the window.
@@ -44,6 +55,21 @@ pub(super) struct PatternUi {
     pub menu: bool,
     /// The pattern being renamed and the text typed so far.
     pub rename: Option<(PatternId, String)>,
+}
+
+/// The kind a play mode makes: patterns in pattern mode, takes in song mode.
+pub(super) fn kind_for(mode: PlayMode) -> PatternKind {
+    match mode {
+        PlayMode::Pattern => PatternKind::Pattern,
+        PlayMode::Song => PatternKind::Take,
+    }
+}
+
+/// Whether `name` is a take's name for `channel`: "<channel> take N".
+fn is_take_of(name: &str, channel: &str) -> bool {
+    name.strip_prefix(channel)
+        .and_then(|rest| rest.strip_prefix(" take "))
+        .is_some_and(|number| number.parse::<u32>().is_ok())
 }
 
 impl PatternUi {
@@ -99,6 +125,14 @@ impl App {
                 self.focus = Panel::Rack;
                 self.nudge_bars(by);
             }
+            PatternMessage::SwingBy(by) => {
+                self.focus = Panel::Rack;
+                self.set_swing(|app, swing| app.moved_swing(swing, by.into()));
+            }
+            PatternMessage::SwingReset => {
+                self.focus = Panel::Rack;
+                self.set_swing(|_, _| STRAIGHT_SWING);
+            }
         }
         Task::none()
     }
@@ -147,19 +181,99 @@ impl App {
         self.session.set_mode(self.plan_mode())
     }
 
-    /// Adds "Pattern N" (N its ID) of one bar past the last and selects it: one undo step.
+    /// Adds a blank one-bar pattern past the last, of the kind the play mode makes (a take in
+    /// song mode), and selects it: one undo step.
     fn add_pattern(&mut self) {
-        let Some(id) = self.session.project().next_pattern_id() else {
-            self.error = Some(SessionError::from(EditError::PatternIdsExhausted).to_string());
+        match self.blank_pattern(kind_for(self.mode)) {
+            Ok((edit, id)) => {
+                self.commit(edit);
+                self.select_pattern(id);
+            }
+            Err(error) => self.error = Some(SessionError::from(error).to_string()),
+        }
+    }
+
+    /// The edit that adds a blank `kind` of one bar past the last, and its ID: a pattern
+    /// "Pattern N" (N its ID), or a take named by [`new_take_name`](Self::new_take_name).
+    pub(super) fn blank_pattern(&self, kind: PatternKind) -> Result<(Edit, PatternId), EditError> {
+        let project = self.session.project();
+        let id = project
+            .next_pattern_id()
+            .ok_or(EditError::PatternIdsExhausted)?;
+        match kind {
+            PatternKind::Pattern => {
+                let add = Edit::AddPattern {
+                    id,
+                    name: format!("Pattern {}", id.0),
+                    bars: 1,
+                    copied_from: None,
+                };
+                Ok((add, id))
+            }
+            PatternKind::Take => takes::take_pattern(project, self.new_take_name(id)),
+        }
+    }
+
+    /// A take's name for pattern `id`: after the selected channel, "Kick take 2" with the first
+    /// number no pattern is named with ([`takes::take_name`]), else "Take N" (N its ID).
+    fn new_take_name(&self, id: PatternId) -> String {
+        let project = self.session.project();
+        self.selected_channel
+            .and_then(|channel| project.channels.get(&channel))
+            .map_or_else(
+                || format!("Take {}", id.0),
+                |channel| takes::take_name(project, &channel.name),
+            )
+    }
+
+    /// The edit that makes blank pattern `id` a `kind` in place, named as that kind is: a
+    /// pattern "Pattern N" (N its ID); a take after the selected channel ([`new_take_name`]),
+    /// unless it is a take named for that channel already, or a take and no channel is
+    /// selected. `None` when it is that kind with that name already (or is gone).
+    ///
+    /// [`new_take_name`]: Self::new_take_name
+    pub(super) fn reshape(&self, id: PatternId, kind: PatternKind) -> Option<Edit> {
+        let project = self.session.project();
+        let pattern = project.patterns.get(&id)?;
+        let channel = self
+            .selected_channel
+            .and_then(|channel| project.channels.get(&channel));
+        let keeps_name = match (kind, channel) {
+            (PatternKind::Pattern, _) => false,
+            (PatternKind::Take, Some(channel)) => is_take_of(&pattern.name, &channel.name),
+            (PatternKind::Take, None) => pattern.kind == PatternKind::Take,
+        };
+        let name = match kind {
+            _ if keeps_name => pattern.name.clone(),
+            PatternKind::Pattern => format!("Pattern {}", id.0),
+            PatternKind::Take => self.new_take_name(id),
+        };
+        let mut edits = Vec::new();
+        if pattern.kind != kind {
+            edits.push(Edit::SetPatternKind { pattern: id, kind });
+        }
+        if pattern.name != name {
+            edits.push(Edit::RenamePattern { id, name });
+        }
+        (!edits.is_empty()).then_some(Edit::Transaction(edits))
+    }
+
+    /// The play mode switched: a blank pattern selected becomes, in place, the kind the new mode
+    /// makes, so the right arrow and Record go on from it; one with notes stays as it is. One undo
+    /// step.
+    pub(super) fn reshape_selected_for_mode(&mut self) {
+        let kind = kind_for(self.mode);
+        let Some(id) = self.pattern else {
             return;
         };
-        self.commit(Edit::AddPattern {
-            id,
-            name: format!("Pattern {}", id.0),
-            bars: 1,
-            copied_from: None,
-        });
-        self.select_pattern(id);
+        let project = self.session.project();
+        let blank = project
+            .patterns
+            .get(&id)
+            .is_some_and(|pattern| pattern.notes.is_empty() && pattern.kind != kind);
+        if let Some(edit) = self.reshape(id, kind).filter(|_| blank) {
+            self.commit(edit);
+        }
     }
 
     /// Renames the pattern being renamed to the text typed, trimmed; blank text keeps the name.
@@ -224,8 +338,46 @@ impl App {
         Some((pattern, u32::try_from(bars).ok()?))
     }
 
-    /// The rack's header for the selected pattern: its bar count, and whether "−" and "+" can
-    /// change it, by the rule the presses go through.
+    /// The selected pattern and its swing, in tenths of a per cent.
+    fn selected_swing(&self) -> Option<(PatternId, u16)> {
+        let pattern = self.pattern?;
+        let shown = self.session.project().patterns.get(&pattern)?;
+        Some((pattern, shown.swing_tenths))
+    }
+
+    /// Sets the selected pattern's swing to what `to` makes of it, one undo step, when that
+    /// changes it: a press at a stop takes no step.
+    fn set_swing(&mut self, to: impl FnOnce(&Self, u16) -> u16) {
+        let Some((pattern, swing)) = self.selected_swing() else {
+            return;
+        };
+        let swing_tenths = to(self, swing);
+        if swing_tenths != swing {
+            self.commit(Edit::SetPatternSwing {
+                pattern,
+                swing_tenths,
+            });
+        }
+    }
+
+    /// `swing` moved `tenths` tenths of a per cent, a tenth as far while Shift is held (0.1 %
+    /// for 1 %), kept inside [`SWING_RANGE`]. The one rule the swing's wheel and drag go by.
+    pub(super) fn moved_swing(&self, swing: u16, tenths: i64) -> u16 {
+        let tenths = if self.modifiers.shift() {
+            tenths / i64::from(SWING_STEP)
+        } else {
+            tenths
+        };
+        let (low, high) = (*SWING_RANGE.start(), *SWING_RANGE.end());
+        let moved = i64::from(swing)
+            .saturating_add(tenths)
+            .clamp(i64::from(low), i64::from(high));
+        // The clamp keeps it inside the u16 swing range.
+        u16::try_from(moved).unwrap_or(low)
+    }
+
+    /// The rack's header for the selected pattern: its bar count, whether "−" and "+" can
+    /// change it, by the rule the presses go through, and its swing.
     pub(super) fn rack_header(&self) -> RackHeader {
         let bars = self
             .pattern
@@ -235,6 +387,7 @@ impl App {
             bars,
             shorter: self.nudged_bars(-1).is_some(),
             longer: self.nudged_bars(1).is_some(),
+            swing: self.selected_swing().map(|(_, swing)| swing),
         }
     }
 }
@@ -296,6 +449,42 @@ mod tests {
         assert_eq!(app.session.mode(), PlanMode::Pattern(PatternId(3)));
         let _ = app.update(Message::Redo);
         assert_eq!(patterns(&app).len(), 4);
+    }
+
+    // Its twin in song mode: walking leaves blank Pattern 3 a pattern, and past the last the arrow
+    // makes a blank take of one bar named after the selected channel, "kick take 1", which it
+    // selects while the song stays what plays; one undo step. With no channel selected the take is
+    // "Take 4" (its ID).
+    #[test]
+    fn next_past_the_last_pattern_in_song_mode_makes_a_new_take() {
+        let mut app = fixture_app("p2_three_patterns.json");
+        let _ = app.update(Message::ModeSelected(PlayMode::Song));
+        send(&mut app, PatternMessage::Next);
+        send(&mut app, PatternMessage::Next);
+        assert_eq!(app.pattern, Some(PatternId(3)));
+        let kind = |app: &App, id: u32| app.session.project().patterns[&PatternId(id)].kind;
+        assert_eq!(
+            kind(&app, 3),
+            PatternKind::Pattern,
+            "walking changes nothing"
+        );
+        send(&mut app, PatternMessage::Next);
+        assert_eq!(
+            patterns(&app)[3],
+            (4, "kick take 1".to_owned(), 1, 0),
+            "past the last"
+        );
+        assert_eq!(kind(&app, 4), PatternKind::Take);
+        assert_eq!(app.pattern, Some(PatternId(4)));
+        assert_eq!(app.session.mode(), PlanMode::Song);
+        let _ = app.update(Message::Undo);
+        assert_eq!(patterns(&app).len(), 3);
+        assert_eq!(app.pattern, Some(PatternId(3)));
+
+        app.selected_channel = None;
+        send(&mut app, PatternMessage::Next);
+        assert_eq!(patterns(&app)[3], (4, "Take 4".to_owned(), 1, 0));
+        assert_eq!(kind(&app, 4), PatternKind::Take);
     }
 
     // A right press on the pattern's name opens its menu; Rename turns the name into a text box

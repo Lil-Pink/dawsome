@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 
 use dawsome_engine::compile::Compiler;
 use dawsome_engine::dsp::sampler::SampleBuffer;
-use dawsome_engine::edit::takes::{self, SongTake};
+use dawsome_engine::edit::takes;
 use dawsome_engine::edit::{self, Edit, History, Touched};
 use dawsome_engine::plan::PlayMode;
-use dawsome_engine::project::{ChannelId, ClipId, Note, PatternId, Project, TrackId};
+use dawsome_engine::project::{ChannelId, Note, PatternId, PatternKind, Project, TrackId};
 use dawsome_engine::realtime;
 use dawsome_engine::time::Ticks;
 use dawsome_engine::transport::Control;
@@ -76,34 +76,37 @@ fn round_trip(project: &mut Project, history: &mut History, before: &str, after:
     project.validate().expect("valid");
 }
 
-/// A song take from `marker` as the window makes it: the pattern and its clip one bar long,
-/// grown a bar at a time to `bars`, then `notes` written one by one as they end.
-fn song_take(project: &mut Project, marker: i64, bars: u32, notes: &[Note]) -> (SongTake, Live) {
+/// A song take as the window makes it: its pattern one bar long and no clip, grown a bar at a
+/// time to `bars`, then `notes` (ticks from the take's start) written one by one as they end.
+fn song_take(project: &mut Project, bars: u32, notes: &[Note]) -> (PatternId, Live) {
     let name = takes::take_name(project, &project.channels[&ChannelId(1)].name.clone());
-    let take = takes::song_take(project, name, Ticks(marker), None, 1).expect("builds");
+    let (edit, pattern) = takes::take_pattern(project, name).expect("builds");
     let mut live = Live::default();
-    live.apply(project, take.edit.clone());
+    live.apply(project, edit);
     for held in 2..=bars {
         live.apply(
             project,
-            takes::take_length(take.pattern, take.clip, held, project.ppq),
+            Edit::SetPatternBars {
+                pattern,
+                bars: held,
+            },
         );
     }
     for note in notes {
         let write = Edit::ReplaceNotes {
-            pattern: take.pattern,
+            pattern,
             remove: Vec::new(),
             add: vec![note.clone()],
         };
         live.apply(project, write);
     }
-    (take, live)
+    (pattern, live)
 }
 
-// Known answer (2) in the engine: pattern "Kick take 1" and its clip from tick 384 on track 2
-// (track 1 holds a clip over the take's first bar), grown to 6 bars, the four notes written as
-// they ended: the generator's document byte for byte. The take is one undo step that gives the
-// project back byte for byte (the pattern, clip and counters gone); its redo makes it again.
+// Known answer (2) in the engine: pattern "Kick take 1" from the take at tick 384, no clip (the
+// user places it), grown to 6 bars, the four notes written as they ended: the generator's
+// document byte for byte, the song's end where it was. The take is one undo step that gives the
+// project back byte for byte (the pattern and its counter gone); its redo makes it again.
 #[test]
 fn p17_a_song_take_from_its_edits_is_one_undo_step() {
     let want = &expected()["song"];
@@ -112,24 +115,18 @@ fn p17_a_song_take_from_its_edits_is_one_undo_step() {
     let after = text(want["document"].as_str().expect("a file"));
     let notes = notes_of("p17_song_after.json", 2);
     let bars = u32::try_from(number(&want["bars"])).expect("fits");
-    let (take, live) = song_take(&mut project, number(&want["marker"]), bars, &notes);
-    assert_eq!(
-        (take.pattern, take.clip, take.track),
-        (
-            PatternId(2),
-            ClipId(2),
-            TrackId(u32::try_from(number(&want["track"])).expect("fits"))
-        )
-    );
+    let clips = project.playlist.clips.clone();
+    let (pattern, live) = song_take(&mut project, bars, &notes);
+    assert_eq!(pattern, PatternId(2));
     assert_eq!(project.patterns[&PatternId(2)].name, "Kick take 1");
-    assert!(!take.added_track, "track 2 had room");
+    assert_eq!(project.playlist.clips, clips, "no clip placed");
     assert_eq!(project.playlist.end(), Ticks(number(&want["song_end"])));
     let mut history = History::default();
     history.record_as(live.step(), "Record notes");
     round_trip(&mut project, &mut history, &before, &after);
 }
 
-// Known answer (5): a take from tick 3072, past the song's end, lands on track 1, free there.
+// Known answer (5): a take from tick 3072, past the song's end, places no clip either.
 #[test]
 fn p17_a_song_take_past_the_end_lands_on_the_first_free_track() {
     let want = &expected()["song_past_end"];
@@ -137,8 +134,9 @@ fn p17_a_song_take_past_the_end_lands_on_the_first_free_track() {
     let before = json(&project);
     let notes = notes_of("p17_song_past_end_after.json", 2);
     let bars = u32::try_from(number(&want["bars"])).expect("fits");
-    let (take, live) = song_take(&mut project, number(&want["marker"]), bars, &notes);
-    assert_eq!(take.track, TrackId(1));
+    let clips = project.playlist.clips.clone();
+    let (_, live) = song_take(&mut project, bars, &notes);
+    assert_eq!(project.playlist.clips, clips, "no clip placed");
     let mut history = History::default();
     history.record_as(live.step(), "Record notes");
     let after = text(want["document"].as_str().expect("a file"));
@@ -151,7 +149,7 @@ fn p17_a_song_take_past_the_end_lands_on_the_first_free_track() {
 fn a_song_take_with_no_note_is_taken_back_whole() {
     let mut project = fixture("p17_song.json");
     let before = json(&project);
-    let (_, live) = song_take(&mut project, 384, 3, &[]);
+    let (_, live) = song_take(&mut project, 3, &[]);
     assert_eq!(project.patterns.len(), 2);
     edit::apply(&mut project, live.step()).expect("takes it back");
     assert_eq!(json(&project), before);
@@ -290,8 +288,9 @@ fn p17_audio_takes_from_their_edit() {
 }
 
 // Known answer (4) in the engine: the captured phrase laid into pattern 1, which grows to two
-// bars to hold it; and the same phrase as pattern "Keys take 1" and its clip from tick 384. Each
-// one undo step.
+// bars to hold it; and the same phrase as take "Keys take 2" and its clip from tick 384, after
+// the switch to song mode made blank Pattern 1 take "Keys take 1" (applied here as the window
+// applies it). Each one undo step.
 #[test]
 fn p17_capture_from_its_edits() {
     let want = &expected()["capture"];
@@ -304,8 +303,21 @@ fn p17_capture_from_its_edits() {
     let after = text(want["document"].as_str().expect("a file"));
     round_trip(&mut project, &mut history, &before, &after);
     let mut project = fixture("p17_capture.json");
+    let switch = Edit::Transaction(vec![
+        Edit::SetPatternKind {
+            pattern: PatternId(1),
+            kind: PatternKind::Take,
+        },
+        Edit::RenamePattern {
+            id: PatternId(1),
+            name: "Keys take 1".into(),
+        },
+    ]);
+    edit::apply(&mut project, switch).expect("switches");
+    let before = json(&project);
     let mut history = History::default();
     let name = takes::take_name(&project, "Keys");
+    assert_eq!(name, "Keys take 2");
     let start = Ticks(number(&want["song_start"]));
     let edit = takes::capture_song(&project, name, start, None, notes)
         .expect("builds")

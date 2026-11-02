@@ -160,7 +160,7 @@ impl Feed for InputFeed {
 
     /// Whole frames only: the callback pushes a frame one value at a time, so a read that took
     /// everything could end on half a frame and the writer would count one frame short (a
-    /// resampled take then lost its last frame, gate 2026-10-24). The odd value waits for the
+    /// resampled take then lost its last frame). The odd value waits for the
     /// next read.
     fn read_into(&mut self, out: &mut Vec<f32>) -> usize {
         let values = self.ring.slots() / self.channels * self.channels;
@@ -230,7 +230,7 @@ const MOST_CUSHION_BLOCKS: u64 = 8;
 /// The shortest stretch, in seconds, a live monitor watches what waits in it before its cushion
 /// may shrink by an input block. Why it shrinks at all: the two clocks always drift a little,
 /// so over a long session dry spells come one after another, and a cushion that only grew would
-/// stay many blocks behind once the clocks matched again (found 2026-10-23).
+/// stay many blocks behind once the clocks matched again.
 const SHRINK_AFTER_SECONDS: u64 = 10;
 
 /// How a monitor feed paces a live input, whose frames arrive in device buffers while the player
@@ -834,7 +834,7 @@ pub fn drain(
 #[cfg(test)]
 mod tests {
 
-    // Gate 2026-10-24: the callback pushes a frame value by value, so a drain under load saw
+    // The callback pushes a frame value by value, so a drain under load saw
     // half a stereo frame and a 48 → 44.1 kHz take came out 1411 frames instead of 1412.
     #[test]
     fn an_input_feed_reads_whole_frames_only() {
@@ -1148,7 +1148,7 @@ mod tests {
     /// The base cushion at [`PACED`]: one input block and one output block.
     const PACED_BASE: u64 = 2 * PACED.1 as u64;
 
-    // Found 2026-10-23: input buffers that come late now and then, in order (a
+    // Input buffers that come late now and then, in order (a
     // simulation: 0.2 % of them 600..1500 frames late for 30 min, 1 % of them 400..1100
     // late for 10 min, at 48 kHz). The monitor runs dry no more often than before the cushion
     // could shrink (c65b6c8's read, measured here with the shrink switched off: 1 and 2 dry

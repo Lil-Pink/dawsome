@@ -1,8 +1,8 @@
 //! The clock the canvases read to spot a double-press: the wall clock, except under a test
 //! that holds it ([`hold`]). Why: a test drives two clicks through the real widgets, and on a
 //! loaded machine (the full suite beside a build) the second came more than the double-press
-//! time after the first, so the roll's double-click test drew a note instead of deleting one
-//! (gate, 2026-10-25). Held, the clicks a test sends are as close as it says they are.
+//! time after the first, so the roll's double-click test drew a note instead of deleting one.
+//! Held, the clicks a test sends are as close as it says they are.
 
 use std::time::Instant;
 

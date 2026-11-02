@@ -618,7 +618,7 @@ fn a_note_off_after_a_selection_change_ends_the_right_note() {
 }
 
 // 16 live voices; a repeated (channel, key) restarts its voice, a 17th note takes over the oldest.
-// Seek leaves live notes ringing; Stop ends them (since 2026-10-28, as every note), and so does
+// Seek leaves live notes ringing; Stop ends them (as it ends every note), and so does
 // LiveNotesOff.
 #[test]
 fn the_live_pool_holds_16_voices_and_stop_or_live_notes_off_clears_it() {

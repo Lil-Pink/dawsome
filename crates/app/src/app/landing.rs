@@ -1,8 +1,8 @@
-//! Where the window lands on the music. A document opens on what its playlist plays (the rule
-//! asked for on 2026-10-25: "the piano roll always opens on Track 1"), not on an empty first
-//! pattern, which played nothing; a double-click on a pattern clip shows that clip's pattern in
-//! the piano roll. The opening rule reads the document alone, so it holds for files saved before
-//! it, and nothing is written for it.
+//! Where the window lands on the music. A document opens on what its playlist plays (the piano
+//! roll on the pattern of Track 1's first clip), not on an empty first pattern, which played
+//! nothing; a double-click on a pattern clip shows that clip's pattern in the piano roll. The
+//! opening rule reads the document alone, so it holds for files saved before it, and nothing
+//! is written for it.
 
 use dawsome_engine::project::{ChannelId, ClipId, ClipItem, PatternId, Project};
 use dawsome_engine::time::{self, Ticks};
@@ -151,8 +151,8 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use dawsome_engine::project::{Channel, Clip, Note, Pattern, TrackId};
-    use dawsome_engine::time::MilliBpm;
+    use dawsome_engine::project::{Channel, Clip, Note, Pattern, PatternKind, TrackId};
+    use dawsome_engine::time::{MilliBpm, STRAIGHT_SWING};
     use iced::{mouse, Point, Size};
 
     use super::super::files::FileMessage;
@@ -202,6 +202,8 @@ mod tests {
                 name: "Pattern 1".to_owned(),
                 length_bars: 1,
                 copied_from: None,
+                swing_tenths: STRAIGHT_SWING,
+                kind: PatternKind::Pattern,
                 notes: Vec::new(),
             },
         );
@@ -213,6 +215,8 @@ mod tests {
             name: name.to_owned(),
             length_bars: 4,
             copied_from: None,
+            swing_tenths: STRAIGHT_SWING,
+            kind: PatternKind::Pattern,
             notes,
         };
         project.patterns.insert(PatternId(id), pattern);
@@ -246,10 +250,9 @@ mod tests {
             .unwrap_or_default()
     }
 
-    // A real saved song (2026-10-25), in small: an empty
-    // "Pattern 1", the piano's take as pattern 2 with notes on channel 1 alone, its one clip on
-    // Track 1. It opens on pattern 2, the piano (channel 1) selected, in song mode, and the
-    // roll shows the take's notes.
+    // A real saved song, in small: an empty "Pattern 1", the piano's take as pattern 2 with notes
+    // on channel 1 alone, its one clip on Track 1. It opens on pattern 2, the piano (channel 1)
+    // selected, in song mode, and the roll shows the take's notes.
     #[test]
     fn a_take_on_track_1_opens_on_its_pattern_in_song_mode() {
         let mut project = base();
@@ -426,6 +429,8 @@ mod tests {
             name: "Verse".to_owned(),
             length_bars: 8,
             copied_from: None,
+            swing_tenths: STRAIGHT_SWING,
+            kind: PatternKind::Pattern,
             notes: vec![note(3, 1152, 48), note(3, 1536, 72)],
         };
         project.patterns.insert(PatternId(2), verse);

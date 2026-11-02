@@ -326,8 +326,9 @@ fn bars_holding(notes: &[Note], ppq: u16) -> Result<u32, SmfError> {
 }
 
 /// The notes `channel` plays in `pattern` (those inside the pattern, which are heard) as a
-/// format 0 file at [`EXPORT_PPQ`], on MIDI channel 1. Tick 0 carries the tempo, 4/4 and the
-/// pattern's name; a step (length 0) is written one step long; velocity is round-half-up(v ·
+/// format 0 file at [`EXPORT_PPQ`], on MIDI channel 1, each where the pattern's swing plays it
+/// ([`time::swung_note`]). Tick 0 carries the tempo, 4/4 and the pattern's name; a step (length
+/// 0) is written one step long, or as long as swing leaves it; velocity is round-half-up(v ·
 /// 128) from 1 to 127; at one tick note-offs come first, then by key; the track ends on its last
 /// event.
 pub fn export(
@@ -356,9 +357,11 @@ pub fn export(
         .iter()
         .filter(|note| note.channel == channel && note.start < end)
     {
-        let length = if note.length.0 > 0 { note.length } else { step };
-        let on = to_file(note.start.0)?;
-        let off = to_file(note.start.0.saturating_add(length.0))?;
+        let (tick, heard) =
+            time::swung_note(note.start, note.length, shown.swing_tenths, project.ppq);
+        let length = if heard.0 > 0 { heard } else { step };
+        let on = to_file(tick.0)?;
+        let off = to_file(tick.0.saturating_add(length.0))?;
         push_note(
             &mut timed,
             on,
@@ -504,11 +507,12 @@ struct SongNote {
 /// The playlist as a format 1 file at [`EXPORT_PPQ`]: track 0 the conductor (the tempo and 4/4
 /// on tick 0), then one track per channel in rack order, named after it, every note on MIDI
 /// channel 1. Each pattern clip that plays is unrolled as playback plays it ([`song`]): a clip
-/// longer than its pattern repeats it, a note sounds its length (a step hit one step), cut at its
-/// clip's end. An audio or input channel gets its track, empty. Per channel and key, in (tick,
-/// clip order) order: a second note on the same tick is left out (the first stays), and a note
-/// still sounding when the same key starts again ends there, since a MIDI file cannot tell two
-/// such notes apart. Velocity and the order on one tick are as [`export`] writes them; every
+/// longer than its pattern repeats it, a note plays where the pattern's swing plays it and
+/// sounds its length (a step hit one step, less when swing moved it), cut at its clip's end. An
+/// audio or input channel gets its track, empty. Per channel and key, in (tick, clip order)
+/// order: a second note on the same tick is left out (the first stays), and a note still
+/// sounding when the same key starts again ends there, since a MIDI file cannot tell two such
+/// notes apart. Velocity and the order on one tick are as [`export`] writes them; every
 /// track ends on the song's last note-off.
 pub fn export_song(project: &Project) -> Result<SongFile, SmfError> {
     let to_file = |ticks: Ticks| {

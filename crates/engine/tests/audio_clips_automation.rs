@@ -16,11 +16,11 @@ use dawsome_engine::plan::{PlanUpdate, PlayMode};
 use dawsome_engine::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Registry};
 use dawsome_engine::project::{
     AutomationId, AutomationPoint, AutomationTarget, ChannelId, Clip, ClipId, Curve, Effect,
-    EffectId, InsertId, Pattern, PatternId, ProcessorRef, Project, TrackId,
+    EffectId, InsertId, Pattern, PatternId, PatternKind, ProcessorRef, Project, TrackId,
 };
 use dawsome_engine::realtime::{self, EngineEvent, Player, RealtimeLink};
 use dawsome_engine::source::{ClipSource, MemorySource, SourceRead};
-use dawsome_engine::time::{MilliBpm, Ticks};
+use dawsome_engine::time::{MilliBpm, Ticks, STRAIGHT_SWING};
 use dawsome_engine::transport::{Control, ParamTarget};
 
 #[path = "../../../tests/support/counting_allocator.rs"]
@@ -447,9 +447,9 @@ fn sixty_four_automations() -> Project {
 }
 
 // Audio-rate automation is cheap enough for many: 64 of them render 10 s of audio (441000
-// frames, 512 a block) in under 5 % of realtime. Measured 2026-10-21 on this workspace's build
-// machine: 115 ms in the test build, 103 ms with --release; 1088 ms and 1008 ms when every
-// frame worked out its segment's bounds again.
+// frames, 512 a block) in under 5 % of realtime. Measured on the workspace's build machine:
+// 115 ms in the test build, 103 ms with --release; 1088 ms and 1008 ms when every frame worked
+// out its segment's bounds again.
 #[test]
 fn sixty_four_audio_rate_automations_render_well_under_realtime() {
     let project = sixty_four_automations();
@@ -533,6 +533,8 @@ fn grid_project() -> Project {
             name: "Pattern 1".into(),
             length_bars: 1,
             copied_from: None,
+            swing_tenths: STRAIGHT_SWING,
+            kind: PatternKind::Pattern,
             notes: Vec::new(),
         },
     );

@@ -12,10 +12,10 @@
 use std::collections::BTreeSet;
 
 use dawsome_engine::project::Note;
-use dawsome_engine::time::Ticks;
+use dawsome_engine::time::{self, Ticks, SWING_RANGE};
 
 use crate::ui::note_gesture::{
-    key_of, moved, snap_nearest, velocity_of_steps, velocity_steps, Change, Target, VELOCITY_STEPS,
+    key_of, moved, velocity_of_steps, velocity_steps, Change, Target, VELOCITY_STEPS,
 };
 use crate::ui::piano_layout::drawn_length;
 
@@ -63,32 +63,66 @@ pub fn nudged(target: &Target, notes: &[Note], ticks: Ticks) -> Change {
     moved(target, notes, ticks, 0)
 }
 
-/// How a quantize moves notes: to the nearest line of `grid`, `strength` per cent of the way
-/// (0 to 100), the starts only or the ends too.
+/// How a quantize moves notes: to the nearest line of `grid` with every second line swung late
+/// by `swing_tenths`, `strength` per cent of the way (0 to 100), the starts only or the ends
+/// too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Quantize {
     pub grid: Ticks,
     pub strength: u8,
+    /// How much of each pair of lines the first line's span takes, in tenths of a per cent, as
+    /// a pattern's swing: 500 straight, 667 a triplet feel, 750 dotted.
+    pub swing_tenths: u16,
     pub ends: bool,
 }
 
 impl Quantize {
-    /// The grid at full strength, starts only.
+    /// The grid at full strength, straight, starts only.
     #[cfg(test)]
     pub fn full(grid: Ticks) -> Self {
         Self {
             grid,
             strength: 100,
+            swing_tenths: time::STRAIGHT_SWING,
             ends: false,
         }
     }
 
-    /// `strength` per cent of the way from `tick` to the grid line nearest it (half way rounds
-    /// up), the ticks rounded half away from zero.
+    /// `strength` per cent of the way from `tick` to the swung grid line nearest it (half way
+    /// goes to the later line), the ticks rounded half away from zero.
     fn toward_grid(self, tick: i64) -> i64 {
-        let line = snap_nearest(Ticks(tick), self.grid).0;
+        let swing = self
+            .swing_tenths
+            .clamp(*SWING_RANGE.start(), *SWING_RANGE.end());
+        let line = swung_nearest(Ticks(tick), self.grid, swing).0;
         tick + share(line - tick, i64::from(self.strength.min(100)))
     }
+}
+
+/// The line nearest `tick` of a grid whose every second line plays late, as a pattern's swing
+/// plays its second 16ths: each pair of lines, `2·grid` ticks, has one at its start and one
+/// [`time::swing_offset`] into it. Half way goes to the later line, as
+/// [`snap_nearest`](crate::ui::note_gesture::snap_nearest) rounds; straight (offset = grid) this
+/// is `snap_nearest`.
+fn swung_nearest(tick: Ticks, grid: Ticks, swing_tenths: u16) -> Ticks {
+    let grid = Ticks(grid.0.max(1));
+    let pair = 2 * grid.0;
+    let late = time::swing_offset(grid, swing_tenths).0;
+    let into = tick.0.rem_euclid(pair);
+    let base = tick.0 - into;
+    // Twice `into` against the two lines' sum keeps the half-way point exact in integers.
+    let line = if into < late {
+        if 2 * into < late {
+            base
+        } else {
+            base + late
+        }
+    } else if 2 * into < late + pair {
+        base + late
+    } else {
+        base + pair
+    };
+    Ticks(line)
 }
 
 /// `percent` per cent of `ticks`, rounded half away from zero: 50 % of −5 is −3.
@@ -389,6 +423,7 @@ mod tests {
     use dawsome_engine::project::{ChannelId, PatternId, Project};
 
     use super::*;
+    use crate::ui::note_gesture::snap_nearest;
 
     const STEP: Ticks = Ticks(24);
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
@@ -613,6 +648,105 @@ mod tests {
         round_trip(&notes, |target, notes| {
             quantized(target, notes, Quantize::full(STEP))
         });
+    }
+
+    // Swing, spec swing.md §7's table worked by hand: P = 2U, d = floor(P·S/1000), r = t mod P;
+    // the pair's lines are at its start and d into it, a tie going to the later one.
+    // U 24 at 66.7 %, d 32: 30 → 32 (2 vs 30); 14 → 0 (14 vs 18); 16 → 32 (16 vs 16, a tie).
+    // U 24 at 75 %, d 36: 41 → 36 (5 vs 7); 42 → 48 (6 vs 6, a tie, the next pair's line).
+    // 27 at 66.7 % and 50 % strength: 5 to 32, 2.5 rounded away from zero, 30.
+    // U 48 at 66.7 %, d = floor(64.032) = 64: 70 → 64 (6 vs 26).
+    // Straight, d 24: 12 is half way and goes to 24, as snap_nearest.
+    // Messy, the boundary 2r = d: at 75 % 17 → 0 (17 vs 19), 18 → 36 (18 vs 18, a tie); at
+    // 52.1 % d = floor(25.008) = 25, odd, so no tie: 12 → 0 (12 vs 13; straight it goes to
+    // 24), 13 → 25 (13 vs 12), and past the off line 36 → 25 (11 vs 12), 37 → 48 (12 vs 11).
+    #[test]
+    fn quantizing_with_swing_moves_starts_to_the_nearest_swung_line() {
+        let cases: [(i64, i64, u16, u8, i64); 15] = [
+            (30, 24, 667, 100, 32),
+            (14, 24, 667, 100, 0),
+            (16, 24, 667, 100, 32),
+            (41, 24, 750, 100, 36),
+            (42, 24, 750, 100, 48),
+            (27, 24, 667, 50, 30),
+            (70, 48, 667, 100, 64),
+            (12, 24, 500, 100, 24),
+            (17, 24, 750, 100, 0),
+            (18, 24, 750, 100, 36),
+            (12, 24, 521, 100, 0),
+            (13, 24, 521, 100, 25),
+            (36, 24, 521, 100, 25),
+            (37, 24, 521, 100, 48),
+            (30, 24, 667, 0, 30),
+        ];
+        for (tick, grid, swing_tenths, strength, expected) in cases {
+            let notes = [n(tick, 10, 60)];
+            let how = Quantize {
+                grid: Ticks(grid),
+                strength,
+                swing_tenths,
+                ..Quantize::full(STEP)
+            };
+            assert_eq!(
+                after(&notes, &quantized(&on(&notes), &notes, how)),
+                [n(expected, 10, 60)],
+                "{tick} on a {grid}-tick grid at {swing_tenths} and {strength} %"
+            );
+        }
+        let triplet = Quantize {
+            swing_tenths: 667,
+            ..Quantize::full(STEP)
+        };
+        round_trip(&[n(30, 10, 60), n(100, 20, 62)], |target, notes| {
+            quantized(target, notes, triplet)
+        });
+    }
+
+    // Saturated: in a 4-bar pattern (end 1536) at 75 %, 1530 lies 42 into the pair at 1488:
+    // 2r = 84 = d + P, a tie, so it goes to the next pair's line, 1536, the pattern's end, and
+    // wraps to 0. Ends too at 66.7 %: 24..44 starts 24 into its pair (24 vs 8: 32) and ends at
+    // 44 (2r = 88 ≥ 80: 48, 4 vs 12), so 32..48, 16 long.
+    #[test]
+    fn quantizing_with_swing_wraps_at_the_end_and_moves_ends_to_their_own_line() {
+        let late = [n(1530, 10, 60)];
+        let four_bars = Target {
+            length_bars: 4,
+            ..on(&late)
+        };
+        let dotted = Quantize {
+            swing_tenths: 750,
+            ..Quantize::full(STEP)
+        };
+        assert_eq!(
+            after(&late, &quantized(&four_bars, &late, dotted)),
+            [n(0, 10, 60)]
+        );
+        let notes = [n(24, 20, 60)];
+        let both = Quantize {
+            swing_tenths: 667,
+            ends: true,
+            ..Quantize::full(STEP)
+        };
+        assert_eq!(
+            after(&notes, &quantized(&on(&notes), &notes, both)),
+            [n(32, 16, 60)]
+        );
+    }
+
+    // At 50 % the swung line is the plain nearest one: d = U, and both halves' ties fall where
+    // snap_nearest's "half way rounds up" puts them, odd units too. Every tick over a whole
+    // pair of each unit.
+    #[test]
+    fn straight_swing_is_the_plain_nearest_line() {
+        for unit in [3, 6, 12, 24, 48, 96, 384] {
+            for tick in 0..800 {
+                assert_eq!(
+                    swung_nearest(Ticks(tick), Ticks(unit), time::STRAIGHT_SWING),
+                    snap_nearest(Ticks(tick), Ticks(unit)),
+                    "tick {tick}, unit {unit}"
+                );
+            }
+        }
     }
 
     // Unit 24: 0..48 → 0..24, 24..48; 30..60 → 30..48, 48..60. A step hit and a note one unit

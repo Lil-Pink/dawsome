@@ -410,8 +410,8 @@ fn notes_past_the_sounding_table_are_dropped_and_counted() {
 
 // 8 again, after a reset: a Seek back to tick 0 with the table full ends the 512 sounding notes
 // on frame 0 of the next call, so the 600 notes starting again find the table empty: 512 are
-// sent and 88 more dropped, twice the generator's answer in all. (Review 2026-10-26: the starts
-// were recorded before the ended notes left the table, and all 600 were dropped.)
+// sent and 88 more dropped, twice the generator's answer in all. (Before, the starts were
+// recorded before the ended notes left the table, and all 600 were dropped.)
 #[test]
 fn a_reset_with_the_table_full_makes_room_for_the_next_calls_notes() {
     let expected = expected();
@@ -460,7 +460,7 @@ fn a_live_note_on_and_off_in_one_call_ends() {
 // Play and Seek reset the plugin (its notes end on frame 0 of the next call and processing
 // stops and starts again), but a key held across them is still down: its note sounds on in the
 // call after each, from frame 0 (gain 0.5 × velocity 0.5 × cos 0), until its note-off. Stop
-// ends every live note (since 2026-10-28): the call after it is silent, the key's own release
+// ends every live note: the call after it is silent, the key's own release
 // then ends nothing, and the key struck again plays.
 #[test]
 fn a_held_live_note_sounds_on_through_play_and_seek_and_ends_at_stop() {
@@ -608,7 +608,7 @@ fn the_latency_and_the_transport_a_plugin_is_given_are_reported() {
 // are: the Latency class's "Wild" (parameter 16) reports -0.5, 1.5 and NaN on its audio calls
 // 0, 1, 2 (crates/test-plugin-vst3's `WILD`), and its controller keeps what it is given, so
 // `value` shows what the host passed on. By hand: -0.5 is held to 0.0, 1.5 to 1.0, and a NaN is
-// not passed on, so the controller keeps the 1.0 it had. (Review 2026-10-26.)
+// not passed on, so the controller keeps the 1.0 it had.
 #[test]
 fn a_plugins_output_values_reach_its_controller_inside_0_to_1() {
     let expected = expected();

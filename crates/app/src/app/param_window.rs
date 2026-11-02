@@ -747,13 +747,13 @@ mod tests {
 
     // The list under the wheel, through the window's own widgets (the CPU renderer), each turn
     // three lines (iced's 60 px a line: 180 px), 200 turns down then 200 up, with the window's
-    // timer between (a guard written hunting the 2026-10-27 crash "opened the parameters, scrolled
+    // timer between (a guard written hunting a crash reported as "opened the parameters, scrolled
     // down", which none of these reproduced). None: the list's line, and no scroll. Two rows fit:
     // no scroll reported. 1,150 rows (27,600 px; JS80P lists that many before its MIDI mapping
     // hides most): 180, 360, ... by 180 px a turn, stopping short of 27,600 by less than the
-    // window's 480 px, the last report building the last row; more turns there report nothing;
-    // back up to 0. Row 6's text the plugin refuses: its value to three places, "0.250"; row 7's
-    // its own, "7: 0.25".
+    // window's 480 px, the last report building the last row; more turns there report nothing; back
+    // up to 0. Row 6's text the plugin refuses: its value to three places, "0.250"; row 7's its
+    // own, "7: 0.25".
     #[test]
     fn the_wheel_scrolls_the_parameter_list_to_its_end_and_back() {
         let over_list = Point::new(200.0, view::HEADING_HEIGHT + 100.0);

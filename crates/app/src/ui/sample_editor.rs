@@ -3,7 +3,7 @@
 //! name over its file, length, rate and sides (how many clips play it, how many edits it has,
 //! and Revert); the tool row (Play and Stop, Fit, Zoom to selection, Snap to zero, Undo and
 //! Redo, Save as new file… and Close at the right); the op bar (Crop, Delete, Silence, Fade
-//! in, Fade out, the Gain readout dragged up or down, Normalize, Reverse); the waveform under
+//! in, Fade out, the Gain readout dragged left or right, Normalize, Reverse); the waveform under
 //! its ruler (the window of the clip it was opened from bracketed there), a lane a side, the
 //! selection shaded, the cursor a line and Play's position
 //! another, values past full scale in the warning color; its scroll bar; the foot line, what
@@ -104,9 +104,9 @@ pub enum SampleEditorMessage {
     /// Snap to zero, switched.
     Snap,
     Op(EditorOp),
-    /// A press on the Gain readout: a drag up or down sets the gain, its release applies it.
+    /// A press on the Gain readout: a drag left or right sets the gain, its release applies it.
     GainPressed,
-    /// The Gain readout's drag at this window y.
+    /// The Gain readout's drag at this window x.
     GainMoved(f32),
     GainReleased,
     /// Revert: the sound as its file is.
@@ -496,7 +496,7 @@ fn tool(
     hover_area(button, Hover::SampleEditor(part))
 }
 
-/// The Gain readout: "Gain", then the gain a drag up or down has set, on the readouts' glass.
+/// The Gain readout: "Gain", then the gain a drag left or right has set, on the readouts' glass.
 fn gain_readout(gain: i32, ready: bool) -> Element<'static, Message> {
     let value = gain_text(gain);
     let color = if ready {
@@ -520,7 +520,7 @@ fn gain_readout(gain: i32, ready: bool) -> Element<'static, Message> {
     let readout = row![text("Gain").size(BUTTON_SIZE).color(style::TEXT_DIM), glass]
         .spacing(4)
         .align_y(Center);
-    let area = mouse_area(readout).interaction(mouse::Interaction::ResizingVertically);
+    let area = mouse_area(readout).interaction(mouse::Interaction::ResizingHorizontally);
     let area = if ready {
         area.on_press(Message::SampleEditor(SampleEditorMessage::GainPressed))
     } else {

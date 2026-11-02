@@ -1,6 +1,6 @@
 //! MIDI out across a plan swapped away and back within the latency (notes sent ahead of their
 //! natural frame): a note sent before the swaps and still sounding is struck once, not ended and
-//! struck again where the plan came back (found 2026-10-25).
+//! struck again where the plan came back.
 //!
 //! Expected frames are worked by hand from the rules (s(t) = floor(t·60·sr·1000/(mbpm·ppq)),
 //! 44100 Hz, 128 BPM, ppq 96, so 200 ms = 8820 frames): a note is sent its latency before its
@@ -16,9 +16,11 @@ use dawsome_engine::dsp::sampler::SampleBuffer;
 use dawsome_engine::edit::{self, Edit, Touched};
 use dawsome_engine::midi_out::{MidiOutEvent, MidiOutReader};
 use dawsome_engine::plan::{PlanUpdate, PlayMode};
-use dawsome_engine::project::{ChannelId, LoopRange, Note, Pattern, PatternId, Project};
+use dawsome_engine::project::{
+    ChannelId, LoopRange, Note, Pattern, PatternId, PatternKind, Project,
+};
 use dawsome_engine::realtime::{self, Player, RealtimeLink};
-use dawsome_engine::time::Ticks;
+use dawsome_engine::time::{Ticks, STRAIGHT_SWING};
 use dawsome_engine::transport::Control;
 
 const SYNTH: ChannelId = ChannelId(1);
@@ -188,6 +190,8 @@ fn pattern_and_back(latency_ms: i32) -> Rig {
             name: "Pattern 2".into(),
             length_bars: 1,
             copied_from: None,
+            swing_tenths: STRAIGHT_SWING,
+            kind: PatternKind::Pattern,
             notes: vec![note(96, 48, 62), note(192, 48, 64)],
         },
     );

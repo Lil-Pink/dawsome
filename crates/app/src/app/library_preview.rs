@@ -1,12 +1,14 @@
-//! The Library's preview: a single click on an instrument row (a starter kit sound, an
-//! instrument set or a plugin instrument) makes it the row the typing keyboard and the MIDI
-//! devices no link routes play, before it is added to the rack. A channel of the plans alone
-//! plays it ([`Session::set_preview`](crate::session::Session::set_preview), under
-//! [`PREVIEW_CHANNEL`]): never in the document, its saves, its exports, the rack or the
-//! history, at the default sound settings, into the master. Its row shows a mark while it is
-//! the preview. It ends when a rack channel is selected, an instrument is added, another part
-//! of the Library is pressed, or another document opens; its notes end with it. A plugin's
-//! preview instance is the only one: the next preview replaces it.
+//! The Library's preview: a single click on an instrument row (a starter kit sound, an instrument
+//! set or a plugin instrument) makes it the row the typing keyboard and the MIDI devices no link
+//! routes play, before it is added to the rack. A channel of the plans alone plays it
+//! ([`Session::set_preview`](crate::session::Session::set_preview), under [`PREVIEW_CHANNEL`]):
+//! never in the document, its saves, its exports, the rack or the history, at the default sound
+//! settings, into the master. Its row shows a mark while it is the preview. It ends when a rack
+//! channel is selected, an instrument is added, another part of the Library is pressed, another
+//! document opens, or a take of notes starts (which records the selected channel); its notes end
+//! with it. While a take of notes runs a click previews nothing, saying the preview waits for Stop:
+//! the keys stay on the channel the take records. A plugin's preview instance is the only one: the
+//! next preview replaces it.
 
 use dawsome_engine::project::{Channel, ChannelId};
 
@@ -16,6 +18,10 @@ use crate::session::{SessionError, PREVIEW_CHANNEL};
 use crate::ui::browser::Pick;
 use crate::ui::browser_model::Playing;
 use crate::ui::library::InstrumentSet;
+
+/// What the notices say when a Library row is clicked while a take of notes runs.
+pub const PREVIEW_AFTER_STOP: &str =
+    "Library preview waits for Stop: the keys play the channel being recorded";
 
 /// What the hint bar says while the Library previews a row and nothing is under the cursor,
 /// naming the key that switches the computer keyboard as bound.
@@ -31,6 +37,12 @@ impl App {
     /// channel plays the typing keyboard's notes and the devices' no link routes from now on.
     /// Anything else, or a kit sound with no folder to be written to, previews nothing.
     pub(super) fn preview_in_library(&mut self, pick: &Pick) -> Result<(), SessionError> {
+        // Why not under a take of notes: the take records the selected channel, and a preview's
+        // notes are none of the document's, so every key the preview took would be lost.
+        if self.recording.taking_notes() {
+            self.notice = Some(PREVIEW_AFTER_STOP.to_owned());
+            return Ok(());
+        }
         let Some((playing, channel)) = self.preview_of(pick) else {
             return Ok(());
         };

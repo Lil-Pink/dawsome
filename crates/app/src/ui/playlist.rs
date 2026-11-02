@@ -696,6 +696,16 @@ fn device_line(x: f32, scale_factor: f32) -> (f32, f32) {
     (left, width)
 }
 
+/// Where a note mark for a note at `x` starts so that all of it lies in its clip's `body` (from
+/// right of the clip's start line to where the next clip's start line begins).
+///
+/// Why: a note on a pattern's first tick lies on the clip's start line, and one on its last
+/// steps reaches past the clip's end once zoomed out; drawn there, the line being near the
+/// lane's color, the mark read as a note outside the clip, or as the end of the clip before.
+fn mark_left(x: f32, body: (f32, f32)) -> f32 {
+    x.min(body.1 - NOTE_MARK_WIDTH).max(body.0)
+}
+
 /// The visible x span of ticks `start..end` on a canvas `width` wide, right of the headers.
 fn visible_span(grid: &Grid, start: Ticks, end: Ticks, width: f32) -> Option<(f32, f32)> {
     let left = grid.x_of(start).max(TRACK_HEADER_WIDTH);
@@ -1375,6 +1385,12 @@ impl Tracks<'_> {
         let visible_to = grid.tick_at(span.1).0.saturating_add(1).min(clip.end().0);
         let offset = clip.offset.0.rem_euclid(length);
         let base = clip.start.0 - offset;
+        // Every mark inside the clip's body: right of its start line, ending where the next
+        // clip's start line would begin (`draw_clip` draws both, near the lane's color).
+        let rect = playlist_layout::clip_rect(grid, clip, top);
+        let (line, line_width) = device_line(rect.x, self.scale_factor);
+        let (next_line, _) = device_line(rect.x + rect.width, self.scale_factor);
+        let body = (line + line_width, next_line);
         let first_pass = (visible_from - base).div_euclid(length);
         let last_pass = (visible_to - base).div_euclid(length);
         for pass in first_pass..=last_pass {
@@ -1398,7 +1414,7 @@ impl Tracks<'_> {
                     + index as f32 * pitch
                     + (pitch - height) / 2.0;
                 frame.fill_rectangle(
-                    Point::new(x, y),
+                    Point::new(mark_left(x, body), y),
                     Size::new(NOTE_MARK_WIDTH, height),
                     style::CLIP_NOTE,
                 );
@@ -1678,6 +1694,27 @@ mod tests {
         assert_eq!(label_interval(&grid(2), 10_000), 1);
         assert_eq!(label_interval(&grid(1), 10_000), 2);
         assert_eq!(label_interval(&grid(0), 10_000), 4);
+    }
+
+    // A clip from x 248 to 312 at scale 1: its start line is pixel 248, so its body runs from
+    // 249 to the next clip's line at 312. A note on its first tick (x 248) is drawn from 249, one
+    // mid-clip where it lies, one at 311.5 (its last ticks, zoomed out) from 310, ending at 312.
+    // At 1.7 a clip from 184 to 248: its line is device pixels 312-313 (183.53 to 184.71
+    // logical), the next clip's starts on pixel 421 (247.65), so a first-tick note starts at
+    // 184.71 and a last-tick one at 245.65, two logical pixels before 247.65.
+    #[test]
+    fn note_marks_stay_inside_their_clip() {
+        let body = (249.0, 312.0);
+        assert_eq!(mark_left(248.0, body), 249.0);
+        assert_eq!(mark_left(280.0, body), 280.0);
+        assert_eq!(mark_left(311.5, body), 310.0);
+        let (line, width) = device_line(184.0, 1.7);
+        let (next, _) = device_line(248.0, 1.7);
+        let body = (line + width, next);
+        assert!((body.0 - 314.0 / 1.7).abs() < 1e-4, "{body:?}");
+        assert!((body.1 - 421.0 / 1.7).abs() < 1e-4, "{body:?}");
+        assert_eq!(mark_left(184.0, body), body.0);
+        assert_eq!(mark_left(247.9, body), body.1 - 2.0);
     }
 
     // At scale 1 a line is the logical pixel itself; at 1.7, x 184 is device pixel 312.8, so

@@ -1,8 +1,7 @@
 //! `dawsome render --midi-out-log` refuses a block longer than the MIDI-out ring (4096 messages,
 //! read after every call): a longer call could fill the ring and drop notes, so the log would
-//! depend on the block size. Without the log the block size is free, as before (found
-//! 2026-10-25). Every run gets per-user folders of its own under the
-//! test's temp dir, and no MIDI device is opened.
+//! depend on the block size. Without the log the block size is free, as before. Every run gets
+//! per-user folders of its own under the test's temp dir, and no MIDI device is opened.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -787,13 +787,12 @@ mod tests {
         press(app, at);
     }
 
-    // B8, 2026-10-27 (a device picked showed chosen, and "Playing through:" still named the one
-    // before until the next Play): Settings lists "System default" first and the
-    // devices the host lists; a press on one saves it and plays through it at once, the line
-    // naming it. A device that does not open leaves the sound on the one before: the choice
-    // goes back to it (saved so too), and why shows under the list until the next choice. With
-    // no stream open (the player parked), a choice is tried at once; Play still opens a device
-    // chosen while none could.
+    // A device picked showed chosen while "Playing through:" still named the one before until the
+    // next Play. Settings lists "System default" first and the devices the host lists; a press on
+    // one saves it and plays through it at once, the line naming it. A device that does not open
+    // leaves the sound on the one before: the choice goes back to it (saved so too), and why shows
+    // under the list until the next choice. With no stream open (the player parked), a choice is
+    // tried at once; Play still opens a device chosen while none could.
     #[test]
     fn an_output_chosen_in_settings_plays_at_once() {
         let listed = ["Speakers", "USB Audio", "Gone"].map(ListedOutput::named);

@@ -1,5 +1,5 @@
 //! A sound's edits ([`SoundEdits`]) applied to its frames ([`apply`]), before anything plays
-//! them, and where an edge snaps to the nearest zero crossing ([`zero_crossing`]). Pure: the
+//! them, and where an edge snaps to the nearest zero crossing ([`zero_crossing_in`]). Pure: the
 //! media layer runs them on a decoded file (on a worker, or before an offline render), and the
 //! audio thread only ever plays what they gave.
 //!
@@ -114,17 +114,12 @@ pub fn apply_in_place(samples: &mut Vec<f32>, sides: usize, op: &SoundOp) {
     }
 }
 
-/// The frame an edge at `frame` of `sound` snaps to: the nearest boundary within `reach` frames
-/// where the sound (its sides summed) crosses zero, the earlier of two as near; `frame` itself
-/// when none is in reach. A frame whose sum is exactly 0 is a boundary at it; a sign change
-/// between frames i − 1 and i is a boundary at i. Why the sum: an edge cuts both sides at once,
-/// and where their sum crosses is where the cut is quietest.
-pub fn zero_crossing(sound: &SampleBuffer, frame: u64, reach: u64) -> u64 {
-    zero_crossing_in(sound.samples(), usize::from(sound.channels()), frame, reach)
-}
-
-/// As [`zero_crossing`], in the interleaved `samples` of `sides` sides (1 or 2): a sound held
-/// as frames to edit (the sample editor's).
+/// The frame an edge at `frame` of a sound snaps to, the sound being the interleaved `samples`
+/// of `sides` sides (1 or 2), as the sample editor holds the frames it edits: the nearest
+/// boundary within `reach` frames where the sound (its sides summed) crosses zero, the earlier
+/// of two as near; `frame` itself when none is in reach. A frame whose sum is exactly 0 is a
+/// boundary at it; a sign change between frames i − 1 and i is a boundary at i. Why the sum: an
+/// edge cuts both sides at once, and where their sum crosses is where the cut is quietest.
 pub fn zero_crossing_in(samples: &[f32], sides: usize, frame: u64, reach: u64) -> u64 {
     let sides = sides.max(1);
     let frames = (samples.len() / sides) as u64;
@@ -198,6 +193,11 @@ mod tests {
         assert_eq!(whole.frames(), 47);
         let same = apply_ops(&sound, &[]);
         assert!(std::ptr::eq(same.samples(), sound.samples()));
+    }
+
+    /// [`zero_crossing_in`] on the frames of `sound`.
+    fn zero_crossing(sound: &SampleBuffer, frame: u64, reach: u64) -> u64 {
+        zero_crossing_in(sound.samples(), usize::from(sound.channels()), frame, reach)
     }
 
     // A frame reached from both sides at once: the earlier boundary wins; nothing within reach

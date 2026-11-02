@@ -1,7 +1,8 @@
 //! The song as the notes it plays: each pattern clip's notes on the song ticks it plays them,
-//! a clip longer than its pattern repeating it, each note ending after its length (a step hit
-//! after one step) or at its clip's end, whichever comes first. These are the rules playback
-//! follows (`render`'s clip window and gate); the exports read the song through here, playback
+//! where the pattern's swing plays them, a clip longer than its pattern repeating it, each note
+//! ending after its length (a step hit after one step, or less when swing moved it) or at its
+//! clip's end, whichever comes first. These are the rules playback follows (the compiled
+//! events, `render`'s clip window and gate); the exports read the song through here, playback
 //! never does.
 
 use crate::project::{ChannelId, Clip, Project};
@@ -20,9 +21,11 @@ pub struct PlayedNote {
 }
 
 /// The notes `clip` plays, by (start, channel, key): song tick T in the clip plays the
-/// pattern's tick (T − start + offset) mod L, L the pattern's length. Notes at or past the
-/// pattern's end are silent and left out. A clip that is not a pattern clip plays none. Whether
-/// the clip plays at all (muted, or its track) is [`Project::clip_plays`]'s to say.
+/// pattern's tick (T − start + offset) mod L, L the pattern's length, a note's tick and length
+/// being where the pattern's swing plays it ([`time::swung_note`]). Notes at or past the
+/// pattern's end are silent and left out (by their stored tick, as the compiler leaves them). A
+/// clip that is not a pattern clip plays none. Whether the clip plays at all (muted, or its
+/// track) is [`Project::clip_plays`]'s to say.
 pub fn clip_notes(project: &Project, clip: &Clip) -> Vec<PlayedNote> {
     let Some(pattern) = clip.pattern().and_then(|id| project.patterns.get(&id)) else {
         return Vec::new();
@@ -39,13 +42,11 @@ pub fn clip_notes(project: &Project, clip: &Clip) -> Vec<PlayedNote> {
         .iter()
         .filter(|note| (0..length).contains(&note.start.0))
     {
-        let gate = if note.length.0 > 0 {
-            note.length.0
-        } else {
-            step
-        };
+        let (tick, heard) =
+            time::swung_note(note.start, note.length, pattern.swing_tenths, project.ppq);
+        let gate = if heard.0 > 0 { heard.0 } else { step };
         // The first song tick that plays the note's tick, then every pattern length on.
-        let mut start = Some(clip.start.0 + (note.start.0 - offset).rem_euclid(length));
+        let mut start = Some(clip.start.0 + (tick.0 - offset).rem_euclid(length));
         while let Some(at) = start.filter(|&at| at < end) {
             notes.push(PlayedNote {
                 channel: note.channel,

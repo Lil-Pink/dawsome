@@ -141,8 +141,8 @@ fn p11_what_real_libraries_write_renders_its_known_answer() {
 
 /// Known answers (gen_p11_expected.py): a velocity that is no whole number of 128ths plays the
 /// nearest byte, not the one below. layers at 0.505 (64.64) plays byte 65, its loud layer;
-/// pad at 0.7 (89.6) plays byte 90, at gain (90/127)^2 (found 2026-10-22: a
-/// mutant rounding down passed every test).
+/// pad at 0.7 (89.6) plays byte 90, at gain (90/127)^2 (a mutant rounding down passed every
+/// test before this one).
 #[test]
 fn p11_a_velocity_between_bytes_plays_the_nearest() {
     let want = expected();
@@ -278,7 +278,10 @@ fn a_shipped_set_renders_the_same_from_any_data_folder_that_holds_it() {
         .iter()
         .all(|frame| *frame == [0.0; 2]));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let looked = empty.join("dawsome/instruments/layers/layers.sfz");
+    // Joined as the program joins it (`ShippedRoots::file`): the user's data folder, then the
+    // reference's own `instruments/layers/layers.sfz` in one piece, so on Windows the separator
+    // after `dawsome` is the platform's and the ones inside the reference stay `/`.
+    let looked = empty.join("dawsome").join("instruments/layers/layers.sfz");
     assert!(stderr.contains(&looked.display().to_string()), "{stderr}");
 }
 
@@ -363,7 +366,7 @@ fn one_note_project(instrument: &str) -> String {
 /// A set's includes and sounds stay inside its folder (the main file's): an include climbing
 /// out with `..`, one naming an absolute path and a sound outside are each left out, and
 /// reported. Nothing of the files outside reaches the warning, and the region of the outside
-/// sound stays silent (found 2026-10-22).
+/// sound stays silent.
 #[test]
 fn a_set_reads_nothing_outside_its_folder() {
     let dir = temp_dir("confined");
@@ -455,7 +458,7 @@ fn an_include_naming_a_pipe_is_refused_without_waiting() {
 
 /// A `dawsome:` reference names a file inside the data folder's `dawsome/` only: one climbing
 /// out with `..`, and one naming an absolute path, play nothing and say they cannot be read
-/// (found 2026-10-22). Before, both played the file they named.
+/// Before, both played the file they named.
 #[test]
 fn a_shipped_reference_names_nothing_outside_the_data_folder() {
     let dir = temp_dir("reference_escape");

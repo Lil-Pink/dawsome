@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 
 use dawsome_engine::edit::{self, Edit, EditError, Touched};
 use dawsome_engine::project::{
-    ClipId, LoadError, Pattern, PatternId, Project, ValidationError, MAX_PATTERNS,
+    ClipId, LoadError, Pattern, PatternId, PatternKind, Project, ValidationError, MAX_PATTERNS,
 };
-use dawsome_engine::time::MilliBpm;
+use dawsome_engine::time::{MilliBpm, STRAIGHT_SWING};
 
 const F1: &str = include_str!("../../../tests/fixtures/f1_four_on_floor.json");
 const P2_THREE: &str = include_str!("../../../tests/fixtures/p2_three_patterns.json");
@@ -308,6 +308,8 @@ fn every_refused_pattern_edit_changes_nothing() {
                     name: "Again".to_owned(),
                     length_bars: 1,
                     copied_from: None,
+                    swing_tenths: STRAIGHT_SWING,
+                    kind: PatternKind::Pattern,
                     notes: Vec::new(),
                 },
             },
@@ -376,4 +378,41 @@ fn a_project_holds_at_most_999_patterns() {
     edit::apply(&mut project, Edit::DeletePattern { id: PatternId(2) }).expect("deletes");
     edit::apply(&mut project, add(1000, "Pattern 1000", 1)).expect("adds pattern 1000");
     assert_eq!(project.patterns.len(), 999);
+}
+
+// The right arrow in song mode adds a take, written as `"kind":"take"` after
+// the length (a pattern writes no kind, so every file without takes keeps its bytes); the add
+// is one step whose undo gives the bytes and the ID back. A blank pattern made a take and back
+// is one edit each way; `UnaddPattern` refuses a take, since the `AddPattern` that would undo
+// it adds a pattern.
+#[test]
+fn a_take_is_a_pattern_of_its_own_kind_and_flips_back_byte_for_byte() {
+    let mut project = load(P2_THREE);
+    let with_take = json(&project).replace(
+        P2_PATTERN_3,
+        &format!(
+            r#"{P2_PATTERN_3},{{"id":4,"name":"kick take 1","length_bars":1,"kind":"take","notes":[]}}"#
+        ),
+    );
+    let (add, id) = edit::takes::take_pattern(&project, "kick take 1".to_owned()).expect("builds");
+    assert_eq!(id, PatternId(4));
+    walks(&mut project, add, &with_take);
+    assert_eq!(project.patterns[&PatternId(4)].kind, PatternKind::Take);
+    assert_eq!(
+        edit::apply(&mut project, Edit::UnaddPattern { id: PatternId(4) }).map(drop),
+        Err(EditError::PatternNotRemovable(4))
+    );
+
+    let mut project = load(P2_THREE);
+    let flipped = json(&project).replace(
+        P2_PATTERN_3,
+        r#"{"id":3,"name":"Pattern 3","length_bars":1,"kind":"take","notes":[]}"#,
+    );
+    let to_take = Edit::SetPatternKind {
+        pattern: PatternId(3),
+        kind: PatternKind::Take,
+    };
+    assert_eq!(walks(&mut project, to_take, &flipped), touched_pattern(3));
+    let reloaded = load(&flipped);
+    assert_eq!(reloaded.patterns[&PatternId(3)].kind, PatternKind::Take);
 }

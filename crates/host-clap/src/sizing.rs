@@ -244,7 +244,7 @@ mod tests {
         assert!(!sizing.resizable());
     }
 
-    // The settling on Surge XT's case seen in use (2026-10-28: kept 400x300, an interface that
+    // The settling on Surge XT's case seen in use (kept 400x300, an interface that
     // holds its aspect). The user drags our window to 600x300, then 700x300, each answered by
     // putting it back (at 100 and 200 ms) and each answer lost in the drag; the drag ends with
     // nothing more told. 250 ms quiet after the last ask, 400x300 is asked again at 450 ms, not

@@ -175,8 +175,8 @@ impl HostGuiImpl for SharedState {
 
     fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
         // A zero side is refused rather than taken: packed, 0x0 is the word that means "no
-        // request", so a yes here would be a request that never arrives (found by review,
-        // 2026-10-28), and a window has no zero side to give.
+        // request", so a yes here would be a request that never arrives, and a window has no
+        // zero side to give.
         if !resize_has_both_sides(new_size.width, new_size.height) {
             return Err(HostError::Message("a plugin window has no zero side"));
         }

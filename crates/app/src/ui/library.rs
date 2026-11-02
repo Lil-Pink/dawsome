@@ -792,7 +792,8 @@ mod tests {
 
     // The system's loopback ("Midi Through", as ALSA lists it on every Linux
     // machine beside a keyboard) lists last, after the devices and the unplugged links, marked
-    // a loopback and tickable as any port ("a keyboard shows as two devices", 2026-10-23).
+    // a loopback and tickable as any port (unmarked, it made one keyboard look like two
+    // devices).
     #[test]
     fn the_midi_through_loopback_lists_last() {
         let inputs = MidiInputs::Named(BTreeSet::from([

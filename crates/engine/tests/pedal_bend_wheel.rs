@@ -808,9 +808,8 @@ fn the_bends_path_never_touches_the_heap() {
             player.process(&mut buffer);
         });
         assert_eq!(calls, 0, "{name}: the bend's path touched the heap");
-        // Found 2026-10-26: bent on A under its note, then
-        // on B under B's, the bend rests on A (A's voice re-based, A's MIDI out sent E0 00 40);
-        // bent back on A, it rests on B. A heap call nowhere.
+        // Bent on A under its note, then on B under B's, the bend rests on A (A's voice re-based,
+        // A's MIDI out sent E0 00 40); bent back on A, it rests on B. A heap call nowhere.
         let _ = sent(&mut reader);
         let calls = heap_calls_during(|| {
             assert!(port.push_to(a, on(69)));
@@ -968,9 +967,9 @@ fn the_wheels_path_never_touches_the_heap() {
             player.process(&mut buffer);
         });
         assert_eq!(calls, 0, "{name}: the wheel's path touched the heap");
-        // Found 2026-10-26: moved on A under its note, then
-        // on B under B's, the wheel rests on A (A's voice unswung or its filter closed, A's MIDI
-        // out sent B0 01 00); moved back on A, it rests on B. A heap call nowhere.
+        // Moved on A under its note, then on B under B's, the wheel rests on A (A's voice unswung
+        // or its filter closed, A's MIDI out sent B0 01 00); moved back on A, it rests on B. A heap
+        // call nowhere.
         let _ = sent(&mut reader);
         let calls = heap_calls_during(|| {
             assert!(port.push_to(a, on(69)));
@@ -1070,11 +1069,10 @@ fn a_note_after(project: &Project, controls: &[(ChannelId, LiveControl)]) -> Vec
     out[note * CALL..].to_vec()
 }
 
-// Found 2026-10-26: a device's wheel and bend
-// follow the channel its notes play, so a control moved back to rest after the selection moved
-// lands on the new channel. Then it rests on every other channel the device held it off rest:
-// A's next note plays as one no control ever touched, bit for bit (the case found: 20475 and
-// 20479 of 20480 frames differed).
+// A device's wheel and bend follow the channel its notes play, so a control moved back to rest
+// after the selection moved lands on the new channel. Then it rests on every other channel the
+// device held it off rest: A's next note plays as one no control ever touched, bit for bit (the
+// case found: 20475 and 20479 of 20480 frames differed).
 #[test]
 fn a_wheel_or_bend_back_at_rest_on_another_channel_rests_the_one_left() {
     let project = two_sines();
@@ -1098,10 +1096,9 @@ fn a_wheel_or_bend_back_at_rest_on_another_channel_rests_the_one_left() {
     assert!(moved == untouched, "A rests when B takes the bend");
 }
 
-// Found 2026-10-26: the rest on the channel left gives the
-// same bits however the calls are cut: the two cases found (the wheel at 100 or the bend at
-// +8191 on A, back to rest on B, then A's note), and the controls hopping between A and B under
-// a note sounding on each, so each rest re-bases a voice.
+// The rest on the channel left gives the same bits however the calls are cut: the two cases found
+// (the wheel at 100 or the bend at +8191 on A, back to rest on B, then A's note), and the controls
+// hopping between A and B under a note sounding on each, so each rest re-bases a voice.
 #[test]
 fn a_rest_on_the_channel_left_gives_the_same_bits_however_the_calls_are_cut() {
     use LiveControl::{Bend, Wheel};

@@ -36,6 +36,9 @@ Expected values come from the rules written out below, never from engine code:
             |L|*1000/rate rounded half up; one that could not be shifted: "Take N not shifted:
             shorter than the input latency"
   undo      a take is one undo step, which gives the document back byte for byte
+  switch    song mode chosen with blank Pattern 1 selected makes it, in place, a take named
+            after the selected channel, the input: "Oriole take 1"
+            ("kind": "take"), one undo step of its own before the take
 
   p23_feed_clean.wav   the burst on both sides, LATE_CLEAN = 1234 frames late
   p23_feed_messy.wav   the right side: the burst at -0.2 (polarity inverted), 2205 frames late,
@@ -182,6 +185,8 @@ def after_take(start, offset, length):
                             "sample": "samples/p23_line take 1.wav", "volume": 1.0, "pan": 0.0,
                             "mute": False})
     doc["next_channel_id"] = 3
+    doc["patterns"] = [{"id": 1, "name": "Oriole take 1", "length_bars": 1, "kind": "take",
+                        "notes": []}]
     clip = {"id": 1, "track": 1, "start": start, "length": length, "kind": "audio", "channel": 2}
     if offset: clip["frame_offset"] = offset
     doc["playlist"] = {"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]}

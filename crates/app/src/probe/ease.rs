@@ -314,8 +314,8 @@ fn b2_the_piano_roll_keeps_its_grid_under_three_other_panels() {
 
 // B4: p8_notice with no audio device at 1000, 960, 930, 900 and 880 px (the p8 shots): along
 // y 12 (6d K5, pin moved from y 20: the buttons are 40 px tall from y 8), Edit is one box where
-// the toolbar places it, the menus' spacing right of File and left of Help (File first since
-// 2026-10-27: Edit stood a line right of Retry, File after it).
+// the toolbar places it, the menus' spacing right of File and left of Help (File first; Edit
+// used to stand a line right of Retry, File after it).
 #[test]
 #[ignore = "needs screenshots of p8_notice with no audio device: scripts/ui-check.sh takes them and runs this"]
 fn b4_the_edit_button_is_whole_between_retry_and_file() {

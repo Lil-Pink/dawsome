@@ -15,7 +15,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use dawsome_engine::processor::Editor;
 use dawsome_engine::project::{ChannelId, EffectId, InsertId, ProcessorOwner};
 use dawsome_engine::realtime::Player;
 use dawsome_host_clap::catalogue::{self, Catalogue, FileRecord, FileStatus, PluginFormat};
@@ -569,14 +568,18 @@ fn a_vst3_channel_says_so_in_the_rack_and_its_window() {
 }
 
 /// Set in the child [`a_vst3_editor_without_x11_names_the_reason_and_opens_the_panel`] starts.
+#[cfg(target_os = "linux")]
 const NO_X11_CHILD: &str = "DAWSOME_APP_NO_X11_CHILD";
 
 // The View class, whose editor takes our window type, on a desktop without X11 (a
 // child of this test binary with no DISPLAY): opening its window puts the reason in the toolbar
 // and opens its parameter window, as before; the test sine, which has no editor, opens its
-// parameter window with no notice (gen_p29's no_display reason).
+// parameter window with no notice (gen_p29's no_display reason). Linux only: Windows opens plugin
+// windows with Win32, so there is no X11 to be missing.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_vst3_editor_without_x11_names_the_reason_and_opens_the_panel() {
+    use dawsome_engine::processor::Editor;
     let test = "a_vst3_editor_without_x11_names_the_reason_and_opens_the_panel";
     if std::env::var_os(NO_X11_CHILD).is_none() {
         let name = format!("app::vst3_tests::{test}");

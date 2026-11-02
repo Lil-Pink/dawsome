@@ -1,7 +1,7 @@
 //! MIDI out across changes made while the song plays, with a latency (notes sent ahead of their
 //! natural frame): a tempo change and a plan that changes the loop or the pattern played send each
 //! note once, none twice and none skipped; and a cloned channel does not share its source's MIDI
-//! out (cases found 2026-10-25, a pattern switch among them).
+//! out (a pattern switch among the cases).
 //!
 //! Expected frames are worked by hand from the rules (s(t) = floor(t·60·sr·1000/(mbpm·ppq)),
 //! 44100 Hz, 128 BPM, ppq 96, so 200 ms = 8820 frames): a note is sent its latency before its
@@ -17,9 +17,11 @@ use dawsome_engine::dsp::sampler::SampleBuffer;
 use dawsome_engine::edit::{self, Edit, Touched};
 use dawsome_engine::midi_out::{MidiOutEvent, MidiOutReader};
 use dawsome_engine::plan::{PlanUpdate, PlayMode};
-use dawsome_engine::project::{ChannelId, LoopRange, Note, Pattern, PatternId, Project};
+use dawsome_engine::project::{
+    ChannelId, LoopRange, Note, Pattern, PatternId, PatternKind, Project,
+};
 use dawsome_engine::realtime::{self, LiveNote, Player, RealtimeLink};
-use dawsome_engine::time::{MilliBpm, Ticks};
+use dawsome_engine::time::{MilliBpm, Ticks, STRAIGHT_SWING};
 use dawsome_engine::transport::Control;
 
 #[path = "../../../tests/support/counting_allocator.rs"]
@@ -375,6 +377,8 @@ fn another_pattern_without_a_jump_sends_its_notes_due_within_the_latency() {
             name: "Pattern 2".into(),
             length_bars: 1,
             copied_from: None,
+            swing_tenths: STRAIGHT_SWING,
+            kind: PatternKind::Pattern,
             notes: vec![note(96, 48, 62), note(192, 48, 64)],
         },
     );

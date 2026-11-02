@@ -232,12 +232,11 @@ fn two_live_sines() -> (Project, ClapHost, Compiler, RealtimeLink, Player) {
     (project, host, compiler, link, player)
 }
 
-// Found 2026-10-26: a muted plugin channel is still sent a
-// device's bend, its rest included, so its plugin holds what the device does when it is
-// unmuted. Bend +8191 on A (the test sine keeps a bend for the next note), A muted, the bend
-// back at rest (on B, which rests A, or on A itself), A unmuted: A's next A4 plays the unbent
-// formula 0.25·cos(τ·440·n/48000) from its note-on (by hand: gain 0.5 × velocity 0.5), not the
-// bent one, 0.25·cos(τ·440·2^(8191/49152)·n/48000).
+// A muted plugin channel is still sent a device's bend, its rest included, so its plugin holds what
+// the device does when it is unmuted. Bend +8191 on A (the test sine keeps a bend for the next
+// note), A muted, the bend back at rest (on B, which rests A, or on A itself), A unmuted: A's next
+// A4 plays the unbent formula 0.25·cos(τ·440·n/48000) from its note-on (by hand: gain 0.5 ×
+// velocity 0.5), not the bent one, 0.25·cos(τ·440·2^(8191/49152)·n/48000).
 #[test]
 fn a_muted_plugin_channel_hears_the_bend_go_back_to_rest() {
     let (a, b) = (ChannelId(1), ChannelId(2));
@@ -281,7 +280,7 @@ fn a_muted_plugin_channel_hears_the_bend_go_back_to_rest() {
 
 // Play and Seek reset the plugin, but a key held across them is still down: its note sounds on
 // in the call after each, from frame 0 (gain 0.5 × velocity 0.5 × cos 0), until its note-off.
-// Stop ends every live note (since 2026-10-28): the call after it is silent, the key's own
+// Stop ends every live note: the call after it is silent, the key's own
 // release then ends nothing, and the key struck again plays. A note-on still waiting when Play
 // comes sounds once, and its note-off ends it.
 #[test]

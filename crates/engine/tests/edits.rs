@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use dawsome_engine::compile::Compiler;
 use dawsome_engine::dsp::sampler::SampleBuffer;
-use dawsome_engine::edit::{self, Edit, EditError, History, Touched};
+use dawsome_engine::edit::{self, copies, Edit, EditError, History, Touched};
 use dawsome_engine::plan::{NoteEvent, PlanUpdate, PlayMode};
 use dawsome_engine::project::{
     ChannelId, Clip, ClipId, ClipItem, EffectId, InsertId, LoopRange, Note, PatternId,
@@ -1712,4 +1712,117 @@ fn mixer_edits_recompile_no_pattern() {
             "{edit:?} recompiled pattern 1"
         );
     }
+}
+
+// ---------- Swing: a pattern's swing as an edit (tests/fixtures/gen_p31_expected.py) ----------
+
+const P31_PLAIN: &str = include_str!("../../../tests/fixtures/p31_plain.json");
+const P31_TRIPLET: &str = include_str!("../../../tests/fixtures/p31_triplet_120.json");
+const P31_SONG: &str = include_str!("../../../tests/fixtures/p31_song.json");
+
+fn swing(pattern: u32, swing_tenths: u16) -> Edit {
+    Edit::SetPatternSwing {
+        pattern: PatternId(pattern),
+        swing_tenths,
+    }
+}
+
+// Known answers (gen_p31): the straight 16 steps set to 66.7 % are p31_triplet_120.json byte for
+// byte (the two files differ in the swing alone), and the step's inverse gives p31_plain.json's
+// bytes back. The edit touches its pattern, so a recompile swings that pattern's events: the
+// second 16th of each pair at 48p + 32, the stored notes still on 24k.
+#[test]
+fn a_patterns_swing_is_set_and_undone_byte_for_byte() {
+    let mut project = load(P31_PLAIN);
+    let mut compiler = Compiler::new();
+    let mode = PlayMode::Pattern(PatternId(1));
+    let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
+    let before = compiler
+        .compile(&project, &Touched::default(), mode, silent)
+        .expect("compiles");
+    let applied = edit::apply(&mut project, swing(1, 667)).expect("in range");
+    assert_eq!(json(&project), canonical(P31_TRIPLET));
+    assert_eq!(applied.touched.patterns, BTreeSet::from([PatternId(1)]));
+    assert_eq!(applied.inverse, swing(1, 500));
+    let after = compiler
+        .compile(&project, &applied.touched, mode, silent)
+        .expect("compiles");
+    let straight: Vec<i64> = (0..16).map(|k| 24 * k).collect();
+    let swung: Vec<i64> = (0..8).flat_map(|p| [48 * p, 48 * p + 32]).collect();
+    assert_eq!(ticks(events(&before, 1)), straight);
+    assert_eq!(ticks(events(&after, 1)), swung);
+    edit::apply(&mut project, applied.inverse).expect("undoes");
+    assert_eq!(json(&project), canonical(P31_PLAIN));
+}
+
+// The knob's range, 50 to 75 %: 499 and 751 are refused and change nothing; an unknown pattern
+// is refused too.
+#[test]
+fn a_swing_outside_the_range_is_refused_and_changes_nothing() {
+    let mut project = load(P31_PLAIN);
+    let before = project.clone();
+    for value in [499, 751, 0, u16::MAX] {
+        assert_eq!(
+            edit::apply(&mut project, swing(1, value)),
+            Err(EditError::InvalidSwing(value))
+        );
+        assert_eq!(project, before);
+    }
+    assert_eq!(
+        edit::apply(&mut project, swing(9, 667)),
+        Err(EditError::UnknownPattern(9))
+    );
+    assert_eq!(project, before);
+    for value in [500, 750] {
+        edit::apply(&mut project, swing(1, value)).expect("in range");
+    }
+}
+
+// A clip on a swung pattern unlinked gets a copy at the same swing (the copy is built from
+// edits, not cloned, so the swing is one of them), and the step's undo gives the project's bytes
+// back: the transaction's inverse sets the copy straight before it takes the copy out.
+#[test]
+fn unlinking_a_clip_on_a_swung_pattern_keeps_the_swing_and_undoes_exactly() {
+    let mut project = load(P31_SONG);
+    let unlink = copies::unlink(&project, ClipId(1)).expect("a pattern clip");
+    let applied = edit::apply(&mut project, unlink.edit).expect("unlinks");
+    let original = &project.patterns[&PatternId(1)];
+    let copy = &project.patterns[&unlink.copy];
+    assert_eq!(unlink.copy, PatternId(2));
+    assert_eq!(copy.swing_tenths, 667);
+    assert_eq!(copy.notes, original.notes);
+    assert_eq!(copy.copied_from, Some(PatternId(1)));
+    assert_eq!(
+        project.playlist.clips[&ClipId(1)].pattern(),
+        Some(unlink.copy)
+    );
+    edit::apply(&mut project, applied.inverse).expect("undoes");
+    assert_eq!(json(&project), canonical(P31_SONG));
+}
+
+// A pattern is taken out again (`UnaddPattern`) only as it was added: one given a swing is
+// refused, as one given notes is, so the add that undoes the take-out restores it exactly.
+#[test]
+fn a_swung_pattern_cannot_be_unadded() {
+    let mut project = load(P31_PLAIN);
+    edit::apply(
+        &mut project,
+        Edit::AddPattern {
+            id: PatternId(2),
+            name: "Pattern 2".into(),
+            bars: 1,
+            copied_from: None,
+        },
+    )
+    .expect("adds");
+    edit::apply(&mut project, swing(2, 667)).expect("in range");
+    let before = project.clone();
+    assert_eq!(
+        edit::apply(&mut project, Edit::UnaddPattern { id: PatternId(2) }),
+        Err(EditError::PatternNotRemovable(2))
+    );
+    assert_eq!(project, before);
+    edit::apply(&mut project, swing(2, 500)).expect("in range");
+    edit::apply(&mut project, Edit::UnaddPattern { id: PatternId(2) }).expect("as added");
+    assert_eq!(json(&project), canonical(P31_PLAIN));
 }

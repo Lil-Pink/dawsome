@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 
 use super::{Edit, EditError};
-use crate::project::{ClipId, PatternId, Project};
+use crate::project::{ClipId, PatternId, PatternKind, Project};
+use crate::time;
 
 /// How a pattern clip shares its pattern, as the piano roll's link control shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,9 +105,11 @@ fn pattern_of(project: &Project, clip: ClipId) -> Result<PatternId, EditError> {
 }
 
 /// Gives pattern clip `clip` its own copy of its pattern: a new pattern named by [`copy_name`],
-/// with the same length and notes (every channel's), made from it, and the clip playing it. One
-/// transaction (`AddPattern`, `ReplaceNotes` when there are notes, `SetClipPattern`), whose
-/// inverse takes the clip back, the notes out and the copy away, giving its ID back.
+/// with the same length, swing, kind and notes (every channel's), made from it, and the clip
+/// playing it. One transaction (`AddPattern`, `SetPatternSwing` when it swings,
+/// `SetPatternKind` for a take, `ReplaceNotes` when there are notes, `SetClipPattern`), whose
+/// inverse takes the clip back, the notes out, the copy straight, a pattern and away, giving
+/// its ID back.
 pub fn unlink(project: &Project, clip: ClipId) -> Result<Unlink, EditError> {
     let source = pattern_of(project, clip)?;
     let shared = project
@@ -122,6 +125,18 @@ pub fn unlink(project: &Project, clip: ClipId) -> Result<Unlink, EditError> {
         bars: shared.length_bars,
         copied_from: Some(source),
     }];
+    if shared.swing_tenths != time::STRAIGHT_SWING {
+        edits.push(Edit::SetPatternSwing {
+            pattern: copy,
+            swing_tenths: shared.swing_tenths,
+        });
+    }
+    if shared.kind != PatternKind::Pattern {
+        edits.push(Edit::SetPatternKind {
+            pattern: copy,
+            kind: shared.kind,
+        });
+    }
     if !shared.notes.is_empty() {
         edits.push(Edit::ReplaceNotes {
             pattern: copy,

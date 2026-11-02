@@ -45,7 +45,7 @@ use crate::ui::sample_view::{self, Selection, View};
 use crate::ui::scroll::{self, BarMessage};
 use crate::ui::style;
 
-/// A pixel of the Gain readout's drag, in hundredths of a dB: up louder, down quieter.
+/// A pixel of the Gain readout's drag, in hundredths of a dB: right louder, left quieter.
 pub const GAIN_PER_PIXEL: f32 = 10.0;
 
 /// Play copies a part longer than this on a worker (a whole ten-minute sound is a 230 MB copy,
@@ -526,12 +526,12 @@ impl App {
                 open.gain_from = None;
                 open.gain = 0;
             }),
-            SampleEditorMessage::GainMoved(y) => self.with_editor(|open| {
+            SampleEditorMessage::GainMoved(x) => self.with_editor(|open| {
                 if !open.gain_held {
                     return;
                 }
-                let from = *open.gain_from.get_or_insert(y);
-                let gain = ((from - y) * GAIN_PER_PIXEL).round() as i32;
+                let from = *open.gain_from.get_or_insert(x);
+                let gain = ((x - from) * GAIN_PER_PIXEL).round() as i32;
                 open.gain = gain.clamp(*EDIT_GAIN_RANGE.start(), *EDIT_GAIN_RANGE.end());
             }),
             SampleEditorMessage::GainReleased => {

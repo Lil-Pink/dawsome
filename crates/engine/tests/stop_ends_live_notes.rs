@@ -133,6 +133,8 @@ fn synth_project() -> Project {
             name: "Pattern 1".into(),
             length_bars: 1,
             copied_from: None,
+            swing_tenths: dawsome_engine::time::STRAIGHT_SWING,
+            kind: dawsome_engine::project::PatternKind::Pattern,
             notes: Vec::new(),
         },
     );

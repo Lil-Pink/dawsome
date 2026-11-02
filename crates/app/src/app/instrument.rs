@@ -1032,13 +1032,12 @@ mod tests {
         }
     }
 
-    // P3 through the rack's press path: a click on the snare's name selects it and opens no
-    // window (asked for in use, 2026-10-27); a double-click opens its instrument window, a
-    // window of its own; a click on the kick's selects it and leaves the window on the snare;
-    // a double-click on the kick's retargets that window; another double-click on the kick
-    // leaves it as it was (its stored A kept); a right press still opens the channel's menu,
-    // and leaves the window where it is. Closing the window keeps the channel last clicked
-    // selected.
+    // P3 through the rack's press path: a click on the snare's name selects it and opens no window;
+    // a double-click opens its instrument window, a window of its own; a click on the kick's
+    // selects it and leaves the window on the snare; a double-click on the kick's retargets that
+    // window; another double-click on the kick leaves it as it was (its stored A kept); a right
+    // press still opens the channel's menu, and leaves the window where it is. Closing the window
+    // keeps the channel last clicked selected.
     #[test]
     fn a_double_click_on_a_channels_name_opens_its_window_and_a_click_only_selects() {
         use iced::mouse::Button;

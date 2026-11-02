@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The helper scripts/measure.sh runs, and the tables docs/performance.md shows; five commands.
+"""The helper scripts/measure.sh runs, and the tables of its results; five commands.
 
     measure.py fixtures OUT_DIR
         Writes the generated projects into OUT_DIR:
@@ -40,7 +40,7 @@
         change of each figure.
 
     measure.py compare --before RESULTS_JSON.. --after RESULTS_JSON.. [--expect SIDE:SCENARIO=LOW-HIGH]..
-        Prints the before/after tables of docs/performance.md from several runs of each build
+        Prints the before/after tables from several runs of each build
         (the results.json of each, in the order they were taken): every figure the mean of the
         first two runs per scenario that ran undisturbed, with its change (and, for CPU and
         context switches, the change in per cent); then the runs set aside, and how far the two
@@ -259,7 +259,7 @@ def sample(pid, warmup, duration):
 # Updates per second a scenario's window makes undisturbed: the 500 ms health check while idle,
 # the 30 Hz playhead timer and the health check while playing; and how many times above or
 # below that a run may be before it is taken for a disturbed one. Why: an idle run whose
-# window took input meant for another was measured as playing (2026-10-22).
+# window took input meant for another was measured as playing.
 IDLE_RATE = 2.0
 PLAYING_RATE = 32.0
 OFF_BY = 3.0

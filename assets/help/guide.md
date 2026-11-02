@@ -73,8 +73,8 @@ Further along, the position counts bar : step : tick as the song plays, and a sw
 computer keyboard play notes. The panel buttons, the **File** and **Edit** menus and **Help** sit
 at the right end.
 
-The tempo is your song's speed, in beats per minute (BPM). Drag it up or down, scroll over it, or
-click it and type a number. **Stop** takes you back to where the song plays from.
+The tempo is your song's speed, in beats per minute (BPM). Drag it left or right, scroll over
+it, or click it and type a number. **Stop** takes you back to where the song plays from.
 
 ![The left of the toolbar: Play, Stop, Record, the metronome, the tempo and the pattern box](toolbar.png)
 
@@ -149,9 +149,9 @@ what each one does:
 - **Bend** sets how far a MIDI keyboard's pitch wheel bends the notes: 2 semitones, unless you
   change it.
 
-Drag a control up or down to change it (hold Shift to go slowly), and double-click it to put it
-back. Click a key along the bottom to hear the sound; lower on the key plays louder. Esc closes the
-window.
+Drag a knob left or right, or a fader up or down, to change it (hold Shift to go slowly), and
+double-click it to put it back. Click a key along the bottom to hear the sound; lower on the key
+plays louder. Esc closes the window.
 
 ![The instrument window of the EP, an electric piano](instrument-window.png)
 
@@ -195,7 +195,7 @@ the Playlist as well, as a double-click always did.
 - **Delete** (or the Delete key) takes it out and closes the gap.
 - **Silence** makes it quiet without changing the length.
 - **Fade in** rises from silence, and **Fade out** falls to it.
-- **Gain**: drag the box up to make it louder or down to make it quieter, then let go.
+- **Gain**: drag the box right to make it louder or left to make it quieter, then let go.
 - **Normalize** makes it as loud as it can be, its loudest point at 0 dB.
 - **Reverse** plays it backwards.
 
@@ -272,6 +272,9 @@ name to rename the pattern or delete it.
 In the Channel rack, each row has 16 steps to a bar. Click a step to switch it on, and that
 channel plays on that step. **Bars −** and **+** at the top of the rack make the pattern shorter
 or longer, from 1 to 32 bars. For melodies, the piano roll is easier (see **The piano roll**).
+The **Swing** knob right of them plays every second step a little late, for a shuffle: drag it
+right (66.7% is a triplet feel), and double-click it to play straight again. The steps still look
+straight on the grid; you hear the swing.
 
 ![A beat in the Channel rack: each drum's steps lit along its row](rack.png)
 
@@ -363,7 +366,9 @@ Alt and drag to draw a ramp. Drag the line above the lane to make the lane talle
 ## The Notes menu
 Right-click the grid, or click **Notes** at the top, for Cut, Copy, Paste, Duplicate and Delete,
 and for these changes:
-- **Quantize…** moves the notes toward a grid, as far as you choose, so they land on time.
+- **Quantize…** moves the notes toward a grid, as far as you choose, so they land on time. Its
+  **Swing** slider (or **Triplet**) puts every second line of the grid late, for a shuffle you
+  can see and edit.
 - **Chop at snap** cuts the notes at every snap line.
 - **Glue** joins touching notes of one key.
 - **Legato** makes each note last until the next one starts.
@@ -388,12 +393,21 @@ you can still edit them afterwards) or audio (the sound itself, kept as a sound 
 
 ## Recording notes
 - Check that **Notes** is lit beside **Record**.
-- Click **Record** (or press **R**) to arm it.
-- Press **Play**. A bar of clicks counts you in, then you play.
+- Click **Record** (or press **R**; **Shift+R** while the keyboard plays notes) to arm it.
+- Press **Play**. A bar of clicks counts you in, then you play. A key you strike in the count-in
+  and hold into bar 1 starts right on bar 1.
+- Each note shows in the piano roll as you play it: the roll scrolls up or down to the key you
+  strike.
 - In pattern mode the pattern loops, and each pass adds the notes you play. Delete notes first if
-  you want to replace them.
-- In song mode your notes go into a new pattern named after the channel, such as "Kick take 1",
-  and its clip grows by whole bars as you play.
+  you want to replace them. A take that already holds notes stays as it is: Record makes a new
+  pattern for you.
+- In song mode the song plays from the song marker and your notes go into a take named after the
+  channel, such as "Kick take 1": the blank one in the pattern box, or else a new one. It starts
+  one bar long and grows by whole bars as you play. Nothing is put on the Playlist: place the take
+  on a track yourself when you're done.
+- The pattern box's right arrow makes a new pattern in pattern mode and a new take in song mode.
+  Switching modes turns a blank pattern into a blank take and back; one with notes keeps its name.
+- While a take of notes runs, clicking the Library previews nothing until you press Stop.
 - Press **Stop** when you're done. A whole take is one step of Undo, so you can always try again.
 
 ![Record, and the switch beside it: Notes or Audio](record.png)
@@ -657,8 +671,9 @@ A loop that sounds good is the hardest part, and you have one. Turning it into a
 deciding when each part plays. This page takes you from a loop to a finished file you can share.
 
 ## Switch to Song mode
-Click **Song** in the toolbar, or press **L**. Now Play runs through the Playlist from left to
-right, instead of looping one pattern. Open the Playlist with **2**.
+Click **Song** in the toolbar, or press **L** (**Shift+L** while the keyboard plays notes). Now
+Play runs through the Playlist from left to right, instead of looping one pattern. Open the
+Playlist with **2**.
 
 ## Lay out the parts
 It helps to keep each part in its own pattern (the beat, the bass, the chords, the melody), and

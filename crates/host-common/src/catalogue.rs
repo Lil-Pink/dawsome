@@ -334,9 +334,7 @@ impl Catalogue {
         let clap = self.plugins_of(PluginFormat::Clap, kind);
         let vst3 = self.plugins_of(PluginFormat::Vst3, kind);
         let twinned = |plugin: &PluginRecord, others: &[&PluginRecord]| {
-            others
-                .iter()
-                .any(|other| twin_key(other) == twin_key(plugin))
+            others.iter().any(|other| twins(plugin, other))
         };
         let mut offered: Vec<Offered> = clap
             .iter()
@@ -399,6 +397,7 @@ impl Catalogue {
     }
 
     /// The `format` files that failed, by path.
+    #[cfg(test)]
     pub fn failed_of(&self, format: PluginFormat) -> impl Iterator<Item = &FileRecord> {
         self.files
             .iter()
@@ -503,6 +502,7 @@ pub fn bundled_folders(program: &Path) -> Vec<PathBuf> {
 }
 
 /// The first of [`bundled_folders`], the one searched first; `None` when there is none.
+#[cfg(test)]
 pub fn bundled_beside(program: &Path) -> Option<PathBuf> {
     bundled_folders(program).into_iter().next()
 }
@@ -585,7 +585,7 @@ pub fn is_stale_for(path: &Path, dirs: &[PathBuf], formats: &[PluginFormat]) -> 
     // list right after CLAP's own. So only the order they give each format's files is compared,
     // by (rank, path), which is all `in_search_order` gives `find` and `plugins_of` (both look
     // at one format). Comparing the numbers made every catalogue the command line wrote stale
-    // to the app, which then rescanned at every start (review 2026-10-26).
+    // to the app, which then rescanned at every start.
     let mut listed_order = Vec::new();
     let mut found_order = Vec::new();
     for (file, &rank) in &catalogue.ranks {
@@ -911,8 +911,8 @@ mod tests {
     // The command line scans both formats, so a `.clap` in a folder searched after the VST3
     // folders ($CLAP_PATH, the bundled ones) ranks after them; the app's CLAP-only search ranks
     // it right after the CLAP standard folders. Nothing on disk changed, so the catalogue the
-    // command line wrote is fresh in both views, until two CLAP folders really swap. (Review
-    // 2026-10-26, confirmed 1: the app rescanned at every start after a `dawsome scan`.)
+    // command line wrote is fresh in both views, until two CLAP folders really swap. (Before,
+    // the app rescanned at every start after a `dawsome scan`.)
     #[test]
     fn a_catalogue_of_both_formats_is_fresh_in_a_view_of_one() {
         let dir = temp_dir("stale-views");

@@ -2,8 +2,8 @@
 //! of ours: opened embedded, its window mapped inside ours, then our window asked by another
 //! client for a wider size, and a taller one, as the user drags it (what `xdotool windowsize`
 //! asks): each time our window ends at the size of Surge's own window inside it, with no black
-//! beside it (the case seen in use, 2026-10-28: dragged wider, the interface stayed at its width with
-//! black to its right). The sizes are printed for the record. Skipped with a line when Surge XT is
+//! beside it (the case seen in use: dragged wider, the interface stayed at its width with black
+//! to its right). The sizes are printed for the record. Skipped with a line when Surge XT is
 //! not fetched.
 //!
 //! Ignored: it opens a window, so `scripts/ui-check.sh` runs it alone in a graphical session. The

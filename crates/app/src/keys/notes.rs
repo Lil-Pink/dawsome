@@ -437,10 +437,9 @@ pub fn us_label(code: Code) -> &'static str {
 mod tests {
     use super::*;
 
-    // Known answers from the layout research's table (The Library, daw-computer-keyboard-layouts
-    // 2026-10-22, section 8), written as MIDI keys with A on 60: every white and black key,
-    // and the keys between that play nothing. Enter (and the numpad's) keeps its shortcut: the
-    // Its swallowing was reversed, and this expectation moved with it.
+    // Known answers from the key map chosen after a survey of DAWs' computer-keyboard layouts,
+    // written as MIDI keys with A on 60: every white and black key, and the keys between that
+    // play nothing. Enter (and the numpad's) keeps its shortcut: the piano row leaves it free.
     #[test]
     fn the_piano_row_plays_the_researched_map_from_a_on_middle_c() {
         let table = [
