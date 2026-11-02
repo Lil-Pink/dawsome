@@ -1,5 +1,6 @@
 # Dawsome
-<img width="1600" height="847" alt="main-window" src="https://github.com/user-attachments/assets/319e4ecd-dcf2-41bd-bc3a-38e128f55859" />
+<img width="1600" height="847" alt="main-window" src="https://github.com/user-attachments/assets/9705d51f-a3d2-4528-bb5a-00b8949ca778" />
+
 
 
 Dawsome is a free, open-source music making software for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
