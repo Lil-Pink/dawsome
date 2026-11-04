@@ -48,7 +48,7 @@ crossbeam-queue = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # The per-user folders (settings, recordings, the demo, autosaves, Music): XDG on Linux, AppData
 # and the known folders on Windows.
-dirs = "6"
+dirs = "7"
 # A sample's path as a project keeps it: resolved as the standard library does, but in the
 # plain `C:\...` form on Windows (see the media crate).
 dunce = "1"
@@ -74,14 +74,14 @@ cpal = "=0.18"
 # Reads `--play-to` WAV files back in the integration tests.
 hound.workspace = true
 # Calls the VST3 test module's own exports (its restart and its entry count) in the tests.
-libloading = "0.8"
+libloading = "0.9"
 # Hashes rendered frames for the known answers compared to the bit.
-sha2 = "0.10"
+sha2 = "0.11"
 
 # The desktop drop's check (tests/desktop_drop.rs, ignored: it needs an X display) is the other
 # X11 client: it finds the app's window and drops a file on it over XDND, as a file manager does.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-x11rb = "0.13"
+x11rb = "0.14"
 
 # dawsome-app.exe's icon and version details (build.rs, dawsome-app.rc). Listed for every build
 # machine: cargo matches a build dependency's platform against the machine building, and a

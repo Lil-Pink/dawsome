@@ -18,4 +18,4 @@ thiserror.workspace = true
 # Reads rendered WAV files back.
 hound.workspace = true
 # Hashes rendered WAV files for the byte-identical checks.
-sha2 = "0.10"
+sha2 = "0.11"
