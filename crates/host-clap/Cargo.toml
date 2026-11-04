@@ -12,7 +12,7 @@ dawsome-host-common.workspace = true
 clack-host = "=0.2.0"
 clack-extensions = { version = "=0.2.0", features = ["clack-host", "audio-ports", "gui", "latency", "note-ports", "params", "posix-fd", "state", "thread-check", "timer"] }
 # A plugin's state is stored in the project as standard padded base64 text.
-base64 = "0.22"
+base64 = "0.23"
 
 [target.'cfg(unix)'.dependencies]
 # poll(2) for the file descriptors plugins register.
@@ -25,5 +25,5 @@ serde_json.workspace = true
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The window tests (tests/windows.rs, ignored: they need an X display) call the test interface's
 # exports and look at the host's windows on a connection of their own.
-libloading = "0.8"
-x11rb = "0.13"
+libloading = "0.9"
+x11rb = "0.14"

@@ -25,4 +25,4 @@ vst3 = "=0.3.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 # The View class's editor is an XEmbed client: a window of its own on a connection of its own.
 # The line the hosts' windows use, so the tree keeps one.
-x11rb = "0.13"
+x11rb = "0.14"
