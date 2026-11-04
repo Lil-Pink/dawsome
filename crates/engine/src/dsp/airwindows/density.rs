@@ -4,7 +4,7 @@
 //! dry/wet. Its four parameters are the original's 0..1 values, so a null test maps one to one.
 
 use super::{decibels, dither, guard, overall_scale, HALF_PI, SEEDS};
-use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory};
+use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Taper};
 
 pub const ID: &str = "dawsome.density";
 
@@ -22,6 +22,7 @@ const fn param(
         default,
         unit,
         whole: false,
+        taper: Taper::Linear,
     }
 }
 

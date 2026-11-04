@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "the help pictures' lock holds SHA-256 hashes of source files, not keys"
+paths = ['''assets/help/source/shots\.lock''']

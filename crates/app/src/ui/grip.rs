@@ -1,8 +1,9 @@
 //! A drag handle that resizes the panel part beside it: a strip a few pixels tall with a grip
 //! drawn in its middle and the vertical resize cursor, reporting the press, each move while
-//! held and the release in window y (the strip itself moves while the part resizes), and a
-//! double press when it resets something. The piano roll's velocity lane and the dividers
-//! between the stacked panels use it (the mixer's top edge is one of those).
+//! held and the release at window points (the strip itself moves while the part resizes), and
+//! a double press when it resets something. The piano roll's velocity lane and the dividers
+//! between the stacked panels use it (the mixer's top edge is one of those); a divider dragged
+//! sideways is armed to pop its panel out, and its whole strip lights.
 
 use std::time::{Duration, Instant};
 
@@ -22,14 +23,17 @@ const GRIP_GAP: f32 = 2.0;
 const DOUBLE_PRESS_TIME: Duration = Duration::from_millis(400);
 const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
 
-/// A drag handle and what it reports. `P` makes the press's message from the window y.
+/// A drag handle and what it reports. `P` makes the press's message from the window point.
 pub struct Grip<P> {
     /// Whether the handle is held, so drags and the release are reported anywhere.
     pub held: bool,
-    /// A press on it, at window y.
+    /// Whether the release would do something other than resize (a divider dragged sideways
+    /// pops its panel out): the whole strip lights, not only its grip.
+    pub armed: bool,
+    /// A press on it, at a window point.
     pub pressed: P,
-    /// The cursor at window y while it is held.
-    pub dragged: fn(f32) -> Message,
+    /// The cursor at a window point while it is held.
+    pub dragged: fn(Point) -> Message,
     pub released: Message,
     /// What a second press soon after the first reports instead of a press, if anything.
     pub reset: Option<Message>,
@@ -44,7 +48,7 @@ pub struct GripState {
     pressed: Option<(Instant, Point)>,
 }
 
-impl<P: Fn(f32) -> Message> canvas::Program<Message> for Grip<P> {
+impl<P: Fn(Point) -> Message> canvas::Program<Message> for Grip<P> {
     type State = GripState;
 
     fn update(
@@ -68,10 +72,10 @@ impl<P: Fn(f32) -> Message> canvas::Program<Message> for Grip<P> {
                     return Some(canvas::Action::publish(reset.clone()).and_capture());
                 }
                 state.pressed = Some((now, at));
-                Some(canvas::Action::publish((self.pressed)(at.y)).and_capture())
+                Some(canvas::Action::publish((self.pressed)(at)).and_capture())
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) if self.held => {
-                Some(canvas::Action::publish((self.dragged)(position.y)))
+                Some(canvas::Action::publish((self.dragged)(*position)))
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if self.held => {
                 Some(canvas::Action::publish(self.released.clone()))
@@ -93,8 +97,15 @@ impl<P: Fn(f32) -> Message> canvas::Program<Message> for Grip<P> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::STRIP);
-        let grip = if self.held {
+        let ground = if self.armed {
+            style::ACCENT
+        } else {
+            style::STRIP
+        };
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), ground);
+        let grip = if self.armed {
+            style::TEXT
+        } else if self.held {
             style::ACCENT
         } else {
             style::TEXT_DIM

@@ -249,7 +249,6 @@ fn both_formats_are_listed_once_each_with_their_format() {
     );
     let effect = PickerTarget::Effect {
         insert: dawsome_engine::project::InsertId(1),
-        slot: 0,
     };
     assert_eq!(dump(&mut app, effect), texts(&lists["effects"]));
     let items = app.library_items();
@@ -510,7 +509,7 @@ fn a_vst3_plugins_latency_is_shown_in_its_panel_and_slot_hint() {
     let _ = app.update(Message::PanelTick);
     assert_eq!(foot(&app), Some(text(&answer["foot_after"])));
     app.mixer.selected = InsertId(1);
-    let words = crate::ui::hint::words(&Hover::Mixer(MixerHit::Slot(0)), &app.hint_context());
+    let words = crate::ui::hint::words(&Hover::Mixer(MixerHit::EffectName(0)), &app.hint_context());
     assert!(
         words.contains(&format!("\u{b7} {} \u{b7}", text(&answer["slot_hint"]))),
         "{words}"

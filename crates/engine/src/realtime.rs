@@ -1066,7 +1066,8 @@ impl CountIn {
 
 impl Player {
     /// Renders the next `out.len()` frames (interleaved stereo) into `out`, overwriting it:
-    /// silence while stopped (but for a previewed file, live notes and the input channels). In
+    /// silence while stopped (but for a previewed file, live notes, the input channels and the
+    /// effect tails they leave). In
     /// order: apply every waiting control, swap in at most one new plan, take the newest preview
     /// and the newest set of input feeds, render, publish the playhead. Controls and swaps happen
     /// only here, at the start of a call, never part way through one. Every input feed is read
@@ -1104,8 +1105,9 @@ impl Player {
     }
 
     /// Renders all of `out` while stopped: the previewed file, the live notes and the input
-    /// channels heard through the mixer, else silence (the input feeds read on all the same);
-    /// every processor gets its idle call.
+    /// channels heard through the mixer, which then runs on so its effects ring out (until a
+    /// Play, Stop, Seek or Suspend clears them), else silence (the input feeds read on all the
+    /// same); every processor gets its idle call.
     fn stopped(&mut self, out: &mut [[f32; 2]]) {
         let context = ProcessContext {
             sample_rate: self.plan.sample_rate,
@@ -1121,6 +1123,7 @@ impl Player {
         if self.runtime.preview.is_some()
             || self.runtime.live_sounding(self.output_frames)
             || self.runtime.inputs_heard(&self.plan)
+            || self.runtime.tails_ring()
         {
             let mut at = self.output_frames;
             for piece in out.chunks_mut(CHUNK) {

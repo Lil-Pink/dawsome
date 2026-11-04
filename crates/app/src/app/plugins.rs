@@ -32,6 +32,7 @@ use tokio::time::MissedTickBehavior;
 use super::{App, DragTarget, MediaMessage, Message, PLUGIN_PERIOD};
 use crate::headless::Script;
 use crate::session::Session;
+use crate::ui::mixer_state;
 use crate::ui::param_window::{Heading, ParamPanel, SLIDER_WIDTH};
 use crate::ui::picker::{self as picker_view, Picker, PickerMessage, PickerTarget, Press};
 
@@ -119,7 +120,6 @@ impl App {
             PluginKind::Instrument => PickerTarget::Instrument,
             PluginKind::Effect => PickerTarget::Effect {
                 insert: self.mixer.selected,
-                slot: 0,
             },
         };
         let task = self.open_picker(target);
@@ -469,36 +469,36 @@ impl App {
     }
 
     /// Adds `plugin` as `target` says, one undo step, and closes the picker. A new instrument
-    /// is selected as a click on its name selects it, live notes included.
+    /// is selected as a click on its name selects it, live notes included; a new effect goes at
+    /// the end of its insert's chain, off as the add menu's are, and the effects' lines scroll
+    /// to it.
     pub(super) fn add_plugin(&mut self, target: PickerTarget, plugin: &Offered) {
         let processor = plugin_processor(plugin);
         let project = self.session.project();
+        let channel = project.next_channel_id;
         let edit = match target {
-            PickerTarget::Instrument | PickerTarget::AddInstrument => Edit::AddPluginChannel {
-                id: project.next_channel_id,
-                name: plugin.plugin.name.clone(),
-                processor,
-            },
-            PickerTarget::Effect { insert, slot } => Edit::AddEffect {
-                insert,
-                slot,
-                id: project.mixer.next_effect_id,
-                processor,
-            },
-        };
-        let added = match &edit {
-            Edit::AddPluginChannel { id, .. } => ProcessorOwner::Channel(*id),
-            Edit::AddEffect { id, .. } => ProcessorOwner::Effect(*id),
-            _ => return,
+            PickerTarget::Instrument | PickerTarget::AddInstrument => {
+                Some(Edit::AddPluginChannel {
+                    id: channel,
+                    name: plugin.plugin.name.clone(),
+                    processor,
+                })
+            }
+            PickerTarget::Effect { insert } => {
+                mixer_state::append_effect(project, insert, processor)
+            }
         };
         self.picker = None;
+        let Some(edit) = edit else {
+            return;
+        };
         self.commit(edit);
         if self.error.is_some() {
             return;
         }
-        match added {
-            ProcessorOwner::Channel(id) => self.select_channel(id),
-            ProcessorOwner::Effect(id) => self.mixer.selected_effect = Some(id),
+        match target {
+            PickerTarget::Instrument | PickerTarget::AddInstrument => self.select_channel(channel),
+            PickerTarget::Effect { .. } => self.mixer.show_added(),
         }
     }
 
@@ -1260,30 +1260,32 @@ pub(super) mod app_tests {
         }
     }
 
-    // A plugin effect's rows in the mixer's slot panel are automatable the same way: a right
-    // press on the test gain's row offers its automation by the plugin's id for it.
+    /// The selected insert's blocks, and its add tile last while it has room, where the mixer
+    /// shows them.
+    fn mixer_blocks(app: &App) -> Vec<iced::Rectangle> {
+        let project = app.session.project();
+        let registry = app.session.registry();
+        let chain = mixer_state::knob_counts(project, registry, app.mixer.selected);
+        let last = project.mixer.ids().last().unwrap_or(InsertId::MASTER);
+        mixer_layout::chain_rects(&chain, app.mixer.desk(last))
+    }
+
+    // A plugin effect's knobs in its block are automatable the same way: a right press on the
+    // test gain's knob offers its automation by the plugin's id for it.
     #[test]
-    fn a_plugin_effects_row_in_the_slot_panel_offers_its_automation() {
+    fn a_plugin_effects_knob_offers_its_automation() {
         let (mut app, _player) = app_on("p7_fx.json", test_catalogue());
         let _ = app.update(Message::TogglePanel(Panel::Mixer));
-        let width = app.mixer.size().width;
-        let press = |app: &mut App, at, button| {
-            let message = MixerMessage::Pressed {
-                at,
-                button,
-                double: false,
-            };
-            let _ = app.update(Message::Mixer(message));
-        };
         let project = app.session.project().clone();
         app.mixer.select(InsertId(1), &project);
-        press(
-            &mut app,
-            mixer_layout::slot_rect(0, width).center(),
-            iced::mouse::Button::Left,
-        );
-        let row = mixer_layout::slider_rect(0, width).center();
-        press(&mut app, row, iced::mouse::Button::Right);
+        let block = mixer_blocks(&app)[0];
+        let knob = mixer_layout::knob_rect(mixer_layout::knob_cell(block, 1, 0)).center();
+        let message = MixerMessage::Pressed {
+            at: knob,
+            button: iced::mouse::Button::Right,
+            double: false,
+        };
+        let _ = app.update(Message::Mixer(message));
         let menu = app.automate.as_ref().expect("the automation menu opens");
         assert_eq!(
             menu.target,
@@ -1758,31 +1760,26 @@ pub(super) mod app_tests {
         );
     }
 
-    // Mixer → empty slot → its menu's last row → the picker for effects; choosing the test gain
-    // puts it in that slot.
+    // Mixer → the add tile → the add menu's last row → the picker for effects; choosing the
+    // test gain puts it at the end of the chain, off, as the menu's own effects go.
     #[test]
-    fn the_slot_menus_last_row_picks_a_plugin_effect() {
+    fn the_add_menus_last_row_picks_a_plugin_effect() {
         let (mut app, _player) = app_on("p7_sine.json", test_catalogue());
         let _ = app.update(Message::TogglePanel(Panel::Mixer));
-        let width = app.mixer.size().width;
-        let slot = mixer_layout::slot_rect(0, width).center();
-        let press = |app: &mut App, at| {
-            let message = MixerMessage::Pressed {
-                at,
-                button: iced::mouse::Button::Left,
-                double: false,
-            };
-            let _ = app.update(Message::Mixer(message));
+        let tile = mixer_blocks(&app).last().expect("the add tile").center();
+        let message = MixerMessage::Pressed {
+            at: tile,
+            button: iced::mouse::Button::Left,
+            double: false,
         };
-        press(&mut app, slot);
-        assert_eq!(app.mixer.menu, Some(Menu::Add { slot: 0 }));
+        let _ = app.update(Message::Mixer(message));
+        assert_eq!(app.mixer.menu, Some(Menu::Add));
         let chosen = MixerMessage::MenuChosen(ADD_MENU.len());
         let _ = app.update(Message::Mixer(chosen));
         assert_eq!(
             app.picker.as_ref().map(|picker| picker.target),
             Some(PickerTarget::Effect {
-                insert: InsertId::MASTER,
-                slot: 0
+                insert: InsertId::MASTER
             })
         );
         let _ = app.update(Message::Picker(PickerMessage::Submit));
@@ -1795,6 +1792,7 @@ pub(super) mod app_tests {
         assert_eq!(insert, InsertId::MASTER);
         assert_eq!(effect.processor.id, "clap:org.dawsome.test.gain");
         assert_eq!(effect.processor.display_name(), "Dawsome Test Gain");
+        assert!(!effect.on, "off until its light is clicked");
     }
 
     // A project whose plugins are not installed opens, with a banner naming each missing plugin.

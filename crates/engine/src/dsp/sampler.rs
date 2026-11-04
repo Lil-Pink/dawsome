@@ -97,14 +97,19 @@ fn read_point(elapsed: u64, pitch: &Pitch) -> (u64, f64) {
 /// both far less, for about twice the arithmetic (sinc reads do better still, at many times it). Why f64 with one rounding: the same bits come out of every
 /// build and out of the Python generators that restate it (tests/fixtures/gen_p11_expected.py).
 pub fn interpolate(points: [[f32; 2]; 4], fraction: f64) -> [f32; 2] {
-    let side = |index: usize| {
-        let [y0, y1, y2, y3] = points.map(|point| f64::from(point[index]));
-        let c1 = 0.5 * (y2 - y0);
-        let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-        let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-        (((c3 * fraction + c2) * fraction + c1) * fraction + y1) as f32
-    };
+    let side = |index: usize| hermite(points.map(|point| f64::from(point[index])), fraction);
     [side(0), side(1)]
+}
+
+/// One side of [`interpolate`]: the cubic from `points` (y0, y1, y2, y3) at `fraction` of the
+/// way from y1 to y2, in f64, rounded to f32 once. At fraction 0 it is y1 exactly. The delay
+/// line's reads take it too ([`super::parts::DelayLine`]).
+pub(crate) fn hermite(points: [f64; 4], fraction: f64) -> f32 {
+    let [y0, y1, y2, y3] = points;
+    let c1 = 0.5 * (y2 - y0);
+    let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+    let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+    (((c3 * fraction + c2) * fraction + c1) * fraction + y1) as f32
 }
 
 /// Whether a voice reading as `pitch` says still reads inside `sample` `elapsed` frames after it
@@ -311,6 +316,19 @@ mod tests {
             interpolate(points, 0.25)[0]
         };
         assert_eq!([0, 1, 2, 3].map(impulse), [-9.0, 111.0, 29.0, -3.0]);
+    }
+
+    // At no fraction the cubic is its second point, bit for bit, whatever the other three are:
+    // every other term is multiplied by the fraction. The delay line's whole delays echo by it.
+    #[test]
+    fn the_cubic_at_no_fraction_is_its_second_point() {
+        for points in [
+            [0.3, -0.7, 0.11, 5.0],
+            [1e10, 1e-20, -3.0, 7.5],
+            [0.0, f64::from(f32::MAX), -1.0, 2.0],
+        ] {
+            assert_eq!(hermite(points, 0.0).to_bits(), (points[1] as f32).to_bits());
+        }
     }
 
     // A stereo sample reads each side on its own, also between frames.

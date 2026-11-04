@@ -138,6 +138,23 @@ pub struct Effect {
     /// Below [`EFFECT_SLOTS`]; effects run in slot order.
     pub slot: u8,
     pub processor: ProcessorRef,
+    /// Whether the effect plays: one that is off is passed by, the insert's sound going on
+    /// unchanged, while its processor keeps its settings and waits. On when the file does not
+    /// say, so a file saved before effects could be switched off plays as it did; written only
+    /// when off, so such a file keeps its bytes. A build that knows nothing of it reads past it
+    /// (playing the effect, and dropping the field when it saves), so the format version stays.
+    #[serde(default = "switched_on", skip_serializing_if = "is_on")]
+    pub on: bool,
+}
+
+/// An effect's `on` when its file does not say.
+fn switched_on() -> bool {
+    true
+}
+
+/// Takes a reference so serde can call it to leave an effect that is on as it was written.
+fn is_on(on: &bool) -> bool {
+    *on
 }
 
 /// Which processor an effect or a plugin channel runs, and its settings, as saved.
@@ -813,6 +830,7 @@ mod tests {
             id: EffectId(id),
             slot,
             processor: ProcessorRef::new("dawsome.delay"),
+            on: true,
         };
         let with = |effects: Vec<Effect>, next| {
             validated(move |m| {
@@ -920,6 +938,39 @@ mod tests {
         );
     }
 
+    // An effect's light, by hand from the fixture's text: p5_delay_sync's delay says nothing of
+    // it, so it is on, and the file saves back to its own bytes. Switched off it saves as
+    // `"on":false` after its processor and reads back off; switched on again the field is gone
+    // and the bytes are the fixture's. A file that writes `"on":true` reads as one that does not.
+    #[test]
+    fn an_effect_is_on_unless_its_file_says_off() {
+        let delay = r#""processor":{"id":"dawsome.delay","params":{"feedback":0.5,"mix":1.0,"sync_steps":3.0}}"#;
+        assert!(P5_DELAY_SYNC.contains(&format!("{delay}}}]")));
+        let mut project = load(P5_DELAY_SYNC);
+        let on = |project: &Project| project.mixer.inserts[1].effects[0].on;
+        assert!(on(&project), "on when the file does not say");
+        assert_eq!(
+            project.to_json().expect("serializes"),
+            P5_DELAY_SYNC.trim_end()
+        );
+        project.mixer.inserts[1].effects[0].on = false;
+        let off = project.to_json().expect("serializes");
+        let written = P5_DELAY_SYNC
+            .trim_end()
+            .replace(&format!("{delay}}}]"), &format!("{delay},\"on\":false}}]"));
+        assert_eq!(off, written);
+        let read = load(&off);
+        assert!(!on(&read), "off as saved");
+        assert_eq!(read, project);
+        project.mixer.inserts[1].effects[0].on = true;
+        assert_eq!(
+            project.to_json().expect("serializes"),
+            P5_DELAY_SYNC.trim_end()
+        );
+        let said_on = written.replace("\"on\":false", "\"on\":true");
+        assert_eq!(load(&said_on), load(P5_DELAY_SYNC));
+    }
+
     // Only a native id moves: a plugin id holding the former prefix after its format stays.
     #[test]
     fn a_plugin_id_holding_the_former_prefix_is_kept() {
@@ -930,11 +981,13 @@ mod tests {
                 id: EffectId(1),
                 slot: 0,
                 processor: ProcessorRef::new(format!("{FORMER_NATIVE_ID_PREFIX}reverb")),
+                on: true,
             },
             Effect {
                 id: EffectId(2),
                 slot: 1,
                 processor: ProcessorRef::plugin(plugin_id.clone(), "Synth"),
+                on: true,
             },
         ];
         mixer.adopt_former_native_ids();

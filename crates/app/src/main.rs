@@ -341,6 +341,9 @@ fn main() -> ExitCode {
             Some("--screenshot-window params needs the window --open-plugin or --open-params opens")
         } else if window == headless::ShotWindow::SampleEditor && sample_editor.is_none() {
             Some("--screenshot-window sample-editor needs the window --open-sample-editor opens")
+        } else if matches!(window, headless::ShotWindow::Panel(panel) if !args.panels.popped.has(panel))
+        {
+            Some("--screenshot-window <panel> needs the window --pop-out <panel> opens")
         } else {
             None
         };
@@ -611,11 +614,12 @@ fn main() -> ExitCode {
                     );
                 }
             }
-            if let Some((insert, slot)) = slot_menu {
+            if let Some((insert, place)) = slot_menu {
                 let insert = dawsome_engine::project::InsertId(insert);
-                if !app.open_slot_menu(insert, slot) {
+                if !app.open_slot_menu(insert, usize::from(place)) {
                     eprintln!(
-                        "dawsome-app: --slot-menu: insert {} has no slot {slot}",
+                        "dawsome-app: --slot-menu: insert {} has no effect {place} and no room \
+                         for one",
                         insert.0
                     );
                 }
@@ -628,7 +632,8 @@ fn main() -> ExitCode {
                 }
             }
             // The pop-out windows --open-instrument, --panels settings, --show help,
-            // --open-params and --open-sample-editor opened, after the main window.
+            // --open-params, --open-sample-editor, --pop-out and the saved layout's popped
+            // panels opened, after the main window.
             let instrument = app.sync_pop_outs();
             let mut start = Some(Task::batch([task, extra, params, editor, instrument]));
             let start = open.then(move |_| start.take().unwrap_or_else(Task::none));

@@ -515,6 +515,7 @@ fn gain_effect(id: u32, slot: u8, gain: f64) -> (InsertId, Effect) {
             id: EffectId(id),
             slot,
             processor,
+            on: true,
         },
     )
 }
@@ -731,6 +732,7 @@ fn the_hosts_audio_half_never_touches_the_heap() {
                     slot: effect.slot,
                     id: effect.id,
                     processor: effect.processor,
+                    on: true,
                 })
             }
             600 => undo.take(),

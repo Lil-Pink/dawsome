@@ -5,12 +5,19 @@
 # the zips are the run's artifacts, ready to attach to a release, with Surge XT's complete
 # source (locks/surge.lock's surge-src tarball), which a release attaches beside them: the zips'
 # SOURCES.md offers it there.
+# Each action is pinned to a full commit, its version in the comment beside it: a tag can be
+# moved to other code, a commit cannot. .github/dependabot.yml proposes newer ones each week.
 name: Release
 
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+
+# The zips are this run's artifacts and a release gets them attached by hand, so the token only
+# reads; the checkout keeps no copy of it.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -32,7 +39,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: System packages
         if: runner.os == 'Linux'
         run: |
@@ -46,13 +55,12 @@ jobs:
             choco install llvm -y --no-progress
           fi
           echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.x"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16 (no releases; Rust's version is the toolchain line)
         with:
           toolchain: "1.93.1"
-      - uses: Swatinem/rust-cache@v2
       # The runner's folders mapped out of the programs (scripts/remap-paths.sh); package.sh
       # refuses a program that still names the home folder.
       - run: cargo build --release --locked --config "$(scripts/remap-paths.sh)" -p dawsome -p dawsome-app
@@ -63,12 +71,12 @@ jobs:
       - run: scripts/fetch-surge.sh --source linux-x86_64
         if: runner.os == 'Linux'
       - run: scripts/package.sh "${{ matrix.platform }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dawsome-${{ matrix.platform }}
           path: target/dist/*.zip
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: runner.os == 'Linux'
         with:
           name: surge-source

@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dawsome-engine",
  "dawsome-host-clap",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cpal",
  "crossbeam-queue",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crossbeam-queue",
  "hound",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-host-clap"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "clack-extensions",
@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-host-common"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dawsome-engine",
  "dirs",
@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-host-vst3"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "dawsome-engine",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-media"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "creek",
@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-test-plugin"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "dawsome-test-plugin-vst3"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "vst3",
  "x11rb",

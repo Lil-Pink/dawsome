@@ -3,16 +3,21 @@
 //! exponential release. It looks at nothing ahead, so it delays nothing and every frame stays
 //! where it was; a frame at the ceiling or under passes as it is while the gain is at rest.
 //!
+//! Gain (0 to +24 dB, added later) raises the input before the limiter looks at it: turned
+//! up, the sound gets louder and denser while no frame passes the ceiling, which is how people
+//! use other DAWs' limiters. At 0 dB it multiplies by exactly 1, so a project saved before
+//! it plays bit for bit as it did (an additive key).
+//!
 //! Why no lookahead: a lookahead limiter delays the whole mix by its window, which would move
 //! every sample of every render and of the device's output; a peak caught on its own frame is
 //! enough to keep a chord from clipping.
 
 use super::{exp2, snap64};
-use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory};
+use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Taper};
 
 pub const ID: &str = "dawsome.limiter";
 
-const PARAMS: [ParamInfo; 2] = [
+const PARAMS: [ParamInfo; 3] = [
     ParamInfo {
         key: "ceiling_db",
         label: "Ceiling",
@@ -21,6 +26,7 @@ const PARAMS: [ParamInfo; 2] = [
         default: -0.3,
         unit: "dB",
         whole: false,
+        taper: Taper::Linear,
     },
     ParamInfo {
         key: "release_ms",
@@ -30,16 +36,34 @@ const PARAMS: [ParamInfo; 2] = [
         default: 100.0,
         unit: "ms",
         whole: false,
+        taper: Taper::Log,
+    },
+    ParamInfo {
+        key: "gain_db",
+        label: "Gain",
+        min: 0.0,
+        max: 24.0,
+        default: 0.0,
+        unit: "dB",
+        whole: false,
+        taper: Taper::Linear,
     },
 ];
 
 const CEILING_DB: usize = 0;
 const RELEASE_MS: usize = 1;
+const GAIN_DB: usize = 2;
 
 /// The level no frame leaves above, from the ceiling in decibels: 10^(dB/20) by [`exp2`], as an
 /// f32 (held in an f64), so a frame pulled down to it lands on it exactly and 0 dB is exactly 1.
 fn ceiling(db: f32) -> f64 {
     f64::from(exp2(f64::from(db) / 20.0 * std::f64::consts::LOG2_10) as f32)
+}
+
+/// What the input is raised by, from the gain in decibels: 10^(dB/20) by [`exp2`], kept in f64;
+/// exactly 1 at 0 dB.
+fn input_gain(db: f32) -> f64 {
+    exp2(f64::from(db) / 20.0 * std::f64::consts::LOG2_10)
 }
 
 /// What the gain's reduction is multiplied by each frame: e^(−1/(T·rate)) by [`exp2`], so the
@@ -66,6 +90,7 @@ impl ProcessorFactory for Factory {
 
     fn create(&self, sample_rate: u32, values: &[f32]) -> Box<dyn Processor> {
         let mut limiter = Limiter {
+            input: input_gain(PARAMS[GAIN_DB].default),
             ceiling: ceiling(PARAMS[CEILING_DB].default),
             release: release(PARAMS[RELEASE_MS].default, sample_rate),
             reduction: 0.0,
@@ -79,6 +104,8 @@ impl ProcessorFactory for Factory {
 }
 
 struct Limiter {
+    /// What the input is raised by before the limiter looks at it.
+    input: f64,
     ceiling: f64,
     /// The release's factor per frame.
     release: f64,
@@ -96,8 +123,9 @@ impl Processor for Limiter {
             let mut gain = 1.0 - self.reduction;
             // An infinite side (a plugin gone wrong) is held to f32::MAX first: infinity times
             // the gain it earns (ceiling / infinity = 0) would be NaN, and the frame would go
-            // out as NaN then near-silence for a release. Held, it leaves at the ceiling.
-            let held = frame.map(|side| f64::from(side.clamp(-f32::MAX, f32::MAX)));
+            // out as NaN then near-silence for a release. Held, it leaves at the ceiling. Then
+            // raised by the input gain (by exactly 1 at 0 dB).
+            let held = frame.map(|side| f64::from(side.clamp(-f32::MAX, f32::MAX)) * self.input);
             let peak = held[0].abs().max(held[1].abs());
             if peak * gain > self.ceiling {
                 gain = self.ceiling / peak;
@@ -114,7 +142,8 @@ impl Processor for Limiter {
         let value = info.clamp(value);
         match index {
             CEILING_DB => self.ceiling = ceiling(value),
-            _ => self.release = release(value, self.sample_rate),
+            RELEASE_MS => self.release = release(value, self.sample_rate),
+            _ => self.input = input_gain(value),
         }
     }
 
@@ -129,7 +158,7 @@ mod tests {
     use crate::dsp::tests::{bits, noise, whole_and_split, CONTEXT};
 
     fn limiter(ceiling_db: f32, release_ms: f32) -> Box<dyn Processor> {
-        Factory.create(44_100, &[ceiling_db, release_ms])
+        Factory.create(44_100, &[ceiling_db, release_ms, 0.0])
     }
 
     // By hand: 10^(−0.3/20) = 0.96605087 and 10^(−12/20) = 0.25118864 as f32; 0 dB is exactly 1.
@@ -156,6 +185,21 @@ mod tests {
         let gain = frames[3057][0] / 0.5;
         assert!((gain - 0.75).abs() < 1e-4, "{gain}");
         assert_eq!(frames[3057][1], frames[3057][0] / 2.0);
+    }
+
+    // The gain by hand: 10^(dB/20), exactly 1 at 0 dB; +12 dB raises a 0.25 frame to 0.998,
+    // past a −6 dB ceiling (0.501), so it leaves on the ceiling, both sides alike.
+    #[test]
+    fn the_gain_raises_the_input_into_the_ceiling() {
+        assert_eq!(input_gain(0.0), 1.0);
+        assert!((input_gain(12.0) - 10f64.powf(0.6)).abs() < 1e-14);
+        assert!((input_gain(24.0) - 10f64.powf(1.2)).abs() < 1e-13);
+        let mut frames = vec![[0.25, -0.125]];
+        Factory
+            .create(44_100, &[-6.0, 100.0, 12.0])
+            .process(&CONTEXT, &mut frames);
+        let c = ceiling(-6.0) as f32;
+        assert_eq!(frames[0], [c, -c / 2.0]);
     }
 
     #[test]

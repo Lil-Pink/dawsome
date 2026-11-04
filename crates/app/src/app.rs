@@ -31,6 +31,7 @@ mod library_preview;
 mod midi_files;
 mod midi_outs;
 mod note_preview;
+mod panel_windows;
 mod param_window;
 mod patterns;
 mod plugins;
@@ -54,7 +55,7 @@ use std::time::{Duration, Instant};
 
 use dawsome_engine::edit::{Edit, EditError};
 use dawsome_engine::project::{
-    ChannelId, ChannelKind, LoopRange, PatternId, ProcessorOwner, TEMPO_RANGE,
+    ChannelId, ChannelKind, InsertId, LoopRange, PatternId, ProcessorOwner, TEMPO_RANGE,
 };
 #[cfg(test)]
 use dawsome_engine::realtime::Player;
@@ -86,7 +87,9 @@ use crate::ui::dialog::{self, FileMenu};
 use crate::ui::layout;
 use crate::ui::mixer::{MixerPanel, RENAME_INPUT as MIXER_RENAME_INPUT};
 use crate::ui::mixer_layout;
-use crate::ui::mixer_state::{Context, MixerCommand, MixerDrag, MixerMessage, MixerState};
+use crate::ui::mixer_state::{
+    self, Context, MixerCommand, MixerDrag, MixerMessage, MixerState, SWEEP_PIXELS,
+};
 use crate::ui::note_gesture::Target;
 use crate::ui::panels::{self, Panel, PanelUse, Panels};
 use crate::ui::param_window::{ParamMessage, ParamPanel};
@@ -609,6 +612,10 @@ pub struct App {
     instrument: Option<instrument::Instrument>,
     /// The main window, as main opened it; none in a test's app, which opens no window.
     main_window: Option<window::Id>,
+    /// Where the main window is on the screen, as the system last said (X11 and Windows do; a
+    /// Wayland compositor tells nothing): a popped panel's window opens where the divider was
+    /// let go of, from there.
+    main_position: Option<Point>,
     /// The main window as the window system names it (its X11 id, its Win32 handle), once the
     /// toolkit has said; none in a test's app and for a Wayland window.
     main_native: Option<dawsome_host_common::window::WindowId>,
@@ -638,6 +645,9 @@ pub struct App {
     help: help_window::Help,
     /// The parameter window's own window, its place and size.
     params: param_window::ParamWindow,
+    /// The stacked panels' own windows, while they are popped out of the stack, and their
+    /// places.
+    panel_windows: panel_windows::PanelWindows,
     /// The sample editor, while it is open: [`App::sync_sample_editor_window`] opens and closes
     /// its window to match.
     sample_editor: Option<sample_editor::SampleEditor>,
@@ -879,6 +889,7 @@ impl App {
             hover: None,
             instrument: None,
             main_window: None,
+            main_position: None,
             main_native: None,
             instrument_window: None,
             focused_window: None,
@@ -890,6 +901,7 @@ impl App {
             settings_place,
             help: help_window::Help::new(settings.help_window, crate::help::folder()),
             params: param_window::ParamWindow::new(settings.params_window),
+            panel_windows: panel_windows::PanelWindows::new(&settings),
             sample_editor: None,
             editor: sample_editor::EditorWindow::new(settings.sample_editor_window),
             channel_rename: None,
@@ -1057,9 +1069,12 @@ impl App {
     }
 
     /// The window `id` shows: the instrument window's, the Settings window's, the Help
-    /// window's, the parameter window's, or the main window's.
+    /// window's, the parameter window's, the sample editor's, a popped panel's, or the main
+    /// window's.
     pub fn view_window(&self, id: window::Id) -> Element<'_, Message> {
-        if self.instrument_window == Some(id) {
+        if let Some(panel) = self.panel_windows.panel_of(id) {
+            self.panel_window_view(panel)
+        } else if self.instrument_window == Some(id) {
             self.instrument_window_view()
         } else if self.settings_window == Some(id) {
             self.settings_window_view()
@@ -1077,7 +1092,9 @@ impl App {
     /// The title of window `id`: the instrument window's names its channel and sound, the
     /// parameter window's its place and plugin.
     pub fn window_title(&self, id: window::Id) -> String {
-        if self.instrument_window == Some(id) {
+        if let Some(panel) = self.panel_windows.panel_of(id) {
+            Self::panel_window_title(panel)
+        } else if self.instrument_window == Some(id) {
             self.instrument_title()
         } else if self.settings_window == Some(id) {
             self.settings_title()
@@ -1100,6 +1117,7 @@ impl App {
             && self.help.window != Some(id)
             && self.params.window != Some(id)
             && self.editor.window != Some(id)
+            && self.panel_windows.panel_of(id).is_none()
             && self.main_window.is_none_or(|main| main == id)
     }
 
@@ -1128,10 +1146,30 @@ impl App {
             Message::Windowed(id, WindowChange::Focus(focused)) => {
                 if focused {
                     self.focused_window = Some(id);
+                    // A popped panel's window with the keyboard: its panel takes the editing
+                    // keys, as a press in it would give them.
+                    if let Some(panel) = self.panel_windows.panel_of(id) {
+                        self.focus = panel;
+                    }
                 } else if self.focused_window == Some(id) {
                     self.focused_window = None;
                 }
                 (!focused).then_some(Message::WindowUnfocused)
+            }
+            Message::Windowed(id, change) if self.panel_windows.panel_of(id).is_some() => {
+                if let Some(panel) = self.panel_windows.panel_of(id) {
+                    self.panel_window_changed(panel, change);
+                }
+                None
+            }
+            Message::WindowCloseRequested(id) | Message::WindowClosed(id)
+                if self.panel_windows.panel_of(id).is_some() =>
+            {
+                if let Some(panel) = self.panel_windows.panel_of(id) {
+                    let gone = matches!(message, Message::WindowClosed(_));
+                    self.panel_window_closed(panel, gone);
+                }
+                None
             }
             Message::Windowed(id, change) if instrument == Some(id) => {
                 self.instrument_window_changed(change);
@@ -1161,9 +1199,15 @@ impl App {
             Message::Windowed(id, change) if self.is_main_window(id) => match change {
                 WindowChange::Rescaled(factor) => Some(Message::ScaleFactor(factor)),
                 WindowChange::Resized(size) => Some(Message::WindowResized(size)),
-                WindowChange::Opened { .. } | WindowChange::Moved(_) | WindowChange::Focus(_) => {
+                WindowChange::Opened { position, .. } => {
+                    self.main_position = position;
                     None
                 }
+                WindowChange::Moved(at) => {
+                    self.main_position = Some(at);
+                    None
+                }
+                WindowChange::Focus(_) => None,
             },
             Message::WindowCloseRequested(id) if instrument == Some(id) => {
                 self.close_instrument();
@@ -1243,8 +1287,11 @@ impl App {
                 let message = self.key_message(input)?;
                 self.window_message(message)
             }
+            // A file dropped on a popped panel's window lands nowhere: a drop lands by where
+            // the pointer is over the main window.
             Message::FileDroppedOn(id, _)
-                if [instrument, settings, help, params, editor].contains(&Some(id)) =>
+                if [instrument, settings, help, params, editor].contains(&Some(id))
+                    || self.panel_windows.panel_of(id).is_some() =>
             {
                 None
             }
@@ -1276,6 +1323,10 @@ impl App {
             self.search_typing = false;
         }
         if matches!(message, Message::ClearSelection) {
+            // A divider held before anything: Esc puts its line back and ends the drag.
+            if self.cancel_divider() {
+                return Task::none();
+            }
             // A menu over a panel first: drawn on the window's top layer, it is above
             // everything the rest of this chain closes, the instrument window's work included.
             if self.close_panel_menu() {
@@ -1507,6 +1558,11 @@ impl App {
                     self.commit(Edit::SetLoop { value });
                 }
             }
+            // Popped out, its key and button bring its window to the front, or from that
+            // window put it back in the stack.
+            Message::TogglePanel(panel) if self.panels.popped.has(panel) => {
+                return self.toggle_popped(panel);
+            }
             Message::TogglePanel(panel) => {
                 self.panels.toggle(panel);
                 if !self.panels.is_open(panel) {
@@ -1631,6 +1687,7 @@ impl App {
                     help: self.help.window,
                     params: self.params.window,
                     sample_editor: self.editor.window,
+                    panels: self.panel_windows.ids(),
                 };
                 return self
                     .headless
@@ -1909,6 +1966,8 @@ impl App {
                 .style(style::name_box);
             layers.push(pin(ghost).x(press.at.x + 14.0).y(press.at.y + 10.0).into());
         }
+        // A divider dragged sideways: the window its panel pops out into follows the cursor.
+        layers.extend(self.pop_out_outline());
         if let Some(picker) = &self.picker {
             let catalogue = self.host.catalogue();
             layers.push(self.picker_layer(picker, &catalogue));
@@ -2091,14 +2150,18 @@ impl App {
     /// the playlist, the piano roll and the mixer, each as tall as
     /// [`panels::stack_heights`] says, each under another with the divider over it on its top
     /// edge ([`App::divider_view`]). The last takes whatever the whole pixels above it leave.
+    /// When the area is too short for every panel's least height, each shows at its least and
+    /// the stack scrolls ([`panels::fits`]).
     fn panels_view(&self, area: Size) -> Element<'_, Message> {
         let stacked: Vec<Panel> = self.panels.stacked().collect();
         if stacked.is_empty() {
             return well(space().into()).height(Fill).into();
         }
+        let rack_content = self.rack_content();
+        let fits = panels::fits(&stacked, rack_content, area.height);
         let heights = panels::stack_heights(
             &stacked,
-            self.rack_content(),
+            rack_content,
             &self.settings.kept_heights(),
             area.height,
         );
@@ -2109,7 +2172,7 @@ impl App {
             .enumerate()
             .map(|(index, (&panel, height))| {
                 // Whole pixels, so the lines of the panels under it stay on whole pixels too.
-                let height = if index == last {
+                let length = if fits && index == last {
                     iced::Length::Fill
                 } else {
                     iced::Length::Fixed(height.floor())
@@ -2118,10 +2181,10 @@ impl App {
                 let divider = self.divider_view(above, panel);
                 let view = match panel {
                     // The rack is the top panel whenever it is open: no divider over it.
-                    Panel::Rack => return self.rack_well().height(height).into(),
+                    Panel::Rack => return self.rack_well().height(length).into(),
                     Panel::Playlist => self.playlist_view(),
                     Panel::PianoRoll => self.piano_roll_view(),
-                    Panel::Mixer => self.mixer_view(),
+                    Panel::Mixer => self.mixer_view(height),
                     Panel::Browser | Panel::Settings => {
                         unreachable!("the Library and Settings are no stacked panels")
                     }
@@ -2130,9 +2193,35 @@ impl App {
                     Some(divider) => column![divider, view].into(),
                     None => view,
                 };
-                container(view).height(height).into()
+                container(view).height(length).into()
             });
-        column(shown).height(Fill).into()
+        let stack = column(shown);
+        if fits {
+            return stack.height(Fill).into();
+        }
+        scrollable(stack)
+            .direction(Direction::Vertical(Scrollbar::default()))
+            .width(Fill)
+            .height(Fill)
+            .into()
+    }
+
+    /// The mixer panel's height as the stack shows it now ([`panels::stack_heights`]), its own
+    /// window's while it is popped out, its kept height while it is closed: what its desk is
+    /// laid out from.
+    fn mixer_panel_height(&self) -> f32 {
+        if let Some(height) = self.popped_mixer_height() {
+            return height;
+        }
+        let stacked: Vec<Panel> = self.panels.stacked().collect();
+        let kept = self.settings.kept_heights();
+        let heights =
+            panels::stack_heights(&stacked, self.rack_content(), &kept, self.panels_height());
+        stacked
+            .iter()
+            .zip(heights)
+            .find(|&(&panel, _)| panel == Panel::Mixer)
+            .map_or(kept.mixer_height(), |(_, height)| height)
     }
 
     /// The rack's content height: its header, its rows and, while its steps reach past what
@@ -2235,7 +2324,7 @@ impl App {
             browser_drag: self.browse.dragging_to_tracks(),
             armed: self.recording.track,
             follow: self.settings.follows(Panel::Playlist),
-            menu_foot: self.hint_bar_height(),
+            menu_foot: self.menu_foot(Panel::Playlist),
             link: self.selection_link(),
         }
         .view()
@@ -2264,18 +2353,19 @@ impl App {
         self.focus == Panel::Browser && self.panels.browser
     }
 
-    fn mixer_view(&self) -> Element<'_, Message> {
+    /// The mixer, `height` tall as the stack shows it.
+    fn mixer_view(&self, height: f32) -> Element<'_, Message> {
         MixerPanel {
             project: self.session.project(),
             state: &self.mixer,
-            height: self.settings.kept_heights().mixer_height(),
+            height,
             registry: self.session.registry(),
             channel: self.selected_channel,
             cache: &self.mixer_cache,
             now: Instant::now(),
             automated: &self.automated,
             menu: self.automate_menu_view(Panel::Mixer),
-            menu_foot: self.hint_bar_height(),
+            menu_foot: self.menu_foot(Panel::Mixer),
         }
         .view()
     }
@@ -2458,7 +2548,7 @@ impl App {
             preview: self.settings.preview_notes(),
             follow: self.settings.follows(Panel::PianoRoll),
             clipboard: self.clipboard.is_some(),
-            menu_foot: self.hint_bar_height(),
+            menu_foot: self.menu_foot(Panel::PianoRoll),
             live: &self.live_notes,
             recording_notes: self.recording.taking_notes(),
             quantize: self.quantize_form,
@@ -2909,7 +2999,7 @@ impl App {
                 } else {
                     1.0
                 };
-                let moved = rise / control.sweep_pixels() * (range.end() - range.start()) * fine;
+                let moved = rise / SWEEP_PIXELS * (range.end() - range.start()) * fine;
                 let value = control.clamp(start + moved, project, self.session.registry());
                 let Some(edit) = control.edit(value, project, self.session.registry()) else {
                     return;
@@ -3249,22 +3339,28 @@ impl App {
         closed.contains(&true)
     }
 
-    /// Selects mixer insert `insert` and opens the menu of its slot `slot`, as a press on that
-    /// slot does: the add menu under an empty slot (a left press), its effect's menu under a
-    /// filled one (a right press). `--slot-menu`, for a screenshot of the menu. Whether it
-    /// opened.
-    pub fn open_slot_menu(&mut self, insert: dawsome_engine::project::InsertId, slot: u8) -> bool {
+    /// Selects mixer insert `insert` and opens the menu of the effect at `place` in its chain,
+    /// or with `place` past its last effect the add menu, as a press there does: a right press
+    /// on the effect's name, a press on the add tile. `--slot-menu`, for a screenshot of the
+    /// menu. Whether it opened (a full insert has no add tile).
+    pub fn open_slot_menu(&mut self, insert: InsertId, place: usize) -> bool {
         let project = self.session.project();
         let Some(shown) = project.mixer.get(insert) else {
             return false;
         };
-        let button = if shown.effects.iter().any(|effect| effect.slot == slot) {
-            mouse::Button::Right
-        } else {
-            mouse::Button::Left
-        };
         self.mixer.select(insert, project);
-        let at = mixer_layout::slot_rect(slot, self.mixer.size().width).center();
+        let chain = mixer_state::knob_counts(project, self.session.registry(), insert);
+        let last = project.mixer.ids().last().unwrap_or(InsertId::MASTER);
+        let rects = mixer_layout::chain_rects(&chain, self.mixer.desk(last));
+        let Some(&block) = rects.get(place.min(chain.len())) else {
+            return false;
+        };
+        let (at, button) = if place < shown.effects.len() {
+            let name = mixer_layout::effect_name_rect(block).center();
+            (name, mouse::Button::Right)
+        } else {
+            (block.center(), mouse::Button::Left)
+        };
         let pressed = MixerMessage::Pressed {
             at,
             button,
@@ -3293,8 +3389,8 @@ impl App {
                 let id = Id::new(MIXER_RENAME_INPUT);
                 return operation::focus(id.clone()).chain(operation::select_all(id));
             }
-            Some(MixerCommand::PickPlugin { insert, slot }) => {
-                return self.open_picker(PickerTarget::Effect { insert, slot });
+            Some(MixerCommand::PickPlugin { insert }) => {
+                return self.open_picker(PickerTarget::Effect { insert });
             }
             Some(MixerCommand::OpenPlugin(effect)) => {
                 self.open_plugin(ProcessorOwner::Effect(effect));
@@ -3461,6 +3557,7 @@ impl App {
         let project = self.session.project();
         crate::ui::hint::Context {
             project,
+            registry: self.session.registry(),
             pattern: self.pattern,
             insert: self.mixer.selected,
             loop_on: project.playlist.loop_range.map(|range| range.on),
@@ -3542,6 +3639,13 @@ impl App {
     /// The hint bar's words now. The instrument window's and the Settings window's controls are
     /// named on their own foot lines.
     fn hint_words(&self) -> String {
+        if let Some(panel) = self.popping() {
+            return format!(
+                "{} \u{b7} release to pop the panel out into its own window \u{b7} drag back to \
+                 resize \u{b7} Esc cancels",
+                panel.title()
+            );
+        }
         match &self.hover {
             Some(hover)
                 if !matches!(
@@ -3593,7 +3697,9 @@ impl App {
             Some(_) => Some(self.editor.place),
             None => self.settings.sample_editor_window,
         };
-        if self.settings.window == layout
+        let panel_places = self.keep_panel_places();
+        if !panel_places
+            && self.settings.window == layout
             && self.settings.instrument_window == place
             && self.settings.settings_window == settings_place
             && self.settings.help_window == help_place
@@ -5977,9 +6083,22 @@ mod tests {
     use crate::ui::mixer_layout::{self as mix, strip_left};
     use crate::ui::mixer_state::{effect_values, Menu};
 
+    /// The fixture with the rack and the mixer open, the mixer kept 400 px tall as its divider
+    /// can leave it (a 394 px desk), its desk laid out from that: the desk these tests' points
+    /// were written at. Why not the 225 px default (310 before): its
+    /// strips end at y 217, above the y 300 where several tests press a strip, and in a 1000 px
+    /// window the effects area, one block wide, scrolls a second block's add up far enough to
+    /// take the first block's head out of view.
     fn p5_app(fixture: &str) -> (App, Player) {
         let (mut app, player) = app_on(&Path::new(FIXTURES).join(fixture));
+        app.settings.set_kept_heights(&crate::ui::panels::Kept {
+            mixer: Some(400.0),
+            ..Default::default()
+        });
         let _ = app.update(Message::TogglePanel(Panel::Mixer));
+        app.mixer
+            .set_desk_height(mix::desk_height(app.mixer_panel_height()));
+        assert_eq!(app.mixer.size().height, 394.0);
         (app, player)
     }
 
@@ -6013,7 +6132,8 @@ mod tests {
     }
 
     /// A point on insert `id`'s strip, `offset` in and at mixer y `y`. (The tests'
-    /// strip presses moved from y 400 to 300, inside the default 394 px desk's strips.)
+    /// strip presses moved from y 400 to 300, inside the 394 px desk's strips: at 30 px in, between
+    /// the fader's foot, 296, and the route button, 305, on the compact strip.)
     fn strip_point(id: u16, offset: f32, y: f32) -> iced::Point {
         iced::Point::new(strip_left(InsertId(id), 0.0) + offset, y)
     }
@@ -6246,12 +6366,66 @@ mod tests {
         ));
     }
 
+    /// The selected insert's blocks, and its add tile last while it has room, where the mixer
+    /// shows them now.
+    fn blocks(app: &App) -> Vec<iced::Rectangle> {
+        let project = app.session.project();
+        let registry = app.session.registry();
+        let chain = mixer_state::knob_counts(project, registry, app.mixer.selected);
+        let last = project.mixer.ids().last().unwrap_or(InsertId::MASTER);
+        mix::chain_rects(&chain, app.mixer.desk(last))
+    }
+
+    /// Adds the add menu's row `row` at the end of the selected insert's chain, as the wheel
+    /// bringing the add tile into view, a click on it and one on the row do. Why the wheel: an
+    /// add shows the lines from the first block while it can (`mix::SHOW_ADDED`), which may
+    /// leave the tile under the view (on the 394 px desk, under the EQ and two delays).
+    fn add_effect(app: &mut App, row: usize) {
+        let shown = |app: &App| {
+            let tile = *blocks(app).last().expect("the add tile");
+            let last = app.session.project().mixer.ids().last();
+            let desk = app.mixer.desk(last.unwrap_or(InsertId::MASTER));
+            let view = mix::blocks_view(desk);
+            (mix::shown_tile(tile, view), view.center())
+        };
+        for _ in 0..40 {
+            let (tile, over) = shown(app);
+            if tile.is_some() {
+                break;
+            }
+            let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 };
+            let _ = app.update(Message::Mixer(MixerMessage::Scrolled { at: over, delta }));
+        }
+        let tile = shown(app)
+            .0
+            .expect("the wheel brings the add tile into view")
+            .center();
+        left_click(app, tile);
+        assert_eq!(
+            app.mixer.menu,
+            Some(Menu::Add),
+            "the add tile opens the add menu"
+        );
+        choose(app, row);
+    }
+
+    /// Insert `id`'s chain: each effect's ID, in order.
+    fn chain_ids(app: &App, id: u16) -> Vec<u32> {
+        insert_of(app, id)
+            .effects
+            .iter()
+            .map(|effect| effect.id.0)
+            .collect()
+    }
+
     // The add menu's rows 4 and 5 are the ported compressor and saturator, at their own defaults,
-    // and row 6 the limiter.
+    // row 6 the limiter, then the filter, the distortion, the chorus, the flanger, the phaser,
+    // the gate and the stereo width. Each one chosen goes at the end of insert 1's chain, after
+    // its delay: rows 3 to 11 fill its nine free slots in order, and the full insert shows no add
+    // tile. The last row goes into insert 2, empty, as its first.
     #[test]
-    fn the_add_menu_offers_the_compressor_the_saturator_and_the_limiter() {
+    fn the_add_menu_offers_every_native_effect() {
         let (mut app, _player) = p5_app("p5_delay_sync.json");
-        let width = app.mixer.size().width;
         let names: Vec<&str> = crate::ui::mixer_state::ADD_MENU
             .iter()
             .map(|id| app.session.registry().get(id).expect("native").name())
@@ -6264,132 +6438,269 @@ mod tests {
                 "Reverb",
                 "Compressor (Pressure4)",
                 "Saturator (Density)",
-                "Limiter"
+                "Limiter",
+                "Filter",
+                "Distortion",
+                "Chorus",
+                "Flanger",
+                "Phaser",
+                "Gate",
+                "Stereo width"
             ]
         );
-        for (slot, row, id) in [
-            (1, 3, "dawsome.pressure4"),
-            (2, 4, "dawsome.density"),
-            (3, 5, "dawsome.limiter"),
-        ] {
-            left_click(&mut app, mix::slot_rect(slot, width).center());
-            choose(&mut app, row);
-            let effect = insert_of(&app, 1)
-                .effects
-                .iter()
-                .find(|effect| effect.slot == slot)
-                .expect("added");
-            assert_eq!(effect.processor.id, id);
+        for row in 3..=11 {
+            add_effect(&mut app, row);
         }
+        let chain: Vec<(u8, &str)> = insert_of(&app, 1)
+            .effects
+            .iter()
+            .map(|effect| (effect.slot, effect.processor.id.as_str()))
+            .collect();
+        assert_eq!(
+            chain,
+            [
+                (0, "dawsome.delay"),
+                (1, "dawsome.pressure4"),
+                (2, "dawsome.density"),
+                (3, "dawsome.limiter"),
+                (4, "dawsome.filter"),
+                (5, "dawsome.distortion"),
+                (6, "dawsome.chorus"),
+                (7, "dawsome.flanger"),
+                (8, "dawsome.phaser"),
+                (9, "dawsome.gate")
+            ]
+        );
+        assert_eq!(blocks(&app).len(), 10, "full: no add tile");
+        assert!(
+            !app.open_slot_menu(InsertId(1), 10),
+            "no add menu on a full insert"
+        );
+        assert!(app.open_slot_menu(InsertId(2), 0));
+        assert_eq!(app.mixer.menu, Some(Menu::Add));
+        choose(&mut app, 12);
+        let effects = &insert_of(&app, 2).effects;
+        assert_eq!(effects.len(), 1);
+        assert_eq!(
+            (effects[0].slot, effects[0].processor.id.as_str()),
+            (0, "dawsome.width")
+        );
     }
 
-    // The slot panel: an empty slot opens the add menu, a choice adds the effect; a filled
-    // slot's menu removes or moves it. Each choice is one undo step.
+    // An effect added from the menu starts off, one step ("Add effect"); the delay p5_delay_sync
+    // holds says nothing of its light, so it is on. A click on the new effect's light switches it
+    // on ("Effect on") and sends the player a plan with it; another switches it off ("Effect
+    // off"). Each Undo takes one step back, the last to the fixture's own bytes.
     #[test]
-    fn slots_add_move_and_remove_effects() {
+    fn an_added_effect_starts_off_and_its_light_switches_it() {
         let (mut app, _player) = p5_app("p5_delay_sync.json");
-        assert_eq!(app.mixer.selected, InsertId(1));
-        let width = app.mixer.size().width;
-        let slot = |n| mix::slot_rect(n, width).center();
-        left_click(&mut app, slot(1));
-        assert_eq!(app.mixer.menu, Some(Menu::Add { slot: 1 }));
-        choose(&mut app, 2);
-        let effects = |app: &App| -> Vec<(u32, u8, String)> {
-            insert_of(app, 1)
-                .effects
-                .iter()
-                .map(|e| (e.id.0, e.slot, e.processor.id.clone()))
-                .collect()
+        assert!(insert_of(&app, 1).effects[0].on, "the file's delay");
+        add_effect(&mut app, 0);
+        let eq = |app: &App| insert_of(app, 1).effects[1].clone();
+        assert_eq!(
+            (eq(&app).id, eq(&app).processor.id.as_str(), eq(&app).on),
+            (EffectId(2), "dawsome.eq3", false)
+        );
+        let history = |app: &App| {
+            let history = app.session.history();
+            (history.undo_len(), history.undo_name())
         };
-        assert_eq!(
-            effects(&app),
-            [
-                (1, 0, "dawsome.delay".to_owned()),
-                (2, 1, "dawsome.reverb".to_owned())
-            ]
-        );
-        assert_eq!(app.mixer.selected_effect, Some(EffectId(2)));
-        press_at(&mut app, slot(0), mouse::Button::Right, false);
-        assert_eq!(
-            app.mixer.menu,
-            Some(Menu::Effect {
-                effect: EffectId(1),
-                slot: 0
-            })
-        );
-        choose(&mut app, 2);
-        assert_eq!(
-            effects(&app),
-            [
-                (2, 0, "dawsome.reverb".to_owned()),
-                (1, 1, "dawsome.delay".to_owned())
-            ],
-            "Move down swaps it with the reverb"
-        );
-        press_at(&mut app, slot(1), mouse::Button::Right, false);
-        choose(&mut app, 0);
-        assert_eq!(effects(&app), [(2, 0, "dawsome.reverb".to_owned())]);
-        assert_eq!(app.session.history().undo_len(), 3);
-        for _ in 0..3 {
-            let _ = app.update(Message::Undo);
-        }
+        assert_eq!(history(&app), (1, Some("Add effect")));
+        let light = mix::effect_led_center(blocks(&app)[1]);
+        let plans = app.session.plans_sent();
+        left_click(&mut app, light);
+        assert!(eq(&app).on);
+        assert_eq!(app.session.plans_sent(), plans + 1, "a plan with it on");
+        assert_eq!(history(&app), (2, Some("Effect on")));
+        left_click(&mut app, light);
+        assert!(!eq(&app).on);
+        assert_eq!(history(&app), (3, Some("Effect off")));
+        let _ = app.update(Message::Undo);
+        assert!(eq(&app).on);
+        let _ = app.update(Message::Undo);
+        assert!(!eq(&app).on);
+        let _ = app.update(Message::Undo);
         assert_eq!(document(&app), fixture("p5_delay_sync.json"));
     }
 
-    // The slot menu is drawn on
-    // the window's top layer, so the mixer's foot never cuts it. p5_gain with the mixer alone at
-    // 1000 x 400 and the hint bar on, insert 12 (the last strip in view, running under the slot
-    // panel from x 800) selected and its empty slot 9 pressed: the add menu, seven rows of 26 px
-    // on 4 px of ground, 188 x 190, opens under the slot at (800 + 28, 64 + 6 + 52 + 22·10) =
-    // (828, 342). Down from there it would end at 532, past the hint bar's top at 378, so it
-    // flips up to start at 152; it would end at 1016, so it moves left to end at the window's
-    // edge, from 812. Each of its rows, clicked there, sends its place in the menu. (Pin
-    // moved: 328 and 164 under the 56 px toolbar and no mixer handle; the master
-    // limiter, a seventh row: 164 + 26 = 190 high, from 350 − 190 = 160; 8 px up under the
-    // 64 px toolbar, from 342 − 190 = 152.)
+    // A right click on a block opens its menu (Remove); a click on its cross removes it too.
+    // Each is one step, and Undo puts the effect back where it was, its light as it was.
     #[test]
-    fn a_slot_menu_shows_whole_at_the_window_foot() {
+    fn a_block_is_removed_by_its_cross_or_its_menu() {
+        let (mut app, _player) = p5_app("p5_delay_sync.json");
+        add_effect(&mut app, 2);
+        assert_eq!(chain_ids(&app, 1), [1, 2]);
+        let added = document(&app);
+        let name = mix::effect_name_rect(blocks(&app)[0]).center();
+        press_at(&mut app, name, mouse::Button::Right, false);
+        assert_eq!(
+            app.mixer.menu,
+            Some(Menu::Effect {
+                effect: EffectId(1)
+            })
+        );
+        choose(&mut app, 0);
+        assert_eq!(chain_ids(&app, 1), [2]);
+        let cross = mix::remove_rect(blocks(&app)[0]).center();
+        left_click(&mut app, cross);
+        assert!(insert_of(&app, 1).effects.is_empty());
+        let _ = app.update(Message::Undo);
+        let _ = app.update(Message::Undo);
+        assert_eq!(document(&app), added);
+    }
+
+    // A block dragged by its name takes its neighbour's place once the pointer passes the
+    // neighbour's middle (`mixer_layout::reorder_place`): while held it shows there and the
+    // document waits; let go, the delay goes after the reverb added after it, one step ("Move
+    // effect"), and one Undo puts it back. Let go where it was, or Esc while held, and nothing
+    // changes.
+    #[test]
+    fn a_dragged_block_takes_its_neighbours_place_and_one_undo_puts_it_back() {
+        let (mut app, _player) = p5_app("p5_delay_sync.json");
+        add_effect(&mut app, 2);
+        assert_eq!(chain_ids(&app, 1), [1, 2]);
+        let added = document(&app);
+        let rects = blocks(&app);
+        let name = mix::effect_name_rect(rects[0]).center();
+        let past = iced::Point::new(rects[1].center_x() + 10.0, rects[1].center_y());
+        let reorder = |app: &mut App, message| {
+            let _ = app.update(Message::Mixer(message));
+        };
+        left_click(&mut app, name);
+        assert!(app.mixer.reorder.is_some(), "held by its name");
+        reorder(&mut app, MixerMessage::ReorderEnded);
+        assert_eq!(app.mixer.reorder, None);
+        assert_eq!(app.session.history().undo_len(), 1, "let go in place");
+        left_click(&mut app, name);
+        reorder(&mut app, MixerMessage::ReorderMoved(past));
+        assert_eq!(app.mixer.chain_order(2), [1, 0], "shown second while held");
+        assert_eq!(chain_ids(&app, 1), [1, 2], "the document waits");
+        let _ = app.update(Message::ClearSelection);
+        assert_eq!(app.mixer.reorder, None, "Esc lets go");
+        assert_eq!(app.mixer.chain_order(2), [0, 1]);
+        assert_eq!(app.session.history().undo_len(), 1);
+        left_click(&mut app, name);
+        reorder(&mut app, MixerMessage::ReorderMoved(past));
+        reorder(&mut app, MixerMessage::ReorderEnded);
+        assert_eq!(chain_ids(&app, 1), [2, 1]);
+        let history = app.session.history();
+        assert_eq!(
+            (history.undo_len(), history.undo_name()),
+            (2, Some("Move effect"))
+        );
+        let _ = app.update(Message::Undo);
+        assert_eq!(chain_ids(&app, 1), [1, 2]);
+        assert_eq!(document(&app), added);
+    }
+
+    // A block's › moves it a place later and its ‹ a place earlier, one step each ("Move
+    // effect"); the first block has no ‹ and the last no ›, so a press there moves nothing.
+    #[test]
+    fn a_blocks_arrows_move_it_a_place() {
+        let (mut app, _player) = p5_app("p5_delay_sync.json");
+        add_effect(&mut app, 2);
+        let at = mix::later_rect(blocks(&app)[0]).center();
+        left_click(&mut app, at);
+        assert_eq!(chain_ids(&app, 1), [2, 1]);
+        assert_eq!(app.session.history().undo_name(), Some("Move effect"));
+        let at = mix::earlier_rect(blocks(&app)[1]).center();
+        left_click(&mut app, at);
+        assert_eq!(chain_ids(&app, 1), [1, 2]);
+        let at = mix::earlier_rect(blocks(&app)[0]).center();
+        left_click(&mut app, at);
+        let at = mix::later_rect(blocks(&app)[1]).center();
+        left_click(&mut app, at);
+        assert_eq!(chain_ids(&app, 1), [1, 2]);
+        assert_eq!(app.session.history().undo_len(), 3);
+    }
+
+    // The chain's order and its lights are the document's: written as a save writes it and read
+    // back, a chain moved (the reverb, added off, first) keeps both, and writes the same text.
+    #[test]
+    fn the_chain_order_and_its_lights_round_trip_through_save_and_load() {
+        let (mut app, _player) = p5_app("p5_delay_sync.json");
+        add_effect(&mut app, 2);
+        let at = mix::earlier_rect(blocks(&app)[1]).center();
+        left_click(&mut app, at);
+        let path = Path::new(FIXTURES).join("p5_delay_sync.json");
+        let samples = project_file::samples_dir(&path);
+        let saved = project_file::json_for(app.session.project(), &samples, &path).expect("saves");
+        let read = Project::load_json(&saved).expect("reads back");
+        let chain: Vec<(u32, u8, bool)> = read
+            .mixer
+            .get(InsertId(1))
+            .expect("insert 1")
+            .effects
+            .iter()
+            .map(|effect| (effect.id.0, effect.slot, effect.on))
+            .collect();
+        assert_eq!(chain, [(2, 0, false), (1, 1, true)]);
+        assert_eq!(
+            project_file::json_for(&read, &samples, &path).expect("saves"),
+            saved
+        );
+    }
+
+    // The add menu is drawn on the window's top layer, so the mixer's foot never cuts it.
+    // p5_gain with the mixer alone at 1000 x 480 and the hint bar on (its top at 480 − 22 =
+    // 458), insert 12 selected: it holds no effect, so its add tile is its first block, at the
+    // effects area's (668 + 6, 52), and the add menu opens under the tile's head, 6 px in: window
+    // (680, 64 + 6 + 52 + 22) = (680, 144). The menu, fourteen rows of 26 px on 4 px of ground,
+    // 188 x 372, down from there would end at 516, past the hint bar's top, and flipped up it
+    // would start at −228, above the mixer's top at 70 (under the 64 px toolbar and the mixer's
+    // 6 px divider), so it sits as low as it fits, ending on the hint bar's top: from 458 − 372
+    // = 86. Each of its rows, clicked there, sends its place in the menu. At 1000 x 400 (the
+    // hint bar's top at 378) it is taller than the 378 − 70 = 308 px below the mixer's top, so
+    // it ends on the hint bar's top all the same, from 378 − 372 = 6, over the toolbar, and all
+    // fourteen rows click (A.8 of the effects spec: menus never scroll). (Pins moved: the menu
+    // opened under insert 12's tenth slot, at x 812 = 1000 − 188, before the slots became
+    // blocks; at 400 px it used to be pinned at the mixer's top, 70, and ran past the
+    // window's foot to 442, its last two rows cut off.)
+    #[test]
+    fn the_add_menu_shows_whole_at_the_window_foot() {
         let (mut app, _player) = p5_app("p5_gain.json");
         let _ = app.update(Message::TogglePanel(Panel::Rack));
-        let _ = app.update(Message::WindowResized(Size::new(1000.0, 400.0)));
         app.hints_flag = Some(true);
-        assert!(app.open_slot_menu(InsertId(12), 9));
-        assert_eq!(app.mixer.selected, InsertId(12));
-        assert_eq!(app.mixer.menu, Some(Menu::Add { slot: 9 }));
-        let mut window = widget_events::Window::new(&app);
-        let menus = window.overlays(&app);
-        let [menu] = menus[..] else {
-            panic!("one menu on the window's top layer: {menus:?}");
-        };
-        assert_eq!(
-            menu,
-            iced::Rectangle::new(Point::new(812.0, 152.0), Size::new(188.0, 190.0))
-        );
-        for row in 0..7 {
-            let at = Point::new(menu.center_x(), menu.y + 4.0 + 26.0 * (row as f32 + 0.5));
-            let published = window.click_overlay(&app, at);
-            assert!(
-                matches!(
-                    published.as_slice(),
-                    [Message::Mixer(MixerMessage::MenuChosen(chosen))] if *chosen == row
-                ),
-                "row {row}: {published:?}"
+        for (height, top, whole_rows) in [(480.0, 86.0, 14), (400.0, 6.0, 14)] {
+            let _ = app.update(Message::WindowResized(Size::new(1000.0, height)));
+            assert!(app.open_slot_menu(InsertId(12), 0));
+            assert_eq!(app.mixer.selected, InsertId(12));
+            assert_eq!(app.mixer.menu, Some(Menu::Add));
+            let mut window = widget_events::Window::new(&app);
+            let menus = window.overlays(&app);
+            let [menu] = menus[..] else {
+                panic!("one menu on the window's top layer: {menus:?}");
+            };
+            assert_eq!(
+                menu,
+                iced::Rectangle::new(Point::new(680.0, top), Size::new(188.0, 372.0)),
+                "at {height} px"
             );
+            for row in 0..whole_rows {
+                let at = Point::new(menu.center_x(), menu.y + 4.0 + 26.0 * (row as f32 + 0.5));
+                let published = window.click_overlay(&app, at);
+                assert!(
+                    matches!(
+                        published.as_slice(),
+                        [Message::Mixer(MixerMessage::MenuChosen(chosen))] if *chosen == row
+                    ),
+                    "at {height} px, row {row}: {published:?}"
+                );
+            }
         }
     }
 
-    // A parameter slider drags left to right: 12 px of the 120 px slider is a tenth of the
-    // delay's feedback range (0..0.95), so 0.5 becomes 0.595. One plan, one undo step.
+    // An effect's knob drags left to right as a rack knob does: 20 px of its 200 px sweep is a
+    // tenth of the delay's feedback range (0..0.95), so 0.5 becomes 0.595. One plan, one undo
+    // step.
     #[test]
-    fn a_parameter_slider_drags_the_effect_value() {
+    fn an_effects_knob_drags_its_value() {
         let (mut app, _player) = p5_app("p5_delay_sync.json");
-        let width = app.mixer.size().width;
-        left_click(&mut app, mix::slot_rect(0, width).center());
-        assert_eq!(app.mixer.selected_effect, Some(EffectId(1)));
+        let knob = mix::knob_rect(mix::knob_cell(blocks(&app)[0], 4, 2)).center();
         let plans = app.session.plans_sent();
-        left_click(&mut app, mix::slider_rect(2, width).center());
+        left_click(&mut app, knob);
         let _ = app.update(Message::DragMoved(500.0));
-        let _ = app.update(Message::DragMoved(512.0));
+        let _ = app.update(Message::DragMoved(520.0));
         let feedback = |app: &App| insert_of(app, 1).effects[0].processor.params["feedback"];
         assert!((feedback(&app) - 0.595).abs() < 1e-6, "{}", feedback(&app));
         assert_eq!(app.session.plans_sent(), plans, "no plan while it moves");
@@ -6398,49 +6709,171 @@ mod tests {
         one_undo_restores(&mut app, "p5_delay_sync.json");
     }
 
+    // The filter's type is a button, not a knob: each click steps to the next type (low-pass 0,
+    // high-pass 1, band-pass 2, notch 3), and after the last back to the first, one step each
+    // ("Effect setting").
+    #[test]
+    fn a_choice_steps_through_its_values() {
+        let (mut app, _player) = p5_app("p5_delay_sync.json");
+        add_effect(&mut app, 6);
+        let button = mix::choice_rect(mix::knob_cell(blocks(&app)[1], 3, 0)).center();
+        let kind = |app: &App| {
+            let effect = &insert_of(app, 1).effects[1];
+            effect_values(effect, app.session.registry()).expect("values")[0]
+        };
+        assert_eq!(kind(&app), 0.0);
+        for want in [1.0, 2.0, 3.0, 0.0] {
+            left_click(&mut app, button);
+            assert_eq!(kind(&app), want);
+        }
+        let history = app.session.history();
+        assert_eq!(
+            (history.undo_len(), history.undo_name()),
+            (5, Some("Effect setting"))
+        );
+    }
+
     // The mixer's handle is the divider over the mixer now: its test is
     // `dividers::tests::the_divider_over_the_mixer_sets_its_height_between_its_least_and_the_room`.
 
-    // The default desk (394 px) shows five of the EQ's ten parameter rows; the
-    // wheel over them scrolls a row a notch, down to the sixth parameter in the first row (the
-    // tenth in the last) and no further. Scrolled to the fifth parameter, "Mid gain" (6 dB in
-    // p5_eq_3k), a double press on the first row resets it to 0 dB, one undo step.
+    // Three effects added through "+ Add effect" at the mixer's default height show from the
+    // first block, by whole lines, and the wheel reaches the rest and comes back (the bug: the
+    // first two blocks showed cut to their foot, out of reach). The case: a new
+    // document (16 inserts) in a 1920 x 1080 window with the Library open and the hint bar, the
+    // mixer at its default 225 px: its canvas from window (300, 1080 - 22 - 225 + 6 = 839),
+    // 1620 x 219; its blocks' view x 1074..1606 (right of insert 16's strip, 12 + 62 x 16 + 60 +
+    // 4 = 1068, 6 in; 14 short of 1620), y 52..217 (165 px, less than two lines: 84 + 6 + 84).
+    // Insert 1 gets the delay, the reverb (4 knobs each: 252 x 84) and the EQ (10 knobs, two
+    // rows: 312 x 142). The first line holds the delay at 1074 and the reverb at 1332; the
+    // second, at 52 + 84 + 6 = 142, the EQ and the add tile (192 x 84) at 1392. The EQ's head
+    // (142..164) shows from the top, so the lines stay there, and the tile, cut at the view's
+    // foot (its top 75 px), takes a press there, as it did after the reverb (at 1074, 142).
+    // Before, each add scrolled to the lines' end, 284 - 217 = 67 after the EQ: the first line
+    // at -15..69, 17 px of ground with neither head nor knob drawn. Then a press on the delay's
+    // light switches it on, and the wheel goes down 48, then 67 (the EQ whole at 75..217), and
+    // back up 19, then 0.
     #[test]
-    fn the_wheel_scrolls_parameter_rows_the_desk_has_no_room_for() {
+    fn three_effects_added_at_the_default_height_show_from_the_first_block() {
+        let (mut app, _player) = app_with(project_file::new_document(), Path::new(""));
+        app.hints_flag = Some(true);
+        let _ = app.update(Message::WindowResized(Size::new(1920.0, 1080.0)));
+        let _ = app.update(Message::TogglePanel(Panel::Browser));
+        let _ = app.update(Message::TogglePanel(Panel::Playlist));
+        let _ = app.update(Message::TogglePanel(Panel::Mixer));
+        assert_eq!(app.mixer_panel_height(), mix::DEFAULT_HEIGHT);
+        let mut window = widget_events::Window::new(&app);
+        let at = |x: f32, y: f32| Point::new(300.0 + x, 839.0 + y);
+        // A move off the desk has it report its size; a press on insert 1's strip selects it.
+        let off = mouse::Cursor::Available(Point::new(5.0, 5.0));
+        let moved = mouse::Event::CursorMoved {
+            position: Point::new(5.0, 5.0),
+        };
+        let _ = window.mouse(&mut app, moved, off);
+        assert_eq!(app.mixer.size(), Size::new(1620.0, 219.0));
+        let _ = window.click(&mut app, at(strip_left(InsertId(1), 0.0) + 30.0, 40.0));
+        assert_eq!(app.mixer.selected, InsertId(1));
+        let rect =
+            |x, y, width, height| iced::Rectangle::new(Point::new(x, y), Size::new(width, height));
+        // The add menu's rows, from 0: 1 the delay, 2 the reverb, 0 the EQ; each tile pressed
+        // where it shows (the third one in its top 75 px).
+        for (tile, row) in [
+            (at(1170.0, 94.0), 1),
+            (at(1428.0, 94.0), 2),
+            (at(1170.0, 175.0), 0),
+        ] {
+            let pressed = window.click(&mut app, tile);
+            assert_eq!(app.mixer.menu, Some(Menu::Add), "{tile:?}: {pressed:?}");
+            let menus = window.overlays(&app);
+            let [menu] = menus[..] else {
+                panic!("one menu: {menus:?}");
+            };
+            let choice = Point::new(menu.center_x(), menu.y + 4.0 + 26.0 * (row as f32 + 0.5));
+            for message in window.click_overlay(&app, choice) {
+                let _ = app.update(message);
+            }
+        }
+        let names: Vec<&str> = insert_of(&app, 1)
+            .effects
+            .iter()
+            .map(|effect| effect.processor.id.as_str())
+            .collect();
+        assert_eq!(names, ["dawsome.delay", "dawsome.reverb", "dawsome.eq3"]);
+        let first_line = [
+            rect(1074.0, 52.0, 252.0, 84.0),
+            rect(1332.0, 52.0, 252.0, 84.0),
+        ];
+        let second_line = [
+            rect(1074.0, 142.0, 312.0, 142.0),
+            rect(1392.0, 142.0, 192.0, 84.0),
+        ];
+        let shown = |scroll: f32| -> Vec<iced::Rectangle> {
+            first_line
+                .iter()
+                .chain(&second_line)
+                .map(|block| iced::Rectangle {
+                    y: block.y - scroll,
+                    ..*block
+                })
+                .collect()
+        };
+        assert_eq!(blocks(&app), shown(0.0), "the first block at the top");
+        let delay_light = mix::effect_led_center(first_line[0]);
+        let _ = window.click(&mut app, at(delay_light.x, delay_light.y));
+        assert!(
+            insert_of(&app, 1).effects[0].on,
+            "the delay's light took the press"
+        );
+        let over = at(1500.0, 120.0);
+        for (lines, scroll) in [(-1.0, 48.0), (-1.0, 67.0), (1.0, 19.0), (1.0, 0.0)] {
+            let _ = window.wheel(&mut app, over, lines);
+            assert_eq!(blocks(&app), shown(scroll), "the wheel {lines}");
+        }
+    }
+
+    // The wheel over the effects area scrolls its lines a notch (48 px) at a time when they are
+    // taller than it, from their top to where the last line's foot meets the area's, and no
+    // further; a press then finds what is drawn under it: scrolled to the end, a click on the
+    // last block's (the filter's) type steps it. Another insert's lines show from the top.
+    #[test]
+    fn the_wheel_scrolls_the_effects_lines() {
         let (mut app, _player) = p5_app("p5_eq_3k.json");
-        let width = app.mixer.size().width;
-        left_click(&mut app, mix::slot_rect(0, width).center());
-        assert_eq!(app.mixer.selected_effect, Some(EffectId(1)));
-        assert_eq!(mix::param_rows(app.mixer.size().height), 5);
-        let first_row = mix::param_row_rect(0, width).center();
+        for row in [1, 2, 6] {
+            add_effect(&mut app, row);
+        }
+        app.mixer.effects_scroll = 0.0;
+        let project = app.session.project();
+        let chain = mixer_state::knob_counts(project, app.session.registry(), InsertId(1));
+        let last = project.mixer.ids().last().expect("inserts");
+        let most = mix::max_effects_scroll(&chain, app.mixer.desk(last));
+        assert!(
+            most > mix::EFFECTS_SCROLL_PER_NOTCH,
+            "taller than the area by {most}"
+        );
+        let over = iced::Point::new(app.mixer.size().width - 4.0, 100.0);
         let wheel = |app: &mut App, y: f32| {
             let delta = mouse::ScrollDelta::Lines { x: 0.0, y };
-            let _ = app.update(Message::Mixer(MixerMessage::Scrolled {
-                at: first_row,
-                delta,
-            }));
+            let _ = app.update(Message::Mixer(MixerMessage::Scrolled { at: over, delta }));
         };
-        for _ in 0..8 {
+        wheel(&mut app, -1.0);
+        assert_eq!(app.mixer.effects_scroll, mix::EFFECTS_SCROLL_PER_NOTCH);
+        for _ in 0..20 {
             wheel(&mut app, -1.0);
         }
-        assert_eq!(
-            app.mixer.params_top(),
-            5,
-            "the tenth parameter in the last row"
-        );
+        assert_eq!(app.mixer.effects_scroll, most);
         wheel(&mut app, 1.0);
-        assert_eq!(app.mixer.params_top(), 4);
-        let gain = |app: &App| {
-            let effect = &insert_of(app, 1).effects[0];
-            effect_values(effect, app.session.registry()).expect("values")[4]
-        };
-        assert_eq!(gain(&app), 6.0);
-        press_at(&mut app, first_row, mouse::Button::Left, true);
-        assert_eq!(gain(&app), 0.0);
-        assert_eq!(app.session.history().undo_len(), 1);
-        // Another effect selected shows its first parameter first.
-        app.mixer.selected_effect = None;
-        assert_eq!(app.mixer.params_top(), 0);
+        assert_eq!(
+            app.mixer.effects_scroll,
+            most - mix::EFFECTS_SCROLL_PER_NOTCH
+        );
+        wheel(&mut app, -1.0);
+        let filter = blocks(&app)[3];
+        let button = mix::choice_rect(mix::knob_cell(filter, 3, 0)).center();
+        left_click(&mut app, button);
+        let kind = &insert_of(&app, 1).effects[3].processor.params["type"];
+        assert_eq!(*kind, 1.0, "the press found the filter's type");
+        let project = app.session.project().clone();
+        app.mixer.select(InsertId(2), &project);
+        assert_eq!(app.mixer.effects_scroll, 0.0);
     }
 
     // The header's arrows and Ctrl+L route the selected channel; the selected insert follows.
@@ -7334,15 +7767,20 @@ mod tests {
         assert!(app.edit_menu && !app.files.menu);
     }
 
-    // B2: in a 1000 × 560 window (504 px under the toolbar) F1's rack (70 px least), the
-    // playlist (180) and the piano roll (224) fit; the mixer (180) opened then does not, so the
-    // most recently used of the others stay while they fit beside it: the roll and the rack
-    // (474 px), not the playlist, which closes, named in a notice, whether or not the rack was
-    // pressed after it.
+    // B2: in a 1000 × 605 window (541 px under the toolbar) F1's rack (70 px least), the
+    // playlist (180) and the piano roll (230 under them) fit; the mixer (225) opened then does
+    // not, so the most recently used of the others stay while they fit beside it: the roll and
+    // the rack (449 and 525 px), not the playlist (705, or 635 beside the roll and the mixer),
+    // which closes, named in a notice, whether or not the rack was pressed after it. In a
+    // 1280 × 815 window (751 px) all four fit and nothing closes. (1000 × 560 and 1280 × 800
+    // when the mixer's least was 180; 1000 × 690 and 1280 × 900 with its least of 310; the
+    // windows follow it, so the answers stand.)
     #[test]
     fn a_panel_opened_without_room_closes_the_least_recently_used_with_a_notice() {
         let open_three = |press_rack: bool| {
             let (mut app, player) = f1_app();
+            let _ = app.update(Message::WindowResized(Size::new(1000.0, 605.0)));
+            assert_eq!(app.panels_height(), 541.0);
             let _ = app.update(Message::TogglePanel(Panel::Playlist));
             let _ = app.update(Message::TogglePanel(Panel::PianoRoll));
             if press_rack {
@@ -7372,7 +7810,7 @@ mod tests {
         );
         // In a taller window all four fit and nothing closes.
         let (mut app, _player) = f1_app();
-        let _ = app.update(Message::WindowResized(Size::new(1280.0, 800.0)));
+        let _ = app.update(Message::WindowResized(Size::new(1280.0, 815.0)));
         for panel in [Panel::Playlist, Panel::PianoRoll, Panel::Mixer] {
             let _ = app.update(Message::TogglePanel(panel));
         }
@@ -7398,14 +7836,16 @@ mod tests {
         assert_eq!(app.notice, None);
     }
 
-    // F1's stacked panels opened in turn at 1000 × 560 (504 px): each
+    // F1's stacked panels opened in turn at 1000 × 605 (541 px): each
     // panel opened keeps the most recently used of the others that fit beside it, and the
     // notice names only those that closed: the mixer closes the playlist (the rack stays, the
     // roll and the mixer leaving it room). Settings then opens its window and
-    // closes nothing (stacked, it closed the piano roll).
+    // closes nothing (stacked, it closed the piano roll). (1000 × 560 before, then 1000 × 690
+    // with the mixer's least of 310; the window follows the least, 225 now.)
     #[test]
     fn a_panel_opened_without_room_keeps_the_most_recently_used_that_fit() {
         let (mut app, _player) = f1_app();
+        let _ = app.update(Message::WindowResized(Size::new(1000.0, 605.0)));
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
         let _ = app.update(Message::TogglePanel(Panel::PianoRoll));
         assert_eq!(app.notice, None);
@@ -7431,13 +7871,14 @@ mod tests {
         );
     }
 
-    // 6d review 4: a stray digit is undone by the same digit. F1 at 1000 x 560 with the rack,
+    // A stray digit is undone by the same digit. F1 at 1000 x 605 with the rack,
     // the playlist and the piano roll open and the keyboard on: 4, a finger reaching past E and
     // R, opens the mixer, which closes the playlist to make room (B2); 4 again closes the mixer
     // and brings the playlist back, and the notice says so. A panel opened by hand meanwhile
     // stays as it is (here 2 reopens the playlist, which closes the roll; 4 then closes the
     // mixer alone, and 2 again brings the roll back), and one with no room left stays closed
-    // (the window made 420 px tall). (The playlist's digit is 2, was 3.)
+    // (the window made 420 px tall). (The playlist's digit is 2, was 3. The window was 1000 x
+    // 560, then 1000 x 690 with the mixer's least of 310; it follows the least, 225 now.)
     #[test]
     fn the_same_digit_again_brings_back_what_its_panel_closed() {
         let open = |app: &App| {
@@ -7463,6 +7904,7 @@ mod tests {
         };
         let three_open = || {
             let (mut app, player) = f1_app();
+            let _ = app.update(Message::WindowResized(Size::new(1000.0, 605.0)));
             assert!(app.typing.on);
             let _ = app.update(Message::TogglePanel(Panel::Playlist));
             let _ = app.update(Message::TogglePanel(Panel::PianoRoll));

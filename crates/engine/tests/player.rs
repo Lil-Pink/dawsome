@@ -1073,6 +1073,7 @@ fn add_nth_effect(n: u32, processor: &str) -> Edit {
         slot: u8::try_from(n % 10).expect("below 10"),
         id: EffectId(n + 1),
         processor: ProcessorRef::new(processor),
+        on: true,
     }
 }
 
@@ -1089,6 +1090,7 @@ fn a_moved_effect_keeps_its_instance_and_its_state() {
             slot,
             id: EffectId(id),
             processor: ProcessorRef::new(kind),
+            on: true,
         };
         edit::apply(&mut project, add).expect("adds");
     }
@@ -1171,6 +1173,47 @@ fn stop_clears_effect_tails() {
     assert_eq!(sounding_frames(&again), [16537, 33074, 49611, 66148, 82685]);
 }
 
+// Seen with a piano played live through a Delay while stopped: a note's
+// echo came back notes later, and after any pause an old sound. A click (a one-frame sound)
+// through 100 ms, 4410 frames at 44.1 kHz, with no feedback and all wet: its one echo sounds 4410
+// frames after it, though the voice that played it ended at once; a click struck after ten
+// seconds of silence echoes alone, 4410 frames later again, with the same bits. Nothing else
+// may sound: the dry click is mixed out and there is no feedback.
+#[test]
+fn a_delay_rings_on_while_stopped_and_a_later_note_echoes_only_itself() {
+    let text = P5_DELAY_MS.replace(
+        r#""params":{"feedback":0.5,"mix":0.5,"time_ms":10.0}"#,
+        r#""params":{"feedback":0.0,"mix":1.0,"time_ms":100.0}"#,
+    );
+    assert_ne!(text, P5_DELAY_MS, "the delay's settings were replaced");
+    let project = p5(&text);
+    let plan = plan_with_sample(&project, PlayMode::Pattern(PatternId(1)), &[1.0]);
+    let (mut link, mut player) = realtime::link(plan, project.tempo);
+    let click = |link: &mut RealtimeLink, player: &mut Player| {
+        link.send(Control::ChannelNoteOn {
+            channel: ChannelId(1),
+            key: DEFAULT_KEY,
+            velocity: 1.0,
+        })
+        .expect("room");
+        let heard = render_player(player, 10_000, std::iter::repeat(512));
+        link.send(Control::LiveNoteOff { key: DEFAULT_KEY })
+            .expect("room");
+        heard
+    };
+    let first = click(&mut link, &mut player);
+    assert_eq!(sounding_frames(&first), [4410], "the first click's echo");
+    let pause = render_player(&mut player, 441_000, std::iter::repeat(512));
+    assert_eq!(
+        sounding_frames(&pause),
+        Vec::<usize>::new(),
+        "ten seconds of silence"
+    );
+    let second = click(&mut link, &mut player);
+    assert_eq!(sounding_frames(&second), [4410], "the second click's echo");
+    assert!(bits(&second) == bits(&first), "the same echo");
+}
+
 // Updates are applied in order, none merged. Twelve updates, more than the ring holds, so several
 // wait at once: five counters added and all five removed, then counters 6 and 7 added. Exactly 6
 // and 7 must run. Had only the newest waiting update been kept, counters 4 and 5 would never have
@@ -1187,6 +1230,7 @@ fn plan_updates_arrive_in_order_and_none_is_dropped() {
         slot: u8::try_from(id).expect("small"),
         id: EffectId(id),
         processor: ProcessorRef::new("test.counter"),
+        on: true,
     };
     let remove = |id| Edit::RemoveEffect { id: EffectId(id) };
     let edits = (1..=5)
@@ -1236,6 +1280,7 @@ fn updates_for_a_player_that_is_gone_are_dropped_and_their_slots_freed() {
             slot: u8::try_from(id - 1).expect("small"),
             id: EffectId(id),
             processor: ProcessorRef::new("test.counter"),
+            on: true,
         };
         let update = edited(&mut compiler, &mut project, add);
         link.push_plan(update).expect("same time base");
@@ -1332,6 +1377,7 @@ fn mixed_dense_song() -> Project {
             params: params.iter().map(|&(k, v)| (k.to_owned(), v)).collect(),
             ..ProcessorRef::new(kind)
         },
+        on: true,
     };
     project.mixer.inserts[1].effects = vec![effect(1, "dawsome.eq3", &[("mid_gain_db", 6.0)])];
     project.mixer.inserts[2].effects = vec![effect(2, "dawsome.delay", &[("sync_steps", 3.0)])];
@@ -1364,11 +1410,17 @@ fn process_never_touches_the_heap_with_the_mixer_in_play() {
             key: "mid_gain_db".into(),
             value: Some(-4.0),
         },
+        // Switched off, its processor stays; switched on, the player clears it.
+        Edit::SetEffectOn {
+            effect: EffectId(1),
+            on: false,
+        },
         Edit::AddEffect {
             insert: InsertId(4),
             slot: 2,
             id: EffectId(4),
             processor: ProcessorRef::new("dawsome.delay"),
+            on: true,
         },
         Edit::SetInsertVolume {
             insert: InsertId(2),
@@ -1394,6 +1446,11 @@ fn process_never_touches_the_heap_with_the_mixer_in_play() {
             slot: 0,
             id: EffectId(2),
             processor: ProcessorRef::new("dawsome.delay"),
+            on: true,
+        },
+        Edit::SetEffectOn {
+            effect: EffectId(1),
+            on: true,
         },
         Edit::SetEffectParam {
             effect: EffectId(3),

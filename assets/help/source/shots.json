@@ -54,7 +54,7 @@
   {"file": "piano-roll.png", "shot": "roll", "crop": [0, 64, 680, 560]},
   {"file": "instrument-window.png", "shot": "instrument", "crop": [0, 0, 560, 420]},
   {"file": "sample-editor.png", "shot": "editor", "crop": [0, 0, 900, 440], "width": 680},
-  {"file": "mixer.png", "shot": "mixer", "crop": [0, 64, 680, 480], "rings": [[479, 120, 676, 146]]},
+  {"file": "mixer.png", "shot": "mixer", "crop": [0, 64, 680, 480], "rings": [[351, 119, 549, 209]]},
   {"file": "settings-midi.png", "shot": "settings", "crop": [0, 0, 680, 230], "rings": [[6, 32, 230, 118]]}
  ]
 }

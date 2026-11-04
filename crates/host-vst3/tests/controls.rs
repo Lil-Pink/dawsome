@@ -370,6 +370,7 @@ fn with_gain(mut project: Project) -> Project {
             id: EffectId(1),
             slot: 0,
             processor: gain,
+            on: true,
         });
     project.mixer.next_effect_id = EffectId(2);
     project.validate().expect("valid");

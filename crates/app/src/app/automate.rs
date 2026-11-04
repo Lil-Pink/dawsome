@@ -155,7 +155,7 @@ impl App {
             .automate
             .as_ref()
             .filter(|menu| menu.panel == panel && !menu.over_params)?;
-        Some(self.menu_rows(menu, self.hint_bar_height()))
+        Some(self.menu_rows(menu, self.menu_foot(panel)))
     }
 
     /// The menu over the parameter window's list, when it is open there, keeping clear of the

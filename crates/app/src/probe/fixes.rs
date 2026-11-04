@@ -419,10 +419,17 @@ fn p5_a_menu_stays_above_the_hint_bar() {
 // A menu at the tracks' foot: p8_ui with the playlist alone at 1000 x 260, the
 // hint bar on and the curve menu open on automation 1's segment handle (--curve-menu
 // automation:1). The handle sits on track 2's clip, its segment's middle: tick 192 at 64 px a
-// bar is x 152, value 0.5 the middle of the clip's body. The menu, 128 x 112, would pass the
-// hint bar's top, 238 (the tracks end at 228 over the playlist's scroll bar at the panel's foot;
-// the tracks canvas used to cut a menu at its foot); drawn on the window's top layer it flips
-// up and ends at the handle, every row whole.
+// bar is x 152, value 0.5 the middle of the clip's body, window y 64 + 24 + 28 (the toolbar,
+// the playlist's header and ruler) + 33 (track 1's lane and gap) + 10 + 11 (the clip's title
+// strip and half its body) = 170. Under the toolbar the stack has 260 − 64 − 22 = 174 px, less
+// than the playlist's least height, 180, so the playlist shows at 180 and the stack scrolls
+// (`panels::fits`): the area the menu was opened in is the stack's scrollable, from y 64. The
+// menu, 128 x 112, down from the handle would pass the hint bar's top, 238, and flipped up, from
+// 58, it would leave that area, so drawn on the window's top layer it sits as low as it fits,
+// ending on the hint bar's top, from 238 − 112 = 126, over the handle, every row whole (the
+// tracks canvas used to cut a menu at its foot). (Before the stack scrolled, the
+// playlist was squeezed to the 174 px, its tracks ending at 228 over its scroll bar, no
+// scrollable kept the menu below y 64, and it flipped up to 58.)
 #[test]
 #[ignore = "needs a screenshot of p8_ui with --panels playlist --window-size 1000x260 --hints on --curve-menu automation:1: scripts/ui-check.sh takes one and runs this"]
 fn p5_the_curve_menu_shows_whole_at_the_tracks_foot() {
@@ -430,8 +437,9 @@ fn p5_the_curve_menu_shows_whole_at_the_tracks_foot() {
     use iced::{Rectangle, Size};
 
     use super::tracks_in_window;
-    use crate::ui::layout::HINT_BAR_HEIGHT;
-    use crate::ui::menu::{place, PADDING, ROW_HEIGHT};
+    use crate::ui::layout::{HINT_BAR_HEIGHT, TOOLBAR_HEIGHT};
+    use crate::ui::menu::{place_below, PADDING, ROW_HEIGHT};
+    use crate::ui::panels::{self, Panel, MIN_HEIGHT};
     use crate::ui::playlist::{automation_handles, CURVE_MENU_WIDTH};
     use crate::ui::playlist_layout::{self, Grid, DEFAULT_ZOOM, LANE_HEIGHT, TITLE_HEIGHT};
     let shot = read_ui_shot();
@@ -463,50 +471,79 @@ fn p5_the_curve_menu_shows_whole_at_the_tracks_foot() {
         4.0 * ROW_HEIGHT + 2.0 * PADDING,
     );
     let foot = 260.0 - HINT_BAR_HEIGHT;
-    let at = place(anchor, size, Size::new(1000.0, foot));
+    let area = foot - TOOLBAR_HEIGHT;
+    assert!(
+        !panels::fits(&[Panel::Playlist], 0.0, area),
+        "{area} px under the playlist's least height, {MIN_HEIGHT}: the stack scrolls"
+    );
+    let at = place_below(anchor, size, Size::new(1000.0, foot), TOOLBAR_HEIGHT);
     println!("the handle at {anchor:?}; the menu at {at:?}, {size:?}");
     assert!(
         anchor.y + size.height > foot,
         "down from the handle it would pass the tracks' foot"
     );
+    assert!(
+        anchor.y - size.height < TOOLBAR_HEIGHT,
+        "flipped up it would leave the stack's scrollable"
+    );
     assert_eq!(
-        at,
-        Point::new(anchor.x, anchor.y - size.height),
-        "flipped up"
+        (anchor, at),
+        (Point::new(152.0, 170.0), Point::new(152.0, 126.0)),
+        "as low as it fits, on the hint bar's top"
     );
     assert_menu_rows(&shot, at, size, 4);
 }
 
-// The slot menu at the mixer's foot: p5_gain with the mixer alone at
-// 1000 x 400, the hint bar on and insert 12 (the last strip in view) selected, its empty slot
-// 9's menu open (--slot-menu insert:12,slot:9). The add menu, six rows, 188 x 164, opens under
-// the slot at (800 + 28, 64 + 6 + 52 + 22·10) = (828, 342): down from there it would end at
-// 506, past the hint bar's top at 378, where the mixer used to cut its rows (two and a half of
-// six showed). Drawn on the window's top layer it flips up and moves left to end at the
-// window's edge, from (812, 178), every row whole. (Pins moved: the 72 px
-// toolbar and the mixer's 6 px handle put the slot 22 px lower than at 328 and 164, at 350 and
-// 186; the 64 px toolbar 8 px higher.)
+// The add menu at the mixer's foot: p5_gain with the mixer alone at 1000 x 480, the hint bar
+// on (its top at 480 − 22 = 458) and insert 12 selected, the menu of its add tile open
+// (--slot-menu insert:12,slot:0: it holds no effect, so the tile is its first block, at the
+// effects area's view, (1000 − 332 + 6, 52) = (674, 52)). The add menu, fourteen rows, 188 x 372,
+// opens under the tile's head, 6 px in, at window (680, 64 + 6 + 52 + 22) = (680, 144): down
+// from there it would end at 516, past the hint bar's top, and flipped up it would start above
+// the window, so drawn on the window's top layer it sits as low as it fits, ending on the hint
+// bar's top, from 458 − 372 = 86, every row whole. (Pins moved: it opened under insert 12's
+// tenth slot at (828, 342), and moved left to end at the window's edge, from x 812, before the
+// slots became blocks; earlier moves: the 72 px toolbar and the mixer's 6 px handle, the 64 px
+// toolbar, the effects spec's seven new rows making fourteen, taller than the 308 px a 400 px
+// window has under the mixer's top, so the window is 480 px, as in the app's test of the same
+// menu.)
 #[test]
-#[ignore = "needs a screenshot of p5_gain with --panels mixer --window-size 1000x400 --hints on --slot-menu insert:12,slot:9: scripts/ui-check.sh takes one and runs this"]
-fn p5_a_slot_menu_shows_whole_at_the_window_foot() {
+#[ignore = "needs a screenshot of p5_gain with --panels mixer --window-size 1000x480 --hints on --slot-menu insert:12,slot:0: scripts/ui-check.sh takes one and runs this"]
+fn p5_the_add_menu_shows_whole_at_the_window_foot() {
+    use dawsome_engine::project::InsertId;
+
     use crate::ui::layout::HINT_BAR_HEIGHT;
     use crate::ui::menu::{place, PADDING, ROW_HEIGHT};
-    use crate::ui::mixer_layout::{in_window, menu_anchor, MENU_WIDTH};
+    use crate::ui::mixer_layout::{chain_rects, in_window, menu_anchor, Desk, MENU_WIDTH};
     let shot = read_ui_shot();
-    let anchor = in_window(menu_anchor(9, 1000.0));
-    let size = iced::Size::new(MENU_WIDTH + 2.0 * PADDING, 6.0 * ROW_HEIGHT + 2.0 * PADDING);
+    let desk = Desk {
+        size: iced::Size::new(1000.0, 400.0),
+        scroll: 0.0,
+        last: InsertId(16),
+        effects_scroll: 0.0,
+    };
+    let tile = chain_rects(&[], desk)[0];
+    let anchor = in_window(menu_anchor(tile));
+    let size = iced::Size::new(
+        MENU_WIDTH + 2.0 * PADDING,
+        14.0 * ROW_HEIGHT + 2.0 * PADDING,
+    );
     let at = place(
         anchor,
         size,
-        iced::Size::new(1000.0, 400.0 - HINT_BAR_HEIGHT),
+        iced::Size::new(1000.0, 480.0 - HINT_BAR_HEIGHT),
     );
-    println!("the slot opens its menu at {anchor:?}; the menu at {at:?}, {size:?}");
+    println!("the add tile opens its menu at {anchor:?}; the menu at {at:?}, {size:?}");
     assert_eq!(
-        (anchor, at),
-        (Point::new(828.0, 342.0), Point::new(812.0, 178.0)),
-        "flipped up and moved left"
+        (anchor, at, size),
+        (
+            Point::new(680.0, 144.0),
+            Point::new(680.0, 86.0),
+            iced::Size::new(188.0, 372.0)
+        ),
+        "on the hint bar's top"
     );
-    assert_menu_rows(&shot, at, size, 6);
+    assert_menu_rows(&shot, at, size, 14);
 }
 
 // The Library row menu at the panel's foot: p10_library with the

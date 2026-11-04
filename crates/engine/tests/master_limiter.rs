@@ -142,12 +142,13 @@ fn frames_hash(frames: &[[f32; 2]]) -> String {
         .collect()
 }
 
-// Known answers (gen_p24_expected.py): the burst, the chord and the spike through the player in
-// 512-frame calls, then cut at seeded random sizes: the generator's hash either way.
+// Known answers (gen_p24_expected.py): the burst, the chord, the spike, the hard case and the
+// chord's note raised 12 dB by the Gain, through the player in 512-frame calls, then cut at
+// seeded random sizes: the generator's hash either way.
 #[test]
 fn p24_the_limiter_gives_the_same_bits_however_the_calls_are_cut() {
     let want = expected();
-    for name in ["burst", "chord", "spike", "hard"] {
+    for name in ["burst", "chord", "spike", "hard", "gain12"] {
         let answer = &want["renders"][name];
         let project = load(answer["fixture"].as_str().expect("fixture"));
         let frames = answer["frames"].as_u64().expect("frames") as usize;

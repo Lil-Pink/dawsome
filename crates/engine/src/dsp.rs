@@ -3,22 +3,31 @@
 //! `[a, b)` and then `[b, c)` gives exactly the output of rendering `[a, c)` in one go.
 
 pub mod airwindows;
+pub mod chorus;
 pub mod delay;
+pub mod distortion;
 pub mod edits;
 pub mod eq;
+pub mod filter;
+pub mod flanger;
+pub mod gate;
 pub mod instrument;
 pub mod laws;
 pub mod limiter;
+pub mod parts;
+pub mod phaser;
 pub(crate) mod pitch;
 pub mod reverb;
 pub mod sampler;
 pub(crate) mod shape;
+pub mod width;
 
 use crate::processor::Registry;
 
 impl Registry {
-    /// The effects this build has: the three-band EQ, the delay, the reverb, the limiter, and
-    /// the compressor and saturator ported from Airwindows.
+    /// The effects this build has: the three-band EQ, the delay, the reverb, the limiter, the
+    /// compressor and saturator ported from Airwindows, the filter, the distortion, the chorus,
+    /// the flanger, the phaser, the gate and the stereo width.
     pub fn native() -> Self {
         let mut registry = Self::empty();
         registry.register(eq::Factory);
@@ -27,6 +36,13 @@ impl Registry {
         registry.register(limiter::Factory);
         registry.register(airwindows::pressure4::Factory);
         registry.register(airwindows::density::Factory);
+        registry.register(filter::Factory);
+        registry.register(distortion::Factory);
+        registry.register(chorus::Factory);
+        registry.register(flanger::Factory);
+        registry.register(phaser::Factory);
+        registry.register(gate::Factory);
+        registry.register(width::Factory);
         registry
     }
 }
@@ -84,6 +100,24 @@ fn blend(dry: [f32; 2], wet: [f32; 2], mix: f32) -> [f32; 2] {
     }
     let keep = 1.0 - mix;
     [keep * dry[0] + mix * wet[0], keep * dry[1] + mix * wet[1]]
+}
+
+/// √(1 − mix)·dry + √mix·wet on each side, in f64, rounded to f32 once: an equal-power mix (the
+/// gains' squares sum to 1), so a wet sound unlike the dry one keeps the level as the mix
+/// moves, where [`blend`] dips 3 dB at 50%. At mix 0 it returns `dry` and at mix 1 `wet`, bit
+/// for bit. Why √ and not cos/sin of mix·π/2 (the same at 0, 50% and 100%): `sqrt` is correctly
+/// rounded on every platform, `cos` and `sin` are not. Used by the chorus, the flanger and the
+/// phaser; the effects that shipped in 0.1.0 keep [`blend`], so saved projects keep their sound.
+fn blend_power(dry: [f32; 2], wet: [f32; 2], mix: f32) -> [f32; 2] {
+    if mix == 0.0 {
+        return dry;
+    }
+    if mix == 1.0 {
+        return wet;
+    }
+    let mix = f64::from(mix);
+    let (keep, add) = ((1.0 - mix).sqrt(), mix.sqrt());
+    [0, 1].map(|side| (keep * f64::from(dry[side]) + add * f64::from(wet[side])) as f32)
 }
 
 #[cfg(test)]
@@ -157,6 +191,21 @@ mod tests {
         assert_eq!(blend([1.0, 0.0], [0.0, 1.0], 0.25), [0.75, 0.25]);
     }
 
+    // Equal power: at 50% both gains are √0.5 (correctly rounded), so 0.5 dry and 0.5 wet give
+    // f32(2·√0.5·0.5) = f32(√0.5); a 1 on one side only comes out √0.5 or √(1 − 0.36) = 0.8.
+    #[test]
+    fn blend_power_is_exact_at_both_ends_and_equal_power_between() {
+        let (dry, wet) = ([-0.0, f32::MIN_POSITIVE], [0.3, -0.7]);
+        assert_eq!(bits(&[blend_power(dry, wet, 0.0)]), bits(&[dry]));
+        assert_eq!(bits(&[blend_power(dry, wet, 1.0)]), bits(&[wet]));
+        let half = 0.5f64.sqrt();
+        assert_eq!(
+            blend_power([0.5, 1.0], [0.5, 0.0], 0.5),
+            [(2.0 * half * 0.5) as f32, half as f32]
+        );
+        assert_eq!(blend_power([1.0, 0.0], [0.0, 1.0], 0.36), [0.8, 0.6]);
+    }
+
     // Exact where the answer is a power of two; within an f64 step of the true value
     // elsewhere (2^0.5 = √2, 2^(−1/12), 10^−1 as 2^(−log2 10)).
     #[test]
@@ -180,22 +229,65 @@ mod tests {
     }
 
     #[test]
-    fn the_native_registry_holds_the_six_effects() {
+    fn the_native_registry_holds_every_native_effect() {
         let registry = Registry::native();
         let ids: Vec<&str> = registry.factories().map(|f| f.id()).collect();
         assert_eq!(
             ids,
             [
+                "dawsome.chorus",
                 "dawsome.delay",
                 "dawsome.density",
+                "dawsome.distortion",
                 "dawsome.eq3",
+                "dawsome.filter",
+                "dawsome.flanger",
+                "dawsome.gate",
                 "dawsome.limiter",
+                "dawsome.phaser",
                 "dawsome.pressure4",
-                "dawsome.reverb"
+                "dawsome.reverb",
+                "dawsome.width"
             ]
         );
         assert_eq!(registry.get("dawsome.eq3").map(|f| f.name()), Some("EQ"));
         assert!(registry.get("dawsome.missing").is_none());
+    }
+
+    // Hand-written: the sliders laid out in octaves are
+    // the EQ's three frequencies and three Qs (decades in hertz and Q), the delay's time, the
+    // limiter's release and the gate's attack, hold and release (milliseconds over two to three
+    // decades). Every other parameter is linear: a 0..1 control already mapped in octaves (the
+    // filter's cutoff, the phaser's center), a decibel value, a share, a choice. The compressor
+    // has none: its Speed is the original's 0..1 value, shown in milliseconds.
+    #[test]
+    fn the_log_tapered_parameters_are_the_wide_ranges() {
+        use crate::processor::Taper;
+        let registry = Registry::native();
+        let mut log = Vec::new();
+        for factory in registry.factories() {
+            for info in factory.params() {
+                if info.taper == Taper::Log {
+                    log.push((factory.id(), info.key));
+                }
+            }
+        }
+        assert_eq!(
+            log,
+            [
+                ("dawsome.delay", "time_ms"),
+                ("dawsome.eq3", "low_freq"),
+                ("dawsome.eq3", "low_q"),
+                ("dawsome.eq3", "mid_freq"),
+                ("dawsome.eq3", "mid_q"),
+                ("dawsome.eq3", "high_freq"),
+                ("dawsome.eq3", "high_q"),
+                ("dawsome.gate", "attack_ms"),
+                ("dawsome.gate", "hold_ms"),
+                ("dawsome.gate", "release_ms"),
+                ("dawsome.limiter", "release_ms"),
+            ]
+        );
     }
 
     // A project saved under the former prefix finds its effects only if every native id has

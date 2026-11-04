@@ -1066,8 +1066,7 @@ impl App {
         let lanes = self.arranger.lanes();
         self.arranger = Arranger::new(project.ppq, self.arranger.tracks_size(), lanes);
         self.arranger.refresh(project);
-        let mixer_height = self.settings.kept_heights().mixer_height();
-        self.mixer = MixerState::new(self.mixer.size().width, mixer_height);
+        self.mixer = MixerState::new(self.mixer.size().width, self.mixer_panel_height());
         self.transport_on = false;
         self.playing = false;
         self.playhead = None;

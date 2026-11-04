@@ -157,6 +157,12 @@ pub(crate) struct Runtime {
     pub(crate) inputs: Option<Box<InputFeeds>>,
     /// Where a feed's frames are read before they are mixed.
     input_scratch: Box<[[f32; 2]]>,
+    /// Whether the mixer has run while stopped since every processor was last cleared: its
+    /// effects may hold sound still (a delay's echoes, a reverb's tail), so it runs on while
+    /// stopped until a Play, Stop, Seek or Suspend clears them ([`Runtime::silence`]). Why not
+    /// only while something live sounds: a delay left unprocessed keeps its echoes and plays
+    /// them when the next note starts the mixer again, however long after.
+    tails: bool,
 }
 
 /// A live key held down: the channel it plays, its key and the velocity it was struck at.
@@ -472,6 +478,7 @@ impl Runtime {
             live_zones: [None; LIVE_ZONE_VOICES],
             inputs: None,
             input_scratch: vec![[0.0; 2]; CHUNK].into_boxed_slice(),
+            tails: false,
         }
     }
 
@@ -897,10 +904,17 @@ impl Runtime {
         self.dropped_notes += 1;
     }
 
+    /// Whether the effects may still ring from what the mixer played while stopped, so the
+    /// stopped mixer must run on.
+    pub(crate) fn tails_ring(&self) -> bool {
+        self.tails
+    }
+
     /// Silences every voice and clears every processor's tail.
     pub(crate) fn silence(&mut self) {
         self.voices = [None; VOICE_COUNT];
         self.zones = [None; ZONE_VOICES];
+        self.tails = false;
         for processor in self.processors.iter_mut().flatten() {
             processor.reset();
         }
@@ -909,8 +923,8 @@ impl Runtime {
     /// Makes the processor and source changes `delta` asks for: processors and sources leave
     /// first (processors suspended here), then into `delta.removed` and
     /// `delta.removed_sources`, to be dropped on the UI thread; new ones go into their slots,
-    /// then running processors take their new values. Never allocates: the removal lists have
-    /// room for every one.
+    /// then running processors take their new values, and those `delta.reset` names are
+    /// cleared. Never allocates: the removal lists have room for every one.
     pub(crate) fn apply(&mut self, delta: &mut RuntimeDelta) {
         for slot in &delta.remove {
             if let Some(mut processor) = self.slot_mut(*slot).and_then(Option::take) {
@@ -931,6 +945,11 @@ impl Runtime {
         }
         for &(slot, index, value) in &delta.params {
             self.set_param(slot, index, value);
+        }
+        for &slot in &delta.reset {
+            if let Some(processor) = self.slot_mut(slot).and_then(Option::as_mut) {
+                processor.reset();
+            }
         }
         for slot in &delta.remove_sources {
             if let Some(source) = self.sources.get_mut(slot.index()).and_then(Option::take) {
@@ -1639,7 +1658,8 @@ pub(crate) fn block(
 /// Renders `out` while playback is stopped: the live notes on their channels' inserts (sampler
 /// voices, and the plugin channels that play live notes), the input channels' feeds, and the
 /// previewed file into the master's input, through the mixer (whose other inserts' effect tails
-/// run on). `live_at` is the block's first output frame.
+/// run on, as they do from then on until every processor is cleared). `live_at` is the block's
+/// first output frame.
 pub(crate) fn stopped_block(
     plan: &mut PlayPlan,
     runtime: &mut Runtime,
@@ -1652,6 +1672,7 @@ pub(crate) fn stopped_block(
     let inserts = plan.mixer.place.len().min(BUSES);
     runtime.fed[..inserts].fill(false);
     runtime.plugin_notes.clear();
+    runtime.tails = true;
     runtime.mix_live(plan, live_at, len);
     runtime.take_live_plugin_notes();
     generators(plan, runtime, context, len, Some(live_at));

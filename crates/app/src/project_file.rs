@@ -112,6 +112,7 @@ pub fn new_document() -> Project {
             id: EffectId(1),
             slot: 0,
             processor: ProcessorRef::new(limiter::ID),
+            on: true,
         });
         project.mixer.next_effect_id = EffectId(2);
     }

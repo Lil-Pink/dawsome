@@ -269,13 +269,19 @@ fn a4_a_pitched_set_shows_a_keyboard_with_its_roots() {
 }
 
 // B2: p3_roll (two channels) with the rack, the playlist, the piano roll and the mixer at
-// 1000 x 560 and no hint bar: too short for every least height, so the roll keeps its 230 px
-// where `panels::stack_heights` puts it, its grid nine whole rows of the row tones (white
-// #34373D, black #2D3035) under the divider's 6 px band and its strip, and its lane the well's
-// color under the grid. (Pin moved: five rows over the 128 px lane before; the 64 px lane
-// left the grid 126 px, ten rows, and the 10 px scroll bar 116 px, nine.
-// Resizable dividers, pin moved: 224 px before the divider's band over the roll, which its
-// least height counts, so the grid keeps its nine rows 6 px lower.)
+// 1000 x 560 and no hint bar: too short for every least height (70 + 180 + 230 + 225 = 705 of
+// 496 px), so each panel shows at its least and the stack scrolls, unscrolled in the shot: the
+// roll keeps its 230 px where `panels::stack_heights` puts it, from y 64 + 70 + 180 = 314, its
+// grid nine whole rows of the row tones (white #34373D, black #2D3035) under the divider's
+// 6 px band and its strip (348..464), and its lane the well's color under the grid (480..544),
+// read at x 970, clear of the stack's scroll bar along the window's right edge (990..1000).
+// (Pin moved: five rows over the 128 px lane before; the 64 px lane left the grid 126 px, ten
+// rows, and the 10 px scroll bar 116 px, nine. Resizable dividers, pin moved: 224 px before the
+// divider's band over the roll, which its least height counts, so the grid keeps its nine rows
+// 6 px lower. Since the stack scrolls rather than squeeze, the roll starts 92 px lower,
+// under the rack's and the playlist's least heights rather than their squeezed 44.6 and 114.7,
+// and the lane is read at x 970, was 990. Then the mixer's least 310 → 225, its compact
+// strip: the roll's place unchanged, the stack 85 px shorter and still scrolling.)
 #[test]
 #[ignore = "needs a screenshot of p3_roll with four panels: scripts/ui-check.sh takes one and runs this"]
 fn b2_the_piano_roll_keeps_its_grid_under_three_other_panels() {
@@ -287,9 +293,11 @@ fn b2_the_piano_roll_keeps_its_grid_under_three_other_panels() {
     let rack = RACK_HEADER_HEIGHT + rack_canvas_size(2, 16).height;
     let heights = stack_heights(&stacked, rack, &Kept::default(), 560.0 - TOOLBAR_HEIGHT);
     assert_eq!(heights[2], MIN_ROLL_HEIGHT + DIVIDER_BAND);
+    assert_eq!(heights, [70.0, 180.0, 230.0, 225.0], "each at its least");
     // The panels above it in whole pixels, as the window lays them out, and the divider's band
     // on its top edge.
     let roll_top = TOOLBAR_HEIGHT + heights[0].floor() + heights[1].floor() + DIVIDER_BAND;
+    assert_eq!(roll_top, 320.0);
     let grid = roll_top + STRIP_HEIGHT..roll_top + MIN_ROLL_HEIGHT - DIVIDER_HEIGHT - LANE_HEIGHT;
     let rows = (grid.end - grid.start) / ROW_HEIGHT;
     let (white, black) = ([0x34, 0x37, 0x3D], [0x2D, 0x30, 0x35]);
@@ -299,7 +307,7 @@ fn b2_the_piano_roll_keeps_its_grid_under_three_other_panels() {
     });
     let area = (230.0 * (inside.end - inside.start) * shot.scale * shot.scale) as usize;
     let lane_top = grid.end + DIVIDER_HEIGHT;
-    let lane = shot.pixel(Point::new(990.0, lane_top + LANE_HEIGHT / 2.0));
+    let lane = shot.pixel(Point::new(970.0, lane_top + LANE_HEIGHT / 2.0));
     println!(
         "roll from y {roll_top}, grid y {grid:?} ({rows} rows): {toned} of {area} pixels in \
          the row tones; lane {lane:02X?}"

@@ -1,12 +1,20 @@
-# Every push and pull request is built and tested on Linux and on Windows, so a change cannot
-# break one platform unnoticed. The Linux job runs scripts/check.sh, the check every commit
-# passes locally; the Windows job builds the workspace, lints it and runs every test that is not
-# Linux-only (those are gated in the code, each with what it proves and why).
+# Every push to main and every pull request is built and tested on Linux and on Windows, so a
+# change cannot break one platform unnoticed. The Linux job runs scripts/check.sh, the check
+# every commit passes locally; the Windows job builds the workspace, lints it and runs every
+# test that is not Linux-only (those are gated in the code, each with what it proves and why).
+# Each action is pinned to a full commit, its version in the comment beside it: a tag can be
+# moved to other code, a commit cannot. .github/dependabot.yml proposes newer ones each week.
 name: CI
 
 on:
+  # main only: a release tag names a commit main has already checked.
   push:
+    branches: [main]
   pull_request:
+
+# The token the jobs get reads the repository and nothing more; the checkout keeps no copy of it.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,7 +26,9 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # fonts-noto-core: Noto Sans, the font the toolbar tests' widths were measured in (the app
       # ships no font, and the runner's own is wider); without it those tests skip.
       - name: System packages
@@ -29,20 +39,20 @@ jobs:
             fonts-noto-core
       # The license check and the fixture generators need Python 3.11 or later (tomllib). The
       # oldest of those, so a newer feature used by mistake fails here.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16 (no releases; Rust's version is the toolchain line)
         with:
           toolchain: "1.93.1"
           components: rustfmt, clippy
       # scripts/check.sh audits the dependencies (deny.toml) only where cargo-deny is installed.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-deny@0.20.2
       # The registry and the target dir, which holds the dependencies' builds, the static LAME
       # library and the time-stretch library among them: their C and C++ builds are the slow part.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # The instrument sets at locks/kit.lock's commit: the sounds license check, and the install check
       # that copies them into a prefix, read them.
       # Every crate the lock names, for every platform: the notices check reads cargo's metadata
@@ -51,7 +61,7 @@ jobs:
       - run: scripts/fetch-kit.sh
       # The bundled plugin's downloads, kept between runs while locks/surge.lock pins the same files
       # (scripts/fetch-surge.sh checks each against its SHA-256 either way).
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/surge/downloads
           key: surge-downloads-linux-${{ hashFiles('locks/surge.lock') }}
@@ -68,24 +78,26 @@ jobs:
       # The time-stretch library's bindings are generated with libclang.
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: libclang
         run: |
           if [ ! -f "/c/Program Files/LLVM/bin/libclang.dll" ]; then
             choco install llvm -y --no-progress
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.x"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16 (no releases; Rust's version is the toolchain line)
         with:
           toolchain: "1.93.1"
           components: clippy
       # As on Linux: the registry and the dependencies' builds, LAME and time-stretch included.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo build --workspace --all-targets
       - run: scripts/fetch-kit.sh
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/surge/downloads
           key: surge-downloads-windows-${{ hashFiles('locks/surge.lock') }}

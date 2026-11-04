@@ -90,6 +90,9 @@ scripts/python.sh -I tests/fixtures/gen_p30_expected.py --check tests/fixtures
 # pair late, the note's end with it, a swung note passing a hand-placed one, a song clip's
 # window on the swung ticks), as their generator writes them.
 scripts/python.sh -I tests/fixtures/gen_p31_expected.py --check tests/fixtures
+# The native effects (filter, distortion, gate, stereo width, chorus, flanger, phaser): the input
+# sounds and projects, each effect's parameters, and the renders the spec's formulas give.
+scripts/python.sh -I tests/fixtures/gen_p32_expected.py --check tests/fixtures
 # The Help window's pictures against what they are made from (scripts/help-shots.sh remakes them).
 scripts/python.sh -I scripts/help_shots.py check
 # The DAWproject schema checker finds the faults planted in its own documents, and the known

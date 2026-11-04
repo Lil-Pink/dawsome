@@ -10,7 +10,8 @@
 //! panel's scroll, placed by [`place_below`]: down and right of the press, flipped up when it
 //! would pass the window's foot (the hint bar's top while the bar shows, so a menu never covers
 //! the line where its own rows' hints are written) unless that would take it above the area it
-//! was opened in, moved left when it would pass its right edge.
+//! was opened in, moved left when it would pass its right edge; a menu taller than that area's
+//! room ends on the window's foot, over what is above the area, rather than being cut off.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{Tree, Widget};
@@ -31,28 +32,37 @@ pub const TEXT_SIZE: f32 = 13.0;
 pub const PADDING: f32 = 4.0;
 
 /// Where a menu `size` big opened at window point `anchor` goes in a window `window` big: its
-/// top-left corner at the anchor; above it instead when it would pass the window's foot (and at
-/// the window's top when there is no room above either); left of it as far as needed when it
-/// would pass the window's right edge, never left of the window. The tests' and the shot
-/// probes' figures: the window's own rule, [`place_below`] with no area above to keep clear of.
+/// top-left corner at the anchor; above it instead when it would pass the window's foot (and
+/// ending on the window's foot when there is no room above either, at the window's top when it
+/// is taller than the window); left of it as far as needed when it would pass the window's
+/// right edge, never left of the window. The tests' and the shot probes' figures: the window's
+/// own rule, [`place_below`] with no area above to keep clear of.
 #[cfg(test)]
 pub fn place(anchor: Point, size: Size, window: Size) -> Point {
     place_below(anchor, size, window, 0.0)
 }
 
-/// [`place`], with the menu kept below window y `top`: flipped up only when it then stays below
-/// `top`, else as low as it fits above the window's foot (over the press), and at `top` when it
-/// is taller than that room. The overlay passes the top of the area the menu was opened in (a
+/// [`place`], with the menu kept below window y `top` while it has room there: flipped up only
+/// when it then stays below `top`, else as low as it fits above the window's foot (over the
+/// press), ending on the foot. The overlay passes the top of the area the menu was opened in (a
 /// panel's rows, under its header). Why: a channel's menu of eight rows opened on the last rack
 /// row of a 400 px window, flipped up past the rack's rows, showed the rack's header and the
 /// toolbar drawn over its first rows.
+///
+/// A menu taller than the room between `top` and the foot still ends on the foot, so its top
+/// rows lie over what is above the area (drawn over it on the window's top layer, both
+/// renderers, checked in shots), and starts at the window's top only when it is
+/// taller than the window. Why not at `top`, as before: the mixer's fourteen-row add menu,
+/// opened in a mixer under three other panels, ran past the window's foot with its last rows
+/// cut off. Menus never scroll: one taller than the whole window is still cut at
+/// its foot.
 pub fn place_below(anchor: Point, size: Size, window: Size, top: f32) -> Point {
     let y = if anchor.y + size.height <= window.height {
         anchor.y
     } else if anchor.y - size.height >= top {
         anchor.y - size.height
     } else {
-        (window.height - size.height).max(top)
+        (window.height - size.height).max(0.0)
     };
     let x = anchor.x.min(window.width - size.width).max(0.0);
     Point::new(x, y)
@@ -300,7 +310,9 @@ mod tests {
     // (83, 262) in a 1000 x 400 window over its 22 px hint bar (room to y 378), the rack's rows
     // from y 88: down it would end at 478, up it would start at 46, above the rows; so as low as
     // it fits, 378 − 216 = 162. Below a top of 0 it flips to 46 as before; a top of 40 still
-    // lets it; taller than the room under the top (a 300 px menu), at the top.
+    // lets it. Taller than the 290 px under the top (a 300 px menu), it ends on the foot all the
+    // same, from 378 − 300 = 78, 10 px over the area's top (it sat at the top, 88, and ran 10 px
+    // past the foot before); taller than the whole room (a 400 px menu), at the window's top.
     #[test]
     fn a_menu_flips_up_only_as_far_as_the_area_it_opened_in() {
         let room = Size::new(1000.0, 378.0);
@@ -312,7 +324,26 @@ mod tests {
         assert_eq!(place_below(at, menu, room, 40.0), Point::new(83.0, 46.0));
         assert_eq!(
             place_below(at, Size::new(168.0, 300.0), room, 88.0),
-            Point::new(83.0, 88.0)
+            Point::new(83.0, 78.0)
         );
+        assert_eq!(
+            place_below(at, Size::new(168.0, 400.0), room, 88.0),
+            Point::new(83.0, 0.0)
+        );
+    }
+
+    // By hand, the mixer's add menu (fourteen rows, 188 x 372) in a 1600 x 900 window with the
+    // hint bar (room to 878), opened at (1080, 709) in a mixer whose desk starts at 635, as
+    // p5_gain's four panels once stacked it: down it would end at 1081, up start
+    // at 337, above the mixer; the 243 px under the mixer's top hold no 372, so it ends on the
+    // foot, from 878 − 372 = 506, every row inside the window (it sat at 635 and ran to 1007
+    // then: its tenth row over the hint bar, its last four past the window's foot).
+    #[test]
+    fn a_menu_taller_than_its_area_ends_on_the_windows_foot() {
+        let room = Size::new(1600.0, 878.0);
+        let menu = Size::new(188.0, 372.0);
+        let at = place_below(Point::new(1080.0, 709.0), menu, room, 635.0);
+        assert_eq!(at, Point::new(1080.0, 506.0));
+        assert!(at.y >= 0.0 && at.y + menu.height <= room.height);
     }
 }

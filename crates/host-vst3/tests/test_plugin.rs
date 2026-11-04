@@ -542,6 +542,7 @@ fn effect(expected: &Value, preset: &str, class: &str, effect: u32, slot: u8) ->
         id: EffectId(effect),
         slot,
         processor,
+        on: true,
     }
 }
 
@@ -830,6 +831,7 @@ fn the_hosts_audio_half_never_touches_the_heap() {
                     slot: added.slot,
                     id: added.id,
                     processor: added.processor,
+                    on: true,
                 })
             }
             600 => undo.take(),

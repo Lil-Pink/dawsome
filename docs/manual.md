@@ -1,6 +1,6 @@
 # Dawsome
 
-The reference for Dawsome 0.1.1: every panel, gesture and setting. The README is the short introduction.
+The reference for Dawsome 0.1.2: every panel, gesture and setting. The README is the short introduction.
 
 Dawsome is a pattern-based digital audio workstation for Linux and Windows. Program beats in the
 channel rack, write melodies in the piano roll, arrange patterns, audio and automation in the
@@ -45,14 +45,107 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   the project's takes. Opened from a clip, the clip's part of the sound is marked on the ruler;
   a file changed on disk since its edits (another length) is said in the heading.
 - **Mixer**: the master and 16 inserts (up to 500), faders, pan, mute, solo, sends (a send that
-  would make a loop is refused), ten effect slots per insert. Mixer insert… in a channel's
+  would make a loop is refused), up to ten effects per insert. Mixer insert… in a channel's
   right-click menu (and at the end of its instrument window's Out list) gives the channel an
   insert of its own, the first free one, and opens the mixer there. Built in: a three-band EQ, a delay
-  (in milliseconds or synced to the tempo), a reverb, a limiter, and the Pressure4 compressor and
-  Density saturator ported from Airwindows. Plugin effects (CLAP or VST3) go in the same slots.
-  A new project starts with the Limiter in the master's first slot (ceiling −0.3 dBFS, release
-  100 ms), so chords and sounds played together never clip the output or an export; a project
-  saved before keeps its master as it was (add the Limiter from an empty slot's menu).
+  (in milliseconds or synced to the tempo), a reverb, a limiter, the Pressure4 compressor and
+  Density saturator ported from Airwindows, a filter, a distortion, a chorus, a flanger, a
+  phaser, a gate and a stereo width.
+  Plugin effects (CLAP or VST3) go in the same chain.
+  - **The effects area**: right of the strips, the selected insert's effects, in the room the
+    strips leave (at least 332 px: in a narrower window the strips scroll under it). Each effect
+    is a block, in chain order (the order the sound goes through them), left to right, a line
+    under the one before when the room runs out; the wheel scrolls the lines when they are
+    taller than the area. A block's head holds a green light like a strip's, the effect's name,
+    ‹ and › and a remove ×; under it its settings as knobs, the value under each (drag right
+    for more, Shift for fine, double-click for the default, right-click to automate or link a
+    controller), five to a row and two rows at most. A choice (the Filter's type, the Phaser's
+    stages) is a button: each click picks the next. A plugin effect shows its first ten
+    settings; its menu's Parameters… has them all, and a double-click on its name opens its
+    window.
+  - **The light** switches an effect on or off, one undo step ("Effect on", "Effect off"): an
+    effect that is off is passed by, the insert's sound going on unchanged, with its settings
+    kept; switched on again it starts clear (a delay's old echoes are gone). **A new effect
+    starts off**: "+ Add effect", the tile after the last block, puts the effect chosen at the
+    end of the chain with its light off, so click the light to hear it. A project saved before
+    effects had a light plays every effect on (the file writes `"on":false` only for one that
+    is off).
+  - **The order**: drag a block by its name past the middle of the block beside it to swap
+    them (Esc while dragging puts it back), or click its ‹ or › to move it one place; each move
+    is one undo step. Right-click a block for Remove (and a plugin's Parameters…), or click its
+    ×.
+  A new project starts with the Limiter as the master's first effect, on (ceiling −0.3 dBFS,
+  release 100 ms, gain 0 dB), so chords and sounds played together never clip the output or an
+  export; a project saved before keeps its master as it was (add the Limiter from the add tile).
+  The Limiter's Gain (0 to +24 dB) raises the sound before it is limited: turn it up to make a
+  mix louder and denser while no sample passes the ceiling. At 0 dB it changes nothing, so a
+  project saved before Gain existed sounds as it did.
+  - **Filter**: low-pass, high-pass, band-pass or notch (a state-variable filter), with a Slope
+    of 12 dB per octave (one stage) or 24 dB (two in series, steeper: the classic synth filter
+    sweep). Cutoff sweeps 20 Hz to 20 kHz evenly in octaves (632 Hz at the middle), and stops at
+    45% of the sample rate (19.8 kHz at 44.1 kHz); Resonance sets Q from 0.5 to 20, also in
+    octaves (the default 10% is Q 0.72, close to a flat Butterworth response). Both slopes ring
+    the same amount at the cutoff. Above the default, the low- and high-pass turn themselves
+    down as Resonance rises (by √(0.72/Q): nothing at the default or below, 14.4 dB at 100%), so
+    a resonant sweep stays near the level of the sound it sweeps instead of jumping 13 dB over
+    it; a sine right at the cutoff still comes out 11.6 dB louder at 100%. The band-pass stays at 0 dB at its cutoff and only
+    narrows, and the notch never rises, so neither is turned down. No mix: the dry sound is what
+    the type takes out.
+  - **Distortion**: Drive (0 to 40 dB) into a soft clipper (tanh, which itself never goes past
+    full scale), its aliasing lowered by its antiderivative (first-order ADAA, about as much as
+    2× oversampling) with no added latency; then Auto gain, Tone, a gentle one-pole low-pass
+    from 1 kHz to 20 kHz, Output (−24 to +6 dB) and Mix. Auto gain (on by default) turns the
+    distorted sound down by about as much as the drive made it louder (d/(1 + d/40) dB for d dB
+    of drive: 9.2 dB at the default 12, 20 dB at 40), so you hear the change in tone, not just
+    a jump in level; how much louder a sound gets depends on the sound, so it keeps the level
+    roughly (within a few dB), not exactly. Switch it off to drive the next effect harder. The
+    anti-aliasing delays the distorted sound by half a sample, so at a partial mix the top of
+    the band dips a little (−2.4 dB at 10 kHz, 44.1 kHz, mix 50%). Silence stays exactly silent.
+  - **Chorus**: three voices of the sound, each 15 ms late, their delays swept by one slow sine
+    (Rate, 0.1 to 5 Hz, 0.5 Hz by default) at 0°, 120° and 240° of it; Depth 100% sweeps each
+    5 ms either way (10 to 20 ms; the default 30% sweeps 1.5 ms, a gentle wobble of about 8
+    cents, as the classic Juno chorus). The right side's sweep runs 90° ahead of the left's, so
+    even a mono sound comes out wide. The three are added at the level of one (their sum over
+    √3) and cut below 150 Hz, so a bass or a kick keeps a clean low end, then mixed with the dry
+    sound at equal power (Mix: at 50% each at −3 dB, so the chorus keeps the sound's level);
+    no feedback. Below 150 Hz the sound is the dry part alone, so at 50% the deep bass is 3 dB
+    lower. Between whole samples the delayed sound is read by the same 4-point Hermite
+    interpolation as a pitched sample, which dulls the highs less than a straight line between
+    samples would.
+  - **Flanger**: the sound mixed with a copy of itself a few milliseconds late: Delay (0.1 to
+    10 ms) is the longest the sweep reaches, and Depth how far below it the sweep goes, as a
+    share of it (at 100% down to 2 samples, the shortest it reads, so the sweep stops just
+    short of no delay at all). Rate 0.05 to 5 Hz; Feedback (−95% to +95%) sends part of the
+    delayed copy back in, sharpening the comb (negative feedback moves its teeth by half a
+    step). Spread (0° to 180°, 90° by default) runs the right side's sweep that far ahead of the
+    left's, so the flange moves across the stereo field; at 0° both sides share one sweep (mono).
+    Mix is equal-power (at 50% the dry and the delayed sound each at −3 dB), and 50% gives the
+    deepest notches.
+  - **Phaser**: the sound through a chain of 4, 6 or 8 allpass stages (Stages), each turning
+    the phase by 90° at one frequency that a slow sine sweeps, mixed with the dry sound so the
+    notches where the two meet out of phase move up and down (two notches for 4 stages, three
+    for 6, four for 8). Center sets the middle of the sweep, 100 Hz to 4 kHz evenly in octaves
+    (632 Hz at the middle), Depth its span (0 to 4 octaves, half either side), Rate 0.05 to
+    5 Hz; the sweep stays between 20 Hz and 45% of the sample rate. Feedback (−95% to +95%) runs
+    the chain's output back into it, for resonant peaks between the notches. Spread (0° to 180°,
+    90° by default) runs the right side's sweep that far ahead of the left's, so the notches
+    swirl across the stereo field; at 0° both sides share one sweep and the effect stays
+    mono-compatible. Mix is equal-power (at 50% the dry and the phased sound each at −3 dB), and
+    50% gives the deepest notches.
+  - **Gate**: Threshold (−80 to 0 dBFS, −40 by default), Attack, Hold, Release, and Range (how
+    far a closed gate turns the sound down, −80 to 0 dB; at 0 dB it leaves the sound
+    untouched). Fixed: the level it listens to is the louder side's RMS over about 10 ms, as a
+    meter reads it (so hiss at −50 dBFS reads −50, though its peaks reach about −40); it opens
+    at the threshold and stays open down to 3 dB under it (hysteresis, so a level hovering at
+    the threshold does not chatter), then for the hold, then closes by the release. Attack and
+    release are the times the gain takes to cover 63% (1 − 1/e) of its way. No sidechain
+    input.
+  - **Stereo width**: 0% is mono (both sides the middle of the two), 100% leaves the sound as it
+    is, bit for bit, and 200% doubles the difference between the sides. Width only changes what
+    differs between the sides: a mono sound (a single sample, a mono instrument) passes as it
+    is. Bass mono (Off, or 50 to 500 Hz) makes the sound mono below that frequency: the
+    difference between the sides goes through a 12 dB per octave high-pass there, so an octave
+    below it the sides are about 12 dB quieter, and the middle is untouched.
 - **Sound**: a sample or an instrument set's sound played off its own pitch (another key, the
   channel's tuning, the bend, the mod wheel's vibrato, a resampled audio clip) is read between
   its recorded frames by 4-point cubic Hermite interpolation, a common realtime choice in
@@ -118,7 +211,7 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   crashing plugin never takes the app down, listed in one list with their format (a plugin
   installed in both formats is one row, its CLAP build); a plugin's own window (CLAP or VST3), or
   a parameter window for one without, and for any plugin from its channel's right-click menu
-  (Parameters…) or its mixer slot's: its settings as a list of sliders in a window of its own,
+  (Parameters…) or its mixer block's: its settings as a list of sliders in a window of its own,
   grouped as the plugin groups them, each one automatable by a right-click (a VST3 plugin's
   stepped parameters snap to their steps; the ones its MIDI mapping names are left out); a plugin
   that restarts is made again from its state; plugin state is saved in the project (a VST3
@@ -265,7 +358,26 @@ programs are given shows the windows a little softer.
   sound, a plugin or a sound file of yours ("Sample file…"); drop a file on a sampler row to
   change its sound.
 - **Panels** open and close with the digits 1 to 5, or F5 to F9 (below), and share the window.
-  **Settings** (6 or F10, or the cog among the toolbar's panel buttons) opens a window of its
+  Each keeps room for what it shows (the mixer every strip whole, 225 px); a window too short
+  for all of them scrolls the panels up and down. Drag the line between two stacked panels up or
+  down to share the height between them (its grip lights orange while held); double-click it to
+  put both back.
+- **A panel in its own window**: hold the line over the channel rack, the playlist, the piano
+  roll or the mixer and drag sideways instead (40 px, more than up or down): the line goes back
+  where it was, lights orange along its length, an outline of a window follows the pointer and
+  the hint bar says "release to pop the panel out". Let go there and the panel under the line
+  leaves the stack for a window of its own, opened where you let go, as large as it was (or as
+  you last left that window); the other panels share the main window as though it were closed.
+  Drag back within the 40 px to resize instead, or press Esc to put the line back and do
+  nothing. The window shows the panel exactly as in the stack, its menus inside it, and keeps
+  above the main window as the other windows beside it do; drag it anywhere, to another screen
+  too. While it has the keyboard, the keys act on that panel. Its close button puts the panel
+  back in the stack, where it stacks and at the height it had. The panel's key or toolbar
+  button brings its window to the front, or, pressed in that window, puts the panel back. The
+  top panel of the stack has no line over it, so it stays docked; one panel per window, the
+  Library never. Its size and place are kept, and a panel out in its own window when Dawsome
+  closes opens that way at the next start. Nothing dragged between windows: a clip or a file
+  dropped on a panel's own window lands nowhere. **Settings** (6 or F10, or the cog among the toolbar's panel buttons) opens a window of its
   own beside the main one: its pages scroll, and Esc, its close button or the same key closes
   it. It keeps its size and place for the next time.
 
@@ -373,13 +485,14 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
   the MSVC tools and LLVM; `docs/windows.md` has the build steps, the cross-build from Linux and
   the details.
 - On Linux the windows open through X11 (XWayland on a Wayland desktop, unless
-  `DAWSOME_WINDOW_SYSTEM=wayland`, where the pop-out windows can go under the main one). A
+  `DAWSOME_WINDOW_SYSTEM=wayland`, where the pop-out windows, a panel's own window among them,
+  can go under the main one: a Wayland desktop decides how windows stack). A
   VST3 plugin's own window opens through X11 in either case, at the
   plugin's own scale (Dawsome gives it none); one without a window opens its parameter window. A
   plugin installed as both CLAP and VST3 is listed once, as CLAP (a project naming its VST3 build
   still plays it). VST3 on Windows, its windows included, is built but not yet tried on a Windows
   machine. No LV2 or LADSPA. Plugin latency is shown, not compensated: a VST3 plugin's parameter
-  window, its rack or slot hint and a render name the delay it reports.
+  window, its rack or effect hint and a render name the delay it reports.
 - One note at a time acts within one channel: there are no cut groups across channels (an
   open hi-hat cut by a closed one), and a plugin's or a MIDI out's notes are its instrument's to
   end.
@@ -415,6 +528,10 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
 - Pitched sounds are read by 4-point Hermite interpolation; there is no windowed-sinc read, so a
   note far above its sound's root still folds a little of its highs back below. The Density
   saturator runs without oversampling.
+- The built-in effects take each new setting at once, with no smoothing: fast automation of a
+  filter's cutoff or a distortion's drive can be heard stepping. The delay's time is the
+  exception: a change fades from the old echo to the new over 30 ms instead of jumping, so
+  turning Time while it sounds does not click.
 - The 16-bit dither is plain TPDF, with no noise shaping, and silence is dithered too: a silent
   stretch of a 16-bit file holds noise one step high (−90 dBFS peak, −96 dBFS RMS; `--no-dither`,
   or Dither Off in the export dialog, for digital silence). Every file's dither starts from the

@@ -1,9 +1,12 @@
 //! The app's own settings, kept per user in `dawsome/settings.json` in the settings folder
 //! ([`project_file::config_dir`]), not in any project: which MIDI inputs play,
 //! `"midi_inputs": "all"` or a list of port names, the window's layout when it last closed
-//! (`"window"`), the instrument window's, the Settings window's, the Help window's, the
+//! (`"window"`, the panels popped out of it among them, `"popped"`, written only when one is),
+//! the instrument window's, the Settings window's, the Help window's, the
 //! parameter window's and the sample editor's size and position (`"instrument_window"`,
-//! `"settings_window"`, `"help_window"`, `"params_window"`, `"sample_editor_window"`), the
+//! `"settings_window"`, `"help_window"`, `"params_window"`, `"sample_editor_window"`), each
+//! popped panel's window's (`"panel_windows"`: a panel's name to its place, written once one
+//! was popped), the
 //! sample editor's Snap to zero (`"snap_to_zero"`, written only when off), and the
 //! audio output device chosen (`"audio_output"`: a sound server's sink as `sink:` and its node
 //! name, any other device by its name; none is the system's default; `"audio_output_name"`, the
@@ -133,6 +136,10 @@ pub struct WindowLayout {
     pub width: f32,
     pub height: f32,
     pub maximized: bool,
+    /// The open panels popped out of the stack into windows of their own, by name; written only
+    /// when one is (a layout an earlier build saved has none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub popped: Vec<String>,
 }
 
 /// The size a first start gives the window under the maximized one, which it shows when the
@@ -172,11 +179,17 @@ impl WindowLayout {
             width: size.width,
             height: size.height,
             maximized,
+            popped: panels
+                .popped
+                .panels()
+                .map(|panel| panel.name().to_owned())
+                .collect(),
         }
     }
 }
 
-/// Where a pop-out window (the instrument window, the Settings window) was when it last closed:
+/// Where a pop-out window (the instrument window, the Settings window, a popped panel's) was
+/// when it last closed:
 /// its size, and its position where the system tells a window its place (X11 and Windows do; a
 /// Wayland compositor places every window itself and tells it nothing, so there it is none).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -244,7 +257,9 @@ pub struct StartWindow {
 /// [`FIRST_START_SIZE`] window. A saved layout naming no panel this build knows opens the
 /// rack, so the window is never empty; a saved size too small to use is the first start's.
 /// "settings" in a layout an earlier build saved (when Settings was a panel of the main window)
-/// is passed over: the Settings window opens when asked for.
+/// is passed over: the Settings window opens when asked for. The panels it names popped open
+/// popped, each in its own window; a popped name of a panel not open, or of no stacked panel,
+/// is passed over.
 pub fn start_window(saved: Option<&WindowLayout>) -> StartWindow {
     let Some(saved) = saved else {
         return StartWindow {
@@ -264,6 +279,13 @@ pub fn start_window(saved: Option<&WindowLayout>) -> StartWindow {
     }
     if panels == Panels::NONE {
         panels = Panels::default();
+    }
+    for panel in saved
+        .popped
+        .iter()
+        .filter_map(|name| Panel::from_name(name))
+    {
+        panels.pop_out(panel);
     }
     let usable = saved.width.is_finite()
         && saved.height.is_finite()
@@ -330,6 +352,14 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub sample_editor_window: Option<WindowPlace>,
+    /// Each popped panel's window's size and position when it last closed, by the panel's name;
+    /// written once one was popped. A value this build cannot read keeps none.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    panel_windows: BTreeMap<String, WindowPlace>,
     /// Whether the sample editor's selection snaps to zero crossings; written only when off.
     #[serde(
         default,
@@ -801,15 +831,15 @@ impl Settings {
 
     /// The heights the dividers between the stacked panels left the rack, the piano roll and
     /// the mixer ([`Kept`]): a stored value that is no number is none; the mixer's is never
-    /// under the panels' least height, nor any under nothing (the stack keeps each at least at
-    /// its least height).
+    /// under its least height ([`mixer_layout::LEAST_HEIGHT`], 225: a height an earlier build
+    /// let the divider leave, down to 180, reads as that), nor any under nothing (the stack
+    /// keeps each at least at its least height).
     pub fn kept_heights(&self) -> Kept {
         let number = |height: Option<f32>| height.filter(|height| height.is_finite());
         Kept {
             rack: number(self.rack.height).map(|height| height.max(0.0)),
             piano_roll: number(self.piano_roll.height).map(|height| height.max(0.0)),
-            mixer: number(self.mixer.height)
-                .map(|height| height.max(crate::ui::panels::MIN_HEIGHT)),
+            mixer: number(self.mixer.height).map(|height| height.max(mixer_layout::LEAST_HEIGHT)),
         }
     }
 
@@ -821,6 +851,16 @@ impl Settings {
         self.mixer.height = kept
             .mixer
             .filter(|&height| height != mixer_layout::DEFAULT_HEIGHT);
+    }
+
+    /// Where `panel`'s own window was when it last closed, popped out of the stack; none before.
+    pub fn panel_window(&self, panel: Panel) -> Option<WindowPlace> {
+        self.panel_windows.get(panel.name()).copied()
+    }
+
+    /// Keeps where `panel`'s own window is for its next opening.
+    pub fn set_panel_window(&mut self, panel: Panel, place: WindowPlace) {
+        self.panel_windows.insert(panel.name().to_owned(), place);
     }
 
     /// The Library's groups folded, by name.
@@ -932,6 +972,10 @@ impl Settings {
             let sample_editor_window = rest
                 .remove("sample_editor_window")
                 .and_then(|value| serde_json::from_value(value).ok());
+            let panel_windows = rest
+                .remove("panel_windows")
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default();
             let mut flag = |key: &str| {
                 rest.remove(key)
                     .and_then(|value| serde_json::from_value(value).ok())
@@ -969,6 +1013,7 @@ impl Settings {
                 help_window,
                 params_window,
                 sample_editor_window,
+                panel_windows,
                 snap_to_zero,
                 preview_notes,
                 show_hints,
@@ -1250,6 +1295,7 @@ mod tests {
             width: 10.0,
             height: f32::NAN,
             maximized: true,
+            popped: Vec::new(),
         };
         assert_eq!(
             start_window(Some(&unknown)),
@@ -1276,6 +1322,79 @@ mod tests {
         assert_eq!(start_window(Some(&alone)).panels, Panels::default());
     }
 
+    // A popped panel: the layout names it under "popped" and its window's place is kept under
+    // "panel_windows" by its name, each written only once there is one, so a file without
+    // them (an earlier build's) reads as before and is written as it was; read back, the
+    // layout opens the panel popped and its window where it was. A popped name of a panel not
+    // open, or of no stacked panel, pops nothing; a "panel_windows" this build cannot read
+    // keeps no place, and the keys beside it still read. A place too small for the panel's
+    // window (under 480 px wide, or under the roll's least height) opens at the first size.
+    #[test]
+    fn popped_panels_and_their_windows_read_and_write_beside_the_layout() {
+        let mut panels = Panels::NONE;
+        panels.set(Panel::Playlist, true);
+        panels.set(Panel::PianoRoll, true);
+        panels.pop_out(Panel::PianoRoll);
+        let place = WindowPlace::of(Size::new(1200.0, 420.0), Some(Point::new(2000.0, 150.0)));
+        let mut settings = Settings {
+            midi_inputs: MidiInputs::All,
+            window: Some(WindowLayout::of(panels, Size::new(1280.0, 800.0), false)),
+            ..Settings::default()
+        };
+        settings.set_panel_window(Panel::PianoRoll, place);
+        let text = serde_json::to_string(&settings).expect("writes");
+        assert_eq!(
+            text,
+            r#"{"midi_inputs":"all","window":{"panels":["playlist","piano-roll"],"width":1280.0,"height":800.0,"maximized":false,"popped":["piano-roll"]},"panel_windows":{"piano-roll":{"width":1200.0,"height":420.0,"position":[2000.0,150.0]}}}"#
+        );
+        let read: Settings = serde_json::from_str(&text).expect("reads");
+        assert_eq!(read, settings);
+        assert_eq!(read.panel_window(Panel::PianoRoll), Some(place));
+        assert_eq!(read.panel_window(Panel::Mixer), None);
+        let opened = start_window(read.window.as_ref()).panels;
+        assert_eq!(opened, panels);
+        assert_eq!(opened.stacked().collect::<Vec<_>>(), [Panel::Playlist]);
+        let earlier = r#"{"midi_inputs":"all","window":{"panels":["playlist","piano-roll"],"width":1280.0,"height":800.0,"maximized":false}}"#;
+        let read: Settings = serde_json::from_str(earlier).expect("reads");
+        assert_eq!(
+            start_window(read.window.as_ref()).panels.popped,
+            crate::ui::panels::Popped::NONE
+        );
+        assert_eq!(serde_json::to_string(&read).expect("writes"), earlier);
+        let stray = WindowLayout {
+            panels: vec!["playlist".to_owned()],
+            popped: vec![
+                "mixer".to_owned(),
+                "browser".to_owned(),
+                "playlist".to_owned(),
+            ],
+            ..WindowLayout::of(Panels::NONE, Size::new(1280.0, 800.0), false)
+        };
+        let opened = start_window(Some(&stray)).panels;
+        assert!(!opened.mixer && !opened.browser);
+        assert_eq!(
+            opened.popped.panels().collect::<Vec<_>>(),
+            [Panel::Playlist]
+        );
+        let bad: Settings =
+            serde_json::from_str(r#"{"midi_inputs":"all","panel_windows":"wide"}"#).expect("reads");
+        assert_eq!(bad.midi_inputs, MidiInputs::All);
+        assert_eq!(bad.panel_window(Panel::PianoRoll), None);
+        let roll = PopOut::Panel(Panel::PianoRoll);
+        assert_eq!(
+            WindowPlace::of(Size::new(470.0, 420.0), None).size(roll),
+            Size::new(1000.0, 480.0)
+        );
+        assert_eq!(
+            WindowPlace::of(Size::new(900.0, 223.0), None).size(roll),
+            Size::new(1000.0, 480.0)
+        );
+        assert_eq!(
+            WindowPlace::of(Size::new(900.0, 224.0), None).size(roll),
+            Size::new(900.0, 224.0)
+        );
+    }
+
     // The layout reads and writes beside the inputs; one this build cannot read is none, and
     // the inputs beside it still read.
     #[test]
@@ -1290,6 +1409,7 @@ mod tests {
                 width: 1280.0,
                 height: 800.0,
                 maximized: true,
+                popped: Vec::new(),
             })
         );
         assert_eq!(serde_json::to_string(&read).expect("writes"), text);
@@ -1401,8 +1521,11 @@ mod tests {
     }
 
     // The mixer's height is written under "mixer" only when its handle left it
-    // off the default (400); it reads back no lower than the panels' least height (180), a value
-    // that is no number is the default, and the mixer's keys this build does not know stay. The
+    // off the default (225, its compact strip's least; was 310, and 400 before that); it
+    // reads back no lower than its least (225: the 12 here, and the 182 a
+    // divider left under the old least of 180), a value that is no number is the
+    // default, and the mixer's keys this build does not know stay. The old default, 310, is a
+    // kept height now, written as one. The
     // playlist's lanes fit the panel unless a height was chosen, written only then and read back
     // kept to 32..96; a choice that is no number fits. (Resizable dividers: the mixer's height is
     // one of the kept heights, read and written through them under the same key.)
@@ -1413,7 +1536,7 @@ mod tests {
             ..Kept::default()
         };
         let mut settings = Settings::default();
-        assert_eq!(settings.kept_heights().mixer_height(), 400.0);
+        assert_eq!(settings.kept_heights().mixer_height(), 225.0);
         assert_eq!(settings.playlist_lanes(), Lanes::Fit);
         settings.set_kept_heights(&mixer(312.0));
         settings.set_playlist_lanes(Lanes::Fixed(64.0));
@@ -1425,7 +1548,12 @@ mod tests {
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert_eq!(read.kept_heights().mixer_height(), 312.0);
         assert_eq!(read.playlist_lanes(), Lanes::Fixed(64.0));
-        settings.set_kept_heights(&mixer(400.0));
+        settings.set_kept_heights(&mixer(310.0));
+        assert_eq!(
+            serde_json::to_string(&settings).expect("writes"),
+            r#"{"midi_inputs":[],"playlist":{"lane_height":64.0},"mixer":{"height":310.0}}"#
+        );
+        settings.set_kept_heights(&mixer(225.0));
         settings.set_playlist_lanes(Lanes::Fit);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
@@ -1435,18 +1563,24 @@ mod tests {
             r#"{"mixer":{"height":12,"skin":"dark"},"playlist":{"lane_height":900}}"#,
         )
         .expect("reads");
-        assert_eq!(odd.kept_heights().mixer_height(), 180.0);
+        assert_eq!(odd.kept_heights().mixer_height(), 225.0);
         assert_eq!(odd.playlist_lanes(), Lanes::Fixed(96.0));
+        let owners: Settings =
+            serde_json::from_str(r#"{"mixer":{"height":182.07361}}"#).expect("reads");
+        assert_eq!(owners.kept_heights().mixer_height(), 225.0);
+        let between: Settings =
+            serde_json::from_str(r#"{"mixer":{"height":260.5}}"#).expect("reads");
+        assert_eq!(between.kept_heights().mixer_height(), 260.5);
         let mut odd: Settings = serde_json::from_str(
             r#"{"mixer":{"height":"tall","skin":"dark"},"playlist":{"lane_height":"x"}}"#,
         )
         .expect("reads");
-        assert_eq!(odd.kept_heights().mixer_height(), 400.0);
+        assert_eq!(odd.kept_heights().mixer_height(), 225.0);
         assert_eq!(odd.playlist_lanes(), Lanes::Fit);
-        odd.set_kept_heights(&mixer(250.0));
+        odd.set_kept_heights(&mixer(350.0));
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"mixer":{"height":250.0,"skin":"dark"}}"#
+            r#"{"midi_inputs":[],"mixer":{"height":350.0,"skin":"dark"}}"#
         );
     }
 
@@ -1646,6 +1780,7 @@ mod tests {
             width: 1e9,
             height: 900.0,
             maximized: false,
+            popped: Vec::new(),
         };
         assert_eq!(start_window(Some(&huge)).size, Size::new(7680.0, 900.0));
         let tall = WindowLayout {

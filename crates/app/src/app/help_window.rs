@@ -87,13 +87,14 @@ impl Help {
 
 impl App {
     /// The pop-out windows follow their state ([`App::sync_windows`]), the Help window, the
-    /// parameter window and the sample editor too: after every message, and once at start for
-    /// the windows the command line opened.
+    /// parameter window, the sample editor and the popped panels' windows too: after every
+    /// message, and once at start for the windows the command line or the saved layout opened.
     pub fn sync_pop_outs(&mut self) -> Task<Message> {
         let others = self.sync_windows();
         let help = self.sync_help_window();
         let editor = self.sync_sample_editor_window();
-        Task::batch([others, help, self.sync_param_window(), editor])
+        let panels = self.sync_panel_windows();
+        Task::batch([others, help, self.sync_param_window(), editor, panels])
     }
 
     /// Opens the Help window's own window while Help is open and closes it once it is not,

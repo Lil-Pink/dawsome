@@ -26,7 +26,7 @@ Some of the features that I think are kinda nice:
   
 - **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it loops. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
 - **Swing.** Each pattern gets its own swing knob at the top of the channel rack, from straight (50%) up to 75%, and it nudges every second 16th note late for that shuffle feel. What you hear is what you export, WAV, stems and MIDI files included. Quantize in the piano roll has a swing setting too, and it previews where your notes will land before you commit (the originals stay as faint ghosts until you hit Quantize).
-- **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go.
+- **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go. Its slots also take a filter, distortion, chorus, flanger, phaser, gate and stereo width (thirteen built-in effects in all, counting the limiter on the master).
 - **Plugins.** CLAP and VST3 instruments and effects both work, their windows open in Dawsome. Plugins without a window of their own get a generated one with every parameter automatable.
 - **Virtual instruments in the box.** A piano, electric piano, three basses, acoustic and electric guitar, organ, two pads, strings, marimba and two drum kits, all made by me or public domain (CC0), plus Surge XT as a bundled synth. Bring your own SFZ instruments and sample folders.
 - **Easy to use UI windows** - All UI windows are toggleable and adjustable. Creating an easy to use and easy to digest audio workstation. (Some of this UI is intended to cleaned up in the future, some small things bother me about it) 
@@ -46,11 +46,11 @@ The full reference, every panel and setting, is in [docs/manual.md](docs/manual.
 
 ## What's missing (and what's next)
 
-Compared to the paid DAWs, Dawsome still lacks: a big bundle of built-in effects (only six and one synth), audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though macOS probably not and VST2 definitely not (Steinberg no longer licenses it to anyone).
+Compared to the paid DAWs, Dawsome still lacks: a built-in synth of its own (just the bundled Surge XT for now), audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though macOS probably not and VST2 definitely not (Steinberg no longer licenses it to anyone).
 
 Roughly in the order I plan to add these features:
 
-1. **More built-in effects and a simple synth.** Chorus, phaser, flanger, distortion, a filter, a gate, stereo width.
+1. **A simple built-in synth.**
 2. **UI Clean-up** Because I built the app in Linux and on a 4k monitor, I realize the UI is not uniform across OSs/monitors. Planning to tidy this up and make the UI in general easier on the eyes.
 3. **Sample chopping** and finer, precision sample editing.
 4. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.

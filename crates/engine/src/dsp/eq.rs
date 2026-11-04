@@ -7,19 +7,20 @@ use std::f32::consts::FRAC_1_SQRT_2;
 use std::f64::consts::PI;
 
 use super::{blend, snap64};
-use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory};
+use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Taper};
 
 pub const ID: &str = "dawsome.eq3";
 
 /// Band frequencies stay below this fraction of the sample rate, where the cookbook's filters
-/// are still well behaved.
-const MAX_FREQ_FRACTION: f64 = 0.45;
+/// are still well behaved; the state-variable filter's cutoff stays below it too.
+pub(super) const MAX_FREQ_FRACTION: f64 = 0.45;
 
 const fn param(
     key: &'static str,
     label: &'static str,
     (min, max, default): (f32, f32, f32),
     unit: &'static str,
+    taper: Taper,
 ) -> ParamInfo {
     ParamInfo {
         key,
@@ -29,6 +30,7 @@ const fn param(
         default,
         unit,
         whole: false,
+        taper,
     }
 }
 
@@ -39,18 +41,62 @@ const FREQ: (f32, f32) = (20.0, 20_000.0);
 const GAIN: (f32, f32) = (-18.0, 18.0);
 const Q: (f32, f32) = (0.1, 10.0);
 
-/// Three values per band (frequency, gain, Q) in band order, then the mix.
+/// Three values per band (frequency, gain, Q) in band order, then the mix. The frequencies and
+/// Qs span three and two decades, so their sliders are laid out in octaves ([`Taper::Log`]); the
+/// values stay in hertz and Q, as saved since 0.1.0.
 const PARAMS: [ParamInfo; 10] = [
-    param("low_freq", "Low freq", (FREQ.0, FREQ.1, 100.0), "Hz"),
-    param("low_gain_db", "Low gain", (GAIN.0, GAIN.1, 0.0), "dB"),
-    param("low_q", "Low Q", (Q.0, Q.1, BUTTERWORTH_Q), ""),
-    param("mid_freq", "Mid freq", (FREQ.0, FREQ.1, 1000.0), "Hz"),
-    param("mid_gain_db", "Mid gain", (GAIN.0, GAIN.1, 0.0), "dB"),
-    param("mid_q", "Mid Q", (Q.0, Q.1, 1.0), ""),
-    param("high_freq", "High freq", (FREQ.0, FREQ.1, 8000.0), "Hz"),
-    param("high_gain_db", "High gain", (GAIN.0, GAIN.1, 0.0), "dB"),
-    param("high_q", "High Q", (Q.0, Q.1, BUTTERWORTH_Q), ""),
-    param("mix", "Mix", (0.0, 1.0, 1.0), "%"),
+    param(
+        "low_freq",
+        "Low freq",
+        (FREQ.0, FREQ.1, 100.0),
+        "Hz",
+        Taper::Log,
+    ),
+    param(
+        "low_gain_db",
+        "Low gain",
+        (GAIN.0, GAIN.1, 0.0),
+        "dB",
+        Taper::Linear,
+    ),
+    param("low_q", "Low Q", (Q.0, Q.1, BUTTERWORTH_Q), "", Taper::Log),
+    param(
+        "mid_freq",
+        "Mid freq",
+        (FREQ.0, FREQ.1, 1000.0),
+        "Hz",
+        Taper::Log,
+    ),
+    param(
+        "mid_gain_db",
+        "Mid gain",
+        (GAIN.0, GAIN.1, 0.0),
+        "dB",
+        Taper::Linear,
+    ),
+    param("mid_q", "Mid Q", (Q.0, Q.1, 1.0), "", Taper::Log),
+    param(
+        "high_freq",
+        "High freq",
+        (FREQ.0, FREQ.1, 8000.0),
+        "Hz",
+        Taper::Log,
+    ),
+    param(
+        "high_gain_db",
+        "High gain",
+        (GAIN.0, GAIN.1, 0.0),
+        "dB",
+        Taper::Linear,
+    ),
+    param(
+        "high_q",
+        "High Q",
+        (Q.0, Q.1, BUTTERWORTH_Q),
+        "",
+        Taper::Log,
+    ),
+    param("mix", "Mix", (0.0, 1.0, 1.0), "%", Taper::Linear),
 ];
 
 const MIX: usize = 9;

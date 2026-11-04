@@ -97,6 +97,21 @@ pub trait Processor: Send {
     fn suspend(&mut self) {}
 }
 
+/// How a parameter's slider lays its range out. The value saved, automated and linked to a
+/// controller is the parameter's own either way (hertz, milliseconds, Q): the taper only tells
+/// the UI where along the slider each value sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Taper {
+    /// Evenly in the value.
+    #[default]
+    Linear,
+    /// Evenly in the value's ratio (octaves): a range that spans decades, so that 20 Hz to
+    /// 200 Hz gets as much of the slider as 2 kHz to 20 kHz. Why: laid out evenly in hertz, the
+    /// EQ's whole bass sits in the first pixel of its slider. A range
+    /// that starts at 0 has no ratio there; how the slider reaches 0 is the UI's choice.
+    Log,
+}
+
 /// One parameter of a processor, as the mixer shows and saves it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParamInfo {
@@ -106,11 +121,13 @@ pub struct ParamInfo {
     pub min: f32,
     pub max: f32,
     pub default: f32,
-    /// What [`ProcessorFactory::shown`] gives is in: "Hz", "dB", "ms", "steps", "%" (a 0..1
-    /// value shown as a percentage) or "".
+    /// What [`ProcessorFactory::shown`] gives is in: "Hz", "dB", "ms", "steps", "oct", "st"
+    /// (semitones), "ct" (cents), "°" (degrees), "%" (a 0..1 value shown as a percentage) or "".
     pub unit: &'static str,
     /// Only whole numbers are values.
     pub whole: bool,
+    /// How its slider lays the range out; the value itself stays in `unit`.
+    pub taper: Taper,
 }
 
 impl ParamInfo {
@@ -155,6 +172,13 @@ pub trait ProcessorFactory: Send + Sync {
     /// the mapping is the one its sound is made with, so what is shown is what is heard.
     fn shown(&self, _index: usize, value: f32, _sample_rate: u32) -> f64 {
         f64::from(value)
+    }
+
+    /// The name parameter `index` at `value` goes by when it is a choice ("Notch", "6 stages"),
+    /// shown in place of the number; `None`, the default, for an amount. Why not a unit: the
+    /// mixer's text sees only a parameter's unit and value, which cannot name a choice.
+    fn value_name(&self, _index: usize, _value: f32) -> Option<&'static str> {
+        None
     }
 
     /// A new instance for `sample_rate`, starting at `values` (one per parameter, in
@@ -238,6 +262,7 @@ mod tests {
         default: 0.0,
         unit: "steps",
         whole: true,
+        taper: Taper::Linear,
     };
     const MIX: ParamInfo = ParamInfo {
         key: "mix",
@@ -247,6 +272,7 @@ mod tests {
         default: 0.3,
         unit: "%",
         whole: false,
+        taper: Taper::Linear,
     };
 
     #[test]

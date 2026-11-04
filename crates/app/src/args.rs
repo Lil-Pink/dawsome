@@ -13,17 +13,18 @@ use thiserror::Error;
 use crate::headless::{ScreenshotRequest, Script, ShotWindow};
 use crate::play_to::{PlayTo, RecordSource};
 use crate::ui::layout::DEFAULT_WINDOW_SIZE;
-use crate::ui::panels::{Panel, Panels};
+use crate::ui::panels::{Panel, Panels, Popped};
 
 /// Shown after any flag error.
 pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.json>]
                    [--window-size <W>x<H>]
-                   [--panels <list>] [--song] [--device-rate <Hz>]
+                   [--panels <list>] [--pop-out <list>] [--song] [--device-rate <Hz>]
                    [--plugin-path <dir>].. [--cache <file>] [--stream-threshold <frames>]
                    [--browser-root <dir>] [--cache-dir <dir>] [--midi-ports none|<names>]
                    [--midi-out-ports none|<names>]
                    [--screenshot <out.png> --screenshot-after <ms>
-                   [--screenshot-window main|instrument|settings|help|params|sample-editor]
+                   [--screenshot-window main|instrument|settings|help|params|sample-editor
+                                        |rack|playlist|piano-roll|mixer]
                    [--screenshot-every <ms>]]
                    [--quit-after <ms>] [--null-output] [--rehearse <events.json>]
                    [--open-picker instrument|effect] [--dump-picker <file>]
@@ -54,6 +55,9 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                    [--midi-out-log <file.json>]
   --panels       the panels open at start, comma-separated: rack, playlist, piano-roll,
                  mixer, browser (the Library), settings (the Settings window) (default rack)
+  --pop-out      these of the stacked panels (rack, playlist, piano-roll, mixer),
+                 comma-separated, open at start popped out of the main window, each in a
+                 window of its own
   --load         the project to open, as when it is given alone
   --window-size  the main window's size at start, in logical pixels (default 1000x560)
   --screenshot   (a scripted window) save a PNG of the main window, or of the one
@@ -138,7 +142,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --screenshot-window  the window the screenshot is of: the main window (the default), the
                  instrument window --open-instrument opens, the Settings window --panels
                  settings opens, the Help window --show help opens, the parameter window
-                 --open-plugin opens (params) or the sample editor --open-sample-editor opens
+                 --open-plugin opens (params), the sample editor --open-sample-editor opens, or
+                 a panel's own window --pop-out opens (rack, playlist, piano-roll, mixer)
   --open-sample-editor  open this channel's sample editor at start (a headless check), or the
                  one an audio clip's double-click opens (its channel's, the clip bracketed)
   --sample-editor-select  with --open-sample-editor: select frames <from> to <to> of the sound
@@ -164,8 +169,9 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                  guide's picture of the link control)
   --curve-menu   open the playlist's curve menu on this automation's first segment handle in
                  view, as a right press there does (a headless check)
-  --slot-menu    select this mixer insert and open the menu of its slot n (0 the first), as a
-                 press on that slot does (a headless check)
+  --slot-menu    select this mixer insert and open the menu of its effect n in the chain (0
+                 the first), or with n past its last effect its add menu, as a press there
+                 does (a headless check)
   --library-menu  open the menu of this MIDI device's Library row, as a right press on it does
                  (a headless check; a device a channel plays has one)
   --midi-monitor  connect the system MIDI ports whose names start with this, and no other,
@@ -281,8 +287,8 @@ impl Shown {
     }
 }
 
-/// Takes `--screenshot-window main|instrument|settings|help|params|sample-editor` out of `raw`,
-/// leaving the rest in their order.
+/// Takes `--screenshot-window main|instrument|settings|help|params|sample-editor|<panel>` out of
+/// `raw` (a panel: a stacked one's own window), leaving the rest in their order.
 /// Why apart from [`Args`]: tests pin its screenshot request field by field.
 pub fn take_shot_window(raw: &mut Vec<String>) -> Result<Option<ShotWindow>, ArgsError> {
     const FLAG: &str = "--screenshot-window";
@@ -301,13 +307,17 @@ pub fn take_shot_window(raw: &mut Vec<String>) -> Result<Option<ShotWindow>, Arg
         "help" => ShotWindow::Help,
         "params" => ShotWindow::Params,
         "sample-editor" => ShotWindow::SampleEditor,
-        _ => {
-            return Err(bad_value(
-                &flag,
-                "main, instrument, settings, help, params or sample-editor",
-                value,
-            ))
-        }
+        name => match Panel::from_name(name).filter(|panel| panel.stacked_index().is_some()) {
+            Some(panel) => ShotWindow::Panel(panel),
+            None => {
+                return Err(bad_value(
+                    &flag,
+                    "main, instrument, settings, help, params, sample-editor, rack, playlist, \
+                     piano-roll or mixer",
+                    value,
+                ))
+            }
+        },
     };
     if raw.iter().any(|word| word == FLAG) {
         return Err(ArgsError::Repeated(flag));
@@ -405,8 +415,8 @@ pub fn take_curve_menu(raw: &mut Vec<String>) -> Result<Option<u32>, ArgsError> 
 }
 
 /// Takes `--slot-menu insert:<id>,slot:<n>` out of `raw`: the mixer insert a scripted run
-/// selects and its slot whose menu it opens (for a screenshot of that menu at the window's
-/// foot).
+/// selects and the place in its chain whose menu it opens, past the last effect the add menu
+/// (for a screenshot of that menu at the window's foot).
 pub fn take_slot_menu(raw: &mut Vec<String>) -> Result<Option<(u16, u8)>, ArgsError> {
     take_choice(raw, "--slot-menu", "insert:<id>,slot:<n>", |value| {
         let (insert, slot) = value.strip_prefix("insert:")?.split_once(",slot:")?;
@@ -516,7 +526,7 @@ pub fn take_library_preview(raw: &mut Vec<String>) -> Result<Option<PathBuf>, Ar
 /// arguments cannot tell from values given.
 pub fn layout_given(raw: &[String]) -> bool {
     raw.iter()
-        .any(|word| word == "--panels" || word == "--window-size")
+        .any(|word| word == "--panels" || word == "--pop-out" || word == "--window-size")
 }
 
 /// Everything the command line can ask for.
@@ -621,6 +631,7 @@ impl Args {
         let mut play_to = None;
         let mut bars = None;
         let mut panels = None;
+        let mut pop_out = None;
         let mut device_rate = None;
         let mut song = None;
         let mut bits = None;
@@ -682,6 +693,7 @@ impl Args {
                 "--play-to" => set(&mut play_to, &flag, PathBuf::from(value?))?,
                 "--bars" => set(&mut bars, &flag, parse_bars(&flag, value?)?)?,
                 "--panels" => set(&mut panels, &flag, parse_panels(&flag, value?)?)?,
+                "--pop-out" => set(&mut pop_out, &flag, parse_pop_out(&flag, value?)?)?,
                 "--device-rate" => set(&mut device_rate, &flag, parse_rate(&flag, value?)?)?,
                 "--bits" => set(&mut bits, &flag, parse_bits(&flag, value?)?)?,
                 "--plugin-path" => plugins.dirs.push(PathBuf::from(value?)),
@@ -749,6 +761,7 @@ impl Args {
                 let window_flag = [
                     (window_size.is_some(), "--window-size"),
                     (panels.is_some(), "--panels"),
+                    (pop_out.is_some(), "--pop-out"),
                     (screenshot.is_some(), "--screenshot"),
                     (quit_after.is_some(), "--quit-after"),
                     (open_picker.is_some(), "--open-picker"),
@@ -825,7 +838,7 @@ impl Args {
         Ok(Self {
             project,
             window_size: window_size.unwrap_or(DEFAULT_WINDOW_SIZE),
-            panels: panels.unwrap_or_default(),
+            panels: popped_out(panels.unwrap_or_default(), pop_out.unwrap_or_default()),
             device_rate,
             stream_threshold,
             browser_root,
@@ -979,6 +992,31 @@ fn parse_panels(flag: &str, value: String) -> Result<Panels, ArgsError> {
         }
     }
     Ok(panels)
+}
+
+/// `"piano-roll,mixer"` → both popped. Each a stacked panel's name, at most once; at least one.
+fn parse_pop_out(flag: &str, value: String) -> Result<Popped, ArgsError> {
+    let expected =
+        "a comma-separated list of rack, playlist, piano-roll and mixer, each at most once";
+    let mut popped = Popped::NONE;
+    for name in value.split(',') {
+        match Panel::from_name(name) {
+            Some(panel) if panel.stacked_index().is_some() && !popped.has(panel) => {
+                popped.set(panel, true);
+            }
+            _ => return Err(bad_value(flag, expected, value)),
+        }
+    }
+    Ok(popped)
+}
+
+/// `panels` with the panels `popped` names open and popped out of the stack.
+fn popped_out(mut panels: Panels, popped: Popped) -> Panels {
+    for panel in popped.panels() {
+        panels.set(panel, true);
+        panels.pop_out(panel);
+    }
+    panels
 }
 
 /// A sample rate in whole Hz, one the engine accepts (8000 to 384000).
@@ -1262,8 +1300,9 @@ mod tests {
         );
     }
 
-    // `--screenshot-window main|instrument|settings|help|params` comes out of the line; a missing,
-    // unknown or repeated value is refused; without it the screenshot is of the main window.
+    // `--screenshot-window main|instrument|settings|help|params|<panel>` comes out of the line; a
+    // missing, unknown or repeated value is refused; without it the screenshot is of the main
+    // window.
     #[test]
     fn the_screenshot_window_comes_out_of_the_line() {
         let mut line = words("--load a.json --screenshot-window instrument --screenshot b.png");
@@ -1293,12 +1332,23 @@ mod tests {
             take_shot_window(&mut words("--screenshot-window")),
             Err(ArgsError::MissingValue("--screenshot-window".to_owned()))
         );
+        // A stacked panel names its own window, popped out; the Library, no stacked panel,
+        // has none. (Pin moved: "mixer" was the refused value before panels popped out.)
         assert_eq!(
             take_shot_window(&mut words("--screenshot-window mixer")),
+            Ok(Some(ShotWindow::Panel(Panel::Mixer)))
+        );
+        assert_eq!(
+            take_shot_window(&mut words("--screenshot-window piano-roll")),
+            Ok(Some(ShotWindow::Panel(Panel::PianoRoll)))
+        );
+        assert_eq!(
+            take_shot_window(&mut words("--screenshot-window browser")),
             Err(bad_value(
                 "--screenshot-window",
-                "main, instrument, settings, help, params or sample-editor",
-                "mixer".to_owned()
+                "main, instrument, settings, help, params, sample-editor, rack, playlist, \
+                 piano-roll or mixer",
+                "browser".to_owned()
             ))
         );
         // `--open-sample-editor channel:<id>` or `clip:<id>` with its selection, `<from>-<to>`;
@@ -1557,6 +1607,7 @@ mod tests {
                 mixer: false,
                 browser: false,
                 settings: false,
+                popped: Popped::NONE,
             }
         );
         let roll =
@@ -1570,6 +1621,7 @@ mod tests {
                 mixer: false,
                 browser: false,
                 settings: false,
+                popped: Popped::NONE,
             }
         );
         assert_eq!(parse("").expect("valid").panels, Panels::default());
@@ -1642,6 +1694,7 @@ mod tests {
                 mixer: false,
                 browser: false,
                 settings: false,
+                popped: Popped::NONE,
             }
         );
         assert!(matches!(
@@ -1664,9 +1717,53 @@ mod tests {
                 mixer: true,
                 browser: false,
                 settings: false,
+                popped: Popped::NONE,
             }
         );
         assert!(parse("--panels rack,mixer").expect("valid").panels.mixer);
+    }
+
+    // `--pop-out` opens the stacked panels it names popped out of the stack, beside the panels
+    // `--panels` opens (the rack by default): the stack keeps the rest. A name that is no
+    // stacked panel (the Library, Settings, a typo) or one named twice is refused, it goes with
+    // the window, not --play-to, and like --panels it gives the layout itself.
+    #[test]
+    fn pop_out_opens_stacked_panels_in_their_own_windows() {
+        let args = parse("--load p3_roll.json --panels playlist --pop-out piano-roll,mixer")
+            .expect("valid");
+        let mut popped = Popped::NONE;
+        popped.set(Panel::PianoRoll, true);
+        popped.set(Panel::Mixer, true);
+        assert_eq!(
+            args.panels,
+            Panels {
+                rack: false,
+                playlist: true,
+                piano_roll: true,
+                mixer: true,
+                browser: false,
+                settings: false,
+                popped,
+            }
+        );
+        assert_eq!(args.panels.stacked().collect::<Vec<_>>(), [Panel::Playlist]);
+        let alone = parse("--pop-out mixer").expect("valid").panels;
+        assert!(alone.rack && alone.mixer && alone.popped.has(Panel::Mixer));
+        assert_eq!(alone.stacked().collect::<Vec<_>>(), [Panel::Rack]);
+        for refused in ["browser", "settings", "roll", "mixer,mixer", "mixer,"] {
+            assert!(
+                matches!(
+                    parse(&format!("--pop-out {refused}")),
+                    Err(ArgsError::BadValue { .. })
+                ),
+                "{refused:?}"
+            );
+        }
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --pop-out mixer"),
+            Err(ArgsError::PlayToWithWindowFlag("--pop-out"))
+        );
+        assert!(layout_given(&words("--load a.json --pop-out mixer")));
     }
 
     // Recording the master through --play-to (input has no device offline), the count-in switch,

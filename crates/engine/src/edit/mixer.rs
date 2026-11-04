@@ -193,6 +193,7 @@ pub(super) fn add_effect(
     slot: u8,
     id: EffectId,
     processor: ProcessorRef,
+    on: bool,
 ) -> Result<Applied, EditError> {
     let expected = project.mixer.next_effect_id;
     if id != expected {
@@ -210,6 +211,7 @@ pub(super) fn add_effect(
             id,
             slot,
             processor,
+            on,
         },
     )?;
     project.mixer.next_effect_id = EffectId(next);
@@ -228,6 +230,7 @@ pub(super) fn unadd_effect(project: &mut Project, id: EffectId) -> Result<Applie
         slot: effect.slot,
         id,
         processor: effect.processor,
+        on: effect.on,
     };
     Ok(Applied::effect(inverse, id))
 }
@@ -239,6 +242,7 @@ pub(super) fn remove_effect(project: &mut Project, id: EffectId) -> Result<Appli
         slot: effect.slot,
         id,
         processor: effect.processor,
+        on: effect.on,
     };
     Ok(Applied::effect(inverse, id))
 }
@@ -249,6 +253,7 @@ pub(super) fn restore_effect(
     slot: u8,
     id: EffectId,
     processor: ProcessorRef,
+    on: bool,
 ) -> Result<Applied, EditError> {
     let next = project.mixer.next_effect_id;
     if id >= next {
@@ -266,9 +271,22 @@ pub(super) fn restore_effect(
             id,
             slot,
             processor,
+            on,
         },
     )?;
     Ok(Applied::effect(Edit::RemoveEffect { id }, id))
+}
+
+/// Switches effect `effect` on or off. Only the mix changes: the compiler leaves an effect that
+/// is off out of its insert's chain and keeps its processor, settings and all.
+pub(super) fn set_effect_on(
+    project: &mut Project,
+    effect: EffectId,
+    on: bool,
+) -> Result<Applied, EditError> {
+    let (insert, index) = locate(project, effect)?;
+    let old = mem::replace(&mut project.mixer.inserts[insert].effects[index].on, on);
+    Ok(Applied::mixer(Edit::SetEffectOn { effect, on: old }))
 }
 
 pub(super) fn set_effect_param(

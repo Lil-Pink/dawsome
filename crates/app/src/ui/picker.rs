@@ -71,8 +71,8 @@ pub const FILTER_INPUT: &str = "plugin-picker-filter";
 pub enum PickerTarget {
     /// A new plugin channel at the end of the rack.
     Instrument,
-    /// The effect in this empty slot.
-    Effect { insert: InsertId, slot: u8 },
+    /// An effect at the end of this insert's chain.
+    Effect { insert: InsertId },
     /// "+ Instrument…": a new channel at the end of the rack playing an instrument set, a
     /// starter kit sound, a plugin instrument or a sound file.
     AddInstrument,

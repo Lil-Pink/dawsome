@@ -342,7 +342,6 @@ mod tests {
         let id = app.session.project().mixer.next_effect_id;
         let target = PickerTarget::Effect {
             insert: InsertId(0),
-            slot: 0,
         };
         app.add_plugin(target, &gain);
         assert_eq!(app.error, None);

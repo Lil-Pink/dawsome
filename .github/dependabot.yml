@@ -1,0 +1,26 @@
+# Once a week, one pull request for newer Rust crates and one for newer versions of the actions
+# the workflows use (the workflows pin each action to a commit, so this is how they hear of new
+# ones). A version must be a week old before it is proposed. The repository takes one commit per
+# release, so a proposed update is made for the next release and its pull request closed.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    groups:
+      crates:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]

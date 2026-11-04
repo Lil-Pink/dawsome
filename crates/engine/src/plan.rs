@@ -436,7 +436,7 @@ pub(crate) struct InsertPlan {
     /// False when muted or silenced by solo. The effects still run either way, so their tails
     /// stay continuous.
     pub(crate) audible: bool,
-    /// Its processors, in slot order.
+    /// Its processors, in slot order: those of its effects that are on.
     pub(crate) effects: Vec<ProcessorSlot>,
     /// Its sends, sorted by target.
     pub(crate) sends: Vec<SendPlan>,
@@ -535,6 +535,8 @@ pub(crate) struct RuntimeDelta {
     pub(crate) remove: Vec<ProcessorSlot>,
     /// New values for running processors: (slot, parameter index, value).
     pub(crate) params: Vec<(ProcessorSlot, usize, f32)>,
+    /// Running processors to clear (their effects switched back on), after the new values.
+    pub(crate) reset: Vec<ProcessorSlot>,
     /// Where the player puts the processors it takes out, so they go back to be dropped on the
     /// UI thread. Its capacity covers every removal and every install, so the player's pushes
     /// never allocate.
@@ -555,6 +557,7 @@ impl fmt::Debug for RuntimeDelta {
             .field("install", &installed)
             .field("remove", &self.remove)
             .field("params", &self.params)
+            .field("reset", &self.reset)
             .field("removed", &self.removed.len())
             .field("install_sources", &sources)
             .field("remove_sources", &self.remove_sources)

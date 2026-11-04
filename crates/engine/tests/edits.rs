@@ -1416,6 +1416,7 @@ fn every_mixer_edit() -> Vec<(Edit, Touched)> {
                 slot: 3,
                 id: EffectId(2),
                 processor: ProcessorRef::new("dawsome.reverb"),
+                on: true,
             },
             effects_touched(2, true),
         ),
@@ -1435,7 +1436,77 @@ fn every_mixer_edit() -> Vec<(Edit, Touched)> {
             },
             mixer_only(),
         ),
+        (
+            Edit::SetEffectOn {
+                effect: EffectId(1),
+                on: false,
+            },
+            mixer_only(),
+        ),
+        (
+            Edit::AddEffect {
+                insert: insert(1),
+                slot: 1,
+                id: EffectId(2),
+                processor: ProcessorRef::new("dawsome.eq3"),
+                on: false,
+            },
+            effects_touched(2, true),
+        ),
     ]
+}
+
+// An effect's light goes with it: one switched off and removed comes back off on undo, and one
+// added off and taken back by undo comes back off on redo; the step that switches it is
+// undone to on.
+#[test]
+fn an_effect_keeps_its_light_through_remove_and_undo() {
+    let mut project = load(P5_DELAY_SYNC);
+    let on = |project: &Project, id: u32| {
+        project
+            .mixer
+            .effect(EffectId(id))
+            .map(|(_, effect)| effect.on)
+    };
+    let switched = edit::apply(
+        &mut project,
+        Edit::SetEffectOn {
+            effect: EffectId(1),
+            on: false,
+        },
+    )
+    .expect("switches");
+    assert_eq!(
+        switched.inverse,
+        Edit::SetEffectOn {
+            effect: EffectId(1),
+            on: true
+        }
+    );
+    assert_eq!(on(&project, 1), Some(false));
+    let removed =
+        edit::apply(&mut project, Edit::RemoveEffect { id: EffectId(1) }).expect("removes");
+    assert_eq!(on(&project, 1), None);
+    edit::apply(&mut project, removed.inverse).expect("restores");
+    assert_eq!(on(&project, 1), Some(false), "restored off");
+    let added = edit::apply(
+        &mut project,
+        Edit::AddEffect {
+            insert: InsertId(1),
+            slot: 1,
+            id: EffectId(2),
+            processor: ProcessorRef::new("dawsome.reverb"),
+            on: false,
+        },
+    )
+    .expect("adds");
+    assert_eq!(on(&project, 2), Some(false), "added off");
+    let unadded = edit::apply(&mut project, added.inverse).expect("undo");
+    assert_eq!(on(&project, 2), None);
+    edit::apply(&mut project, unadded.inverse).expect("redo");
+    assert_eq!(on(&project, 2), Some(false), "added off again");
+    edit::apply(&mut project, switched.inverse).expect("undo the switch");
+    assert_eq!(on(&project, 1), Some(true));
 }
 
 #[test]
@@ -1467,6 +1538,7 @@ fn moving_onto_a_taken_slot_swaps_the_two_effects() {
         slot: 6,
         id: EffectId(2),
         processor: ProcessorRef::new("dawsome.eq3"),
+        on: true,
     };
     edit::apply(&mut project, add).expect("slot 6 is free");
     let before = json(&project);
@@ -1498,6 +1570,7 @@ fn undoing_an_added_effect_gives_its_id_back() {
         slot: 0,
         id: EffectId(2),
         processor: ProcessorRef::new("dawsome.reverb"),
+        on: true,
     };
     history.apply(&mut project, add).expect("adds");
     assert_eq!(project.mixer.next_effect_id, EffectId(3));
@@ -1525,6 +1598,7 @@ fn every_refused_mixer_edit_changes_nothing() {
         slot,
         id: EffectId(id),
         processor: ProcessorRef::new("dawsome.reverb"),
+        on: true,
     };
     let mut non_finite = ProcessorRef::new("dawsome.reverb");
     non_finite.params.insert("room".into(), f32::INFINITY);
@@ -1533,6 +1607,7 @@ fn every_refused_mixer_edit_changes_nothing() {
         slot,
         id: EffectId(id),
         processor: ProcessorRef::new("dawsome.delay"),
+        on: true,
     };
     let refused: Vec<RefusedEdit> = vec![
         (send(3, 3, Some(1.0)), |e| *e == EditError::SendToItself(3)),
@@ -1604,6 +1679,7 @@ fn every_refused_mixer_edit_changes_nothing() {
                 slot: 3,
                 id: EffectId(2),
                 processor: non_finite,
+                on: true,
             },
             |e| *e == EditError::InvalidParamValue(f32::INFINITY),
         ),
@@ -1644,6 +1720,13 @@ fn every_refused_mixer_edit_changes_nothing() {
             Edit::MoveEffect {
                 effect: EffectId(9),
                 slot: 1,
+            },
+            |e| *e == EditError::UnknownEffect(9),
+        ),
+        (
+            Edit::SetEffectOn {
+                effect: EffectId(9),
+                on: false,
             },
             |e| *e == EditError::UnknownEffect(9),
         ),

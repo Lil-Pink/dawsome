@@ -7,7 +7,10 @@
 use std::collections::BTreeMap;
 
 use dawsome_engine::dsp::laws::fader_gain;
-use dawsome_engine::project::{ChannelKind, ClipId, InsertId, PatternId, ProcessorOwner, Project};
+use dawsome_engine::processor::Registry;
+use dawsome_engine::project::{
+    ChannelKind, ClipId, Effect, InsertId, PatternId, ProcessorOwner, Project,
+};
 use dawsome_engine::time::{self, MilliBpm};
 
 use crate::app::SelectionLink;
@@ -17,8 +20,11 @@ use crate::ui::key_names::key_name;
 use crate::ui::keys_page::KeysHit;
 use crate::ui::layout::HeaderHit;
 use crate::ui::library::{Port, Section};
+use crate::ui::mixer::effect_name;
 use crate::ui::mixer_layout::Hit as MixerHit;
-use crate::ui::mixer_state::{fader_text, pan_text, percent_text};
+use crate::ui::mixer_state::{
+    effect_param_text, effect_values, fader_text, is_choice, pan_text, percent_text, PLUGIN_KNOBS,
+};
 use crate::ui::panels::Panel;
 use crate::ui::playlist_layout::{ClipPart, HeaderHit as TrackHit, RulerBand};
 use crate::ui::rack::swing_text;
@@ -682,6 +688,8 @@ pub enum LibraryPart {
 /// What the words need to know beyond the hover itself.
 pub struct Context<'a> {
     pub project: &'a Project,
+    /// The processors there are: an effect's name, its knobs' names and values.
+    pub registry: &'a Registry,
     /// The pattern the rack shows.
     pub pattern: Option<PatternId>,
     /// The mixer's selected insert, whose sends the send knobs show.
@@ -892,7 +900,11 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
         Hover::Divider { upper, lower } => [
             Some(format!("{} / {}", upper.title(), lower.title())),
             None,
-            Some("drag to resize the panels above and below; double-click resets".to_owned()),
+            Some(
+                "drag to resize the panels above and below; drag sideways to pop the lower one \
+                 out; double-click resets"
+                    .to_owned(),
+            ),
         ],
         Hover::Library(part) => library_parts(part, context.keys),
         Hover::Setting(hit) => setting_parts(*hit),
@@ -1701,24 +1713,98 @@ fn mixer_parts(hit: MixerHit, context: &Context) -> [Option<String>; 3] {
         }
         MixerHit::Name(id) => three(name(id), None, "double-click renames it"),
         MixerHit::Strip(id) => three(name(id), None, "click selects it"),
-        MixerHit::Slot(slot) => {
-            // A slot holding a VST3 plugin says so, and its latency.
-            let value = mixer
-                .get(context.insert)
-                .and_then(|insert| insert.effects.iter().find(|effect| effect.slot == slot))
-                .and_then(|effect| plugin_value(context, ProcessorOwner::Effect(effect.id)));
-            three(
-                format!("Effect slot {}", slot + 1),
-                value,
-                "click adds an effect or shows its settings; right-click: remove or move",
-            )
-        }
-        MixerHit::Param(index) => three(
-            format!("Effect setting {}", index + 1),
+        MixerHit::AddEffect => three(
+            "Add effect".to_owned(),
             None,
-            "drag; double-click resets; right-click to automate or link a controller",
+            "click picks an effect for the end of the chain; it starts off",
         ),
+        MixerHit::EffectLed(block)
+        | MixerHit::EffectName(block)
+        | MixerHit::RemoveEffect(block)
+        | MixerHit::MoveEarlier(block)
+        | MixerHit::MoveLater(block)
+        | MixerHit::Block(block)
+        | MixerHit::Knob { block, .. } => {
+            let Some(effect) = mixer
+                .get(context.insert)
+                .and_then(|insert| insert.effects.get(block))
+            else {
+                return [None, None, None];
+            };
+            effect_parts(hit, effect, context)
+        }
     }
+}
+
+/// The hint over a part of `effect`'s block: its light says on or off, its name that a drag
+/// reorders the chain (and a plugin's format, a VST3 plugin's latency too), a knob its
+/// setting's name and value.
+fn effect_parts(hit: MixerHit, effect: &Effect, context: &Context) -> [Option<String>; 3] {
+    let name = effect_name(effect, context.registry).to_owned();
+    let three = |name: String, value: Option<String>, does: &str| {
+        [Some(name), value, Some(does.to_owned())]
+    };
+    let plugin = effect.processor.format().is_some();
+    match hit {
+        MixerHit::EffectLed(_) => {
+            let on = if effect.on { "On" } else { "Off" };
+            three(name, Some(on.to_owned()), "click switches it on or off")
+        }
+        MixerHit::RemoveEffect(_) => three(name, None, "click removes it from the chain"),
+        MixerHit::MoveEarlier(_) => three(name, None, "click moves it a place earlier"),
+        MixerHit::MoveLater(_) => three(name, None, "click moves it a place later"),
+        MixerHit::Knob { knob, .. } => knob_parts(effect, knob, context),
+        MixerHit::EffectName(_) if plugin => three(
+            name,
+            plugin_value(context, ProcessorOwner::Effect(effect.id)),
+            "drag to reorder; double-click opens its window; right-click: remove or parameters",
+        ),
+        MixerHit::EffectName(_) => three(name, None, "drag to reorder; right-click: remove"),
+        _ if plugin => three(
+            name,
+            plugin_value(context, ProcessorOwner::Effect(effect.id)),
+            "right-click: remove or parameters",
+        ),
+        _ => three(name, None, "right-click: remove"),
+    }
+}
+
+/// The hint over knob `knob` of `effect`: its setting's name and value, and what a press does
+/// (a choice's button steps to its next value).
+fn knob_parts(effect: &Effect, knob: usize, context: &Context) -> [Option<String>; 3] {
+    let registry = context.registry;
+    let automate = "right-click to automate or link a controller";
+    if let Some(factory) = registry.get(&effect.processor.id) {
+        let Some(info) = factory.params().get(knob) else {
+            return [None, None, None];
+        };
+        let value = effect_values(effect, registry)
+            .and_then(|values| values.get(knob).copied())
+            .and_then(|value| effect_param_text(factory, knob, value, context.project.sample_rate));
+        let does = if is_choice(factory, knob) {
+            format!("click picks the next; {automate}")
+        } else {
+            format!("drag; double-click resets; {automate}")
+        };
+        return [Some(info.label.to_owned()), value, Some(does)];
+    }
+    let owner = ProcessorOwner::Effect(effect.id);
+    let Some(host) = registry.host(&effect.processor.id) else {
+        return [None, None, None];
+    };
+    let Some(param) = host
+        .params(owner)
+        .into_iter()
+        .filter(|param| !param.hidden)
+        .take(PLUGIN_KNOBS)
+        .nth(knob)
+    else {
+        return [None, None, None];
+    };
+    let value = host
+        .value(owner, param.id)
+        .and_then(|value| host.value_text(owner, param.id, value));
+    [Some(param.name), value, Some(format!("drag; {automate}"))]
 }
 
 fn library_parts(part: &LibraryPart, keys: &Keys) -> [Option<String>; 3] {
@@ -1924,6 +2010,9 @@ mod tests {
     fn context(project: &Project) -> Context<'_> {
         Context {
             project,
+            // The native effects, whose names and knobs the mixer's hints say. Why leaked: a
+            // registry may hold plugin hosts, so no static can hold one; a test's few are small.
+            registry: Box::leak(Box::new(Registry::native())),
             pattern: project.patterns.keys().next().copied(),
             insert: InsertId::MASTER,
             loop_on: None,
@@ -2152,15 +2241,65 @@ mod tests {
             size: Size::new(1000.0, 504.0),
             scroll: 0.0,
             last,
-            params_top: 0,
+            effects_scroll: 0.0,
         };
+        let no_effects: [usize; 0] = [];
         for at in sweep(desk.size) {
-            if let Some(hit) = mixer_layout::hit_test(at, desk) {
+            if let Some(hit) = mixer_layout::hit_test(at, desk, &no_effects) {
                 mixer.insert(format!("{:?}", std::mem::discriminant(&hit)));
                 hinted(&Hover::Mixer(hit), &context);
             }
         }
-        assert!(mixer.len() >= 11, "the mixer's controls: {mixer:?}");
+        assert!(mixer.len() >= 12, "the mixer's controls: {mixer:?}");
+        // An insert's effects: p5_eq_3k's insert 1 holds the EQ (ten knobs), here off, and the
+        // filter, whose type is a choice. Every part of their blocks has a hint.
+        let mut effects = project("p5_eq_3k.json");
+        effects.mixer.inserts[1].effects[0].on = false;
+        let filter = Effect {
+            id: dawsome_engine::project::EffectId(2),
+            slot: 1,
+            processor: dawsome_engine::project::ProcessorRef::new("dawsome.filter"),
+            on: true,
+        };
+        effects.mixer.inserts[1].effects.push(filter);
+        effects.mixer.next_effect_id = dawsome_engine::project::EffectId(3);
+        let context = Context {
+            insert: InsertId(1),
+            ..super::tests::context(&effects)
+        };
+        let chain = [10, 3];
+        let mut parts = BTreeSet::new();
+        for at in sweep(desk.size) {
+            if let Some(hit) = mixer_layout::hit_test(at, desk, &chain) {
+                parts.insert(format!("{:?}", std::mem::discriminant(&hit)));
+                hinted(&Hover::Mixer(hit), &context);
+            }
+        }
+        for part in [
+            MixerHit::EffectLed(0),
+            MixerHit::EffectName(0),
+            MixerHit::RemoveEffect(0),
+            MixerHit::MoveEarlier(1),
+            MixerHit::MoveLater(0),
+            MixerHit::Knob { block: 0, knob: 0 },
+            MixerHit::Block(0),
+            MixerHit::AddEffect,
+        ] {
+            let seen = format!("{:?}", std::mem::discriminant(&part));
+            assert!(parts.contains(&seen), "{part:?} in {parts:?}");
+        }
+        assert_eq!(
+            words(&Hover::Mixer(MixerHit::EffectLed(0)), &context),
+            "EQ \u{b7} Off \u{b7} click switches it on or off"
+        );
+        assert_eq!(
+            words(&Hover::Mixer(MixerHit::EffectName(1)), &context),
+            "Filter \u{b7} drag to reorder; right-click: remove"
+        );
+        assert_eq!(
+            words(&Hover::Mixer(MixerHit::Knob { block: 1, knob: 0 }), &context),
+            "Type \u{b7} Low-pass \u{b7} click picks the next; right-click to automate or link a controller"
+        );
         // The Library: a row of every kind.
         let rows = [
             (
@@ -2440,7 +2579,8 @@ mod tests {
         }
         // The mixer's handle says what a drag does, as the lane's does. Pin moved: the handle
         // is the divider over the mixer, as every
-        // line between two stacked panels is; each names the two panels and the double-click.
+        // line between two stacked panels is; each names the two panels and the double-click,
+        // and (pin moved again) the sideways drag that pops the lower one out.
         assert_eq!(
             hinted(
                 &Hover::Divider {
@@ -2449,8 +2589,8 @@ mod tests {
                 },
                 &context
             ),
-            "Piano roll / Mixer \u{b7} drag to resize the panels above and below; double-click \
-             resets"
+            "Piano roll / Mixer \u{b7} drag to resize the panels above and below; drag sideways \
+             to pop the lower one out; double-click resets"
         );
         for (upper, lower) in [
             (Panel::Rack, Panel::Playlist),

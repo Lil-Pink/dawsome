@@ -5,7 +5,7 @@
 
 use super::{decibels, dither, guard, overall_scale, HALF_PI, SEEDS};
 use crate::dsp::blend;
-use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory};
+use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Taper};
 
 pub const ID: &str = "dawsome.pressure4";
 
@@ -23,6 +23,7 @@ const fn param(
         default,
         unit,
         whole: false,
+        taper: Taper::Linear,
     }
 }
 

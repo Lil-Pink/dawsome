@@ -118,6 +118,10 @@ pub fn name(edit: &Edit) -> &'static str {
         Edit::RestoreEffect { .. } => "Restore effect",
         Edit::SetEffectParam { .. } => "Effect setting",
         Edit::MoveEffect { .. } => "Move effect",
+        // Why not the effect's own name ("EQ on"): the history keeps names as `&'static str`,
+        // and a plugin's name is the document's.
+        Edit::SetEffectOn { on: true, .. } => "Effect on",
+        Edit::SetEffectOn { on: false, .. } => "Effect off",
         // Clips given their own copies (each copy added, its clip pointed at it) or linked
         // back, one or several (the playlist header's link control acts on the selection). Why
         // no count in the name ("Unlink 3 clips"): the history keeps names as `&'static str`.
@@ -160,9 +164,13 @@ fn points_a_clip(edit: &Edit) -> bool {
     matches!(edit, Edit::SetClipPattern { .. })
 }
 
-/// Whether `edit` is one a transaction makes only to make room for the edit it is for.
+/// Whether `edit` is one a transaction makes only to make room for the edit it is for (an
+/// effect moved down to close a gap is room at the chain's end for the one added).
 fn makes_room(edit: &Edit) -> bool {
-    matches!(edit, Edit::AddTrack { .. } | Edit::DeleteClips { .. })
+    matches!(
+        edit,
+        Edit::AddTrack { .. } | Edit::DeleteClips { .. } | Edit::MoveEffect { .. }
+    )
 }
 
 #[cfg(test)]

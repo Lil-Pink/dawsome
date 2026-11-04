@@ -205,8 +205,9 @@ impl<'a> PianoRoll<'a> {
             .style(style::rack_well);
         let handle = canvas::Canvas::new(Grip {
             held: self.roll.handle_held(),
-            pressed: |y| Message::Roll(RollMessage::HandlePressed(y)),
-            dragged: |y| Message::Roll(RollMessage::HandleDragged(y)),
+            armed: false,
+            pressed: |at: Point| Message::Roll(RollMessage::HandlePressed(at.y)),
+            dragged: |at| Message::Roll(RollMessage::HandleDragged(at.y)),
             released: Message::Roll(RollMessage::HandleReleased),
             reset: None,
             hover: Hover::Roll(RollPart::LaneHandle),

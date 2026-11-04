@@ -1,7 +1,7 @@
 # Contributing
 
 Issues and pull requests are welcome. Contributions are licensed GPL-3.0-or-later, like the rest
-of Dawsome.
+of Dawsome. A security problem goes in a private report, not an issue: `SECURITY.md` says how.
 
 - **Build.** The manual's (docs/manual.md) "Build and run" lists what to install on Linux (Rust, a C and C++
   compiler, clang, pkg-config, the ALSA, PipeWire, JACK and D-Bus development files, Python 3);

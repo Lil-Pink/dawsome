@@ -971,7 +971,7 @@ impl App {
             ));
         }
         let menu = crate::ui::menu::panel(rows, SAMPLER_MENU_WIDTH);
-        let floating = crate::ui::menu::floating(menu, self.hint_bar_height());
+        let floating = crate::ui::menu::floating(menu, self.menu_foot(Panel::Rack));
         Some(pin(floating).x(at.x).y(at.y).into())
     }
 

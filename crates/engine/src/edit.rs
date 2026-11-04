@@ -466,13 +466,14 @@ pub enum Edit {
         to: InsertId,
         amount: Option<f32>,
     },
-    /// Puts a new effect in an empty slot. `id` must be the mixer's `next_effect_id`: the
-    /// caller reads it from there, so a redo gives the same ID.
+    /// Puts a new effect in an empty slot, on or off. `id` must be the mixer's
+    /// `next_effect_id`: the caller reads it from there, so a redo gives the same ID.
     AddEffect {
         insert: InsertId,
         slot: u8,
         id: EffectId,
         processor: ProcessorRef,
+        on: bool,
     },
     /// Takes the newest effect out and gives its ID back; the inverse of [`Edit::AddEffect`].
     UnaddEffect {
@@ -481,12 +482,20 @@ pub enum Edit {
     RemoveEffect {
         id: EffectId,
     },
-    /// Puts a removed effect back under its own ID; the inverse of [`Edit::RemoveEffect`].
+    /// Puts a removed effect back under its own ID, on or off as it was; the inverse of
+    /// [`Edit::RemoveEffect`].
     RestoreEffect {
         insert: InsertId,
         slot: u8,
         id: EffectId,
         processor: ProcessorRef,
+        on: bool,
+    },
+    /// Switches an effect on, or off: an effect that is off is passed by, its insert's sound
+    /// going on unchanged; its processor keeps running, its settings kept.
+    SetEffectOn {
+        effect: EffectId,
+        on: bool,
     },
     /// Sets one parameter of an effect, or returns it to its default (`None` removes the key).
     SetEffectParam {
@@ -513,7 +522,8 @@ pub struct Touched {
     pub tempo: bool,
     /// Tracks, clips or the loop range changed.
     pub playlist: bool,
-    /// An insert, a send, the solo set or the order of an insert's effects changed.
+    /// An insert, a send, the solo set, the order of an insert's effects or which of them are on
+    /// changed.
     pub mixer: bool,
     /// Effects added, removed or with changed parameter values, which the compiler re-reads.
     pub effects: BTreeSet<EffectId>,
@@ -1018,7 +1028,8 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
             slot,
             id,
             processor,
-        } => mixer::add_effect(project, insert, slot, id, processor),
+            on,
+        } => mixer::add_effect(project, insert, slot, id, processor, on),
         Edit::UnaddEffect { id } => mixer::unadd_effect(project, id),
         Edit::RemoveEffect { id } => mixer::remove_effect(project, id),
         Edit::RestoreEffect {
@@ -1026,7 +1037,9 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
             slot,
             id,
             processor,
-        } => mixer::restore_effect(project, insert, slot, id, processor),
+            on,
+        } => mixer::restore_effect(project, insert, slot, id, processor, on),
+        Edit::SetEffectOn { effect, on } => mixer::set_effect_on(project, effect, on),
         Edit::SetEffectParam { effect, key, value } => {
             mixer::set_effect_param(project, effect, key, value)
         }

@@ -4,18 +4,28 @@
 //! button toggle the Settings window (it once stacked under the mixer, where its
 //! lower options could not be scrolled to and nothing closed it but its key).
 //!
-//! Stacked panels keep a least height each ([`min_height`]): when a stacked panel just opened
-//! leaves the stack no room for every open panel's, the most recently used of the others stay
-//! while they fit and the rest close ([`closed_to_fit`]); a stack that is too short all the
-//! same (a window made smaller, a scripted run's panels) keeps the piano roll's grid whole and
-//! squeezes the others ([`stack_heights`]). With room, one panel takes what the others leave
-//! ([`flexible`]: the playlist, else the piano roll, else the rack), the others their kept
-//! heights, else their natural ones ([`natural_height`]).
+//! Stacked panels keep a least height each ([`min_height`]; the mixer's is every strip whole
+//! and a line of its effects' blocks): when a stacked panel just opened leaves the stack no
+//! room for every open panel's, the most recently used of the others stay while they fit and
+//! the rest close ([`closed_to_fit`]); a stack that is too short all the same (a window made
+//! smaller, a saved layout or a scripted run's panels in a short window) shows every panel at
+//! its least height and scrolls ([`stack_heights`], [`fits`]). Why scroll, not squeeze: a
+//! squeezed mixer scrolled its strips' lower controls and its add menu out of the window.
+//! With room, the least heights come first; one panel takes what the others
+//! leave ([`flexible`]: the playlist, else the piano roll, else the rack), the others their
+//! kept heights, else their natural ones ([`natural_height`]), each giving up the same share
+//! of what it has above its least when the flexible one would get less than its own. Beside the
+//! mixer the playlist and the piano roll share what the mixer's default gave up
+//! ([`given_up_to`]): in the roll's natural height, and while the stack keeps its default
+//! heights, as the two's floors before the others share what is left.
 //!
 //! Every stacked panel under another starts with a divider ([`DIVIDER_BAND`], inside its
 //! height): dragged, the line between the two moves ([`dragged`]) and the heights it leaves are
 //! kept ([`Kept`], in the settings); a double-click puts the two back ([`reset`]). The mixer's
 //! top edge is that band even alone, where nothing drags it (its desk is laid out under it).
+//! Dragged sideways instead, a divider pops the panel under it out of the stack into a window
+//! of its own ([`Popped`], `App::divider_message`): the panel stays open, the stack lays out
+//! the others as though it were closed, and closing its window puts it back.
 
 use crate::ui::layout::{self, RACK_HEADER_HEIGHT};
 use crate::ui::mixer_layout;
@@ -86,9 +96,44 @@ impl Panel {
             Panel::Settings => "settings",
         }
     }
+
+    /// Its place in [`Panel::STACKED`]; none for the Library and Settings.
+    pub fn stacked_index(self) -> Option<usize> {
+        Panel::STACKED.iter().position(|&stacked| stacked == self)
+    }
 }
 
-/// Which panels are open. The window opens with the rack alone.
+/// The stacked panels popped out of the main window, each shown in a window of its own: open,
+/// but out of the stack. The Library and Settings are never popped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Popped([bool; 4]);
+
+impl Popped {
+    /// No panel popped.
+    pub const NONE: Self = Self([false; 4]);
+
+    /// Whether `panel` is popped out.
+    pub fn has(self, panel: Panel) -> bool {
+        panel.stacked_index().is_some_and(|at| self.0[at])
+    }
+
+    /// Pops `panel` out, or puts it back; the Library and Settings stay as they are.
+    pub fn set(&mut self, panel: Panel, popped: bool) {
+        if let Some(at) = panel.stacked_index() {
+            self.0[at] = popped;
+        }
+    }
+
+    /// The panels popped out, top to bottom as they stack.
+    pub fn panels(self) -> impl Iterator<Item = Panel> {
+        Panel::STACKED
+            .into_iter()
+            .filter(move |&panel| self.has(panel))
+    }
+}
+
+/// Which panels are open, and which of them are popped out of the stack. The window opens with
+/// the rack alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Panels {
     pub rack: bool,
@@ -97,6 +142,8 @@ pub struct Panels {
     pub mixer: bool,
     pub browser: bool,
     pub settings: bool,
+    /// The open stacked panels shown in windows of their own instead of the stack.
+    pub popped: Popped,
 }
 
 impl Default for Panels {
@@ -108,6 +155,7 @@ impl Default for Panels {
             mixer: false,
             browser: false,
             settings: false,
+            popped: Popped::NONE,
         }
     }
 }
@@ -121,6 +169,7 @@ impl Panels {
         mixer: false,
         browser: false,
         settings: false,
+        popped: Popped::NONE,
     };
 
     pub fn is_open(self, panel: Panel) -> bool {
@@ -134,7 +183,11 @@ impl Panels {
         }
     }
 
+    /// Opens or closes `panel`; a panel closed is popped out no more.
     pub fn set(&mut self, panel: Panel, open: bool) {
+        if !open {
+            self.popped.set(panel, false);
+        }
         match panel {
             Panel::Rack => self.rack = open,
             Panel::Playlist => self.playlist = open,
@@ -156,11 +209,24 @@ impl Panels {
             .filter(move |&panel| self.is_open(panel))
     }
 
-    /// The stacked panels open, top to bottom ([`Panel::STACKED`]'s order).
+    /// The stacked panels open in the stack, top to bottom ([`Panel::STACKED`]'s order): the
+    /// popped ones are left out.
     pub fn stacked(self) -> impl Iterator<Item = Panel> {
         Panel::STACKED
             .into_iter()
-            .filter(move |&panel| self.is_open(panel))
+            .filter(move |&panel| self.in_stack(panel))
+    }
+
+    /// Whether `panel` is open in the stack: open and not popped out.
+    pub fn in_stack(self, panel: Panel) -> bool {
+        self.is_open(panel) && !self.popped.has(panel)
+    }
+
+    /// Pops the open stacked panel `panel` out of the stack; any other stays as it is.
+    pub fn pop_out(&mut self, panel: Panel) {
+        if self.in_stack(panel) {
+            self.popped.set(panel, true);
+        }
     }
 
     /// The panels a first start opens: the Library, the rack and the playlist, as a beginner
@@ -172,10 +238,12 @@ impl Panels {
         mixer: false,
         browser: true,
         settings: false,
+        popped: Popped::NONE,
     };
 }
 
-/// The least height of a stacked panel: room for its header and a few rows of what it shows.
+/// The least height of the playlist: room for its header and a few rows of what it shows.
+/// The rack, the piano roll and the mixer have their own ([`min_height`]).
 pub const MIN_HEIGHT: f32 = 180.0;
 
 /// The rows of the piano roll's grid it always keeps.
@@ -197,13 +265,16 @@ pub const DIVIDER_BAND: f32 = mixer_layout::HANDLE_HEIGHT;
 
 /// The least height of `panel` in the stack, the rack's content being `rack_content` tall (its
 /// header and rows): the rack keeps its header and one row (it scrolls its rows under the
-/// header), or its content when that is shorter; the piano roll [`MIN_ROLL_HEIGHT`]; every
-/// other panel [`MIN_HEIGHT`]. Under another panel the piano roll needs its divider's band too
+/// header), or its content when that is shorter; the piano roll [`MIN_ROLL_HEIGHT`]; the mixer
+/// [`mixer_layout::LEAST_HEIGHT`] (225: its top edge, the header, every compact strip whole
+/// with a 50 px fader, and beside the strips a line of the tallest effect block); every other panel
+/// [`MIN_HEIGHT`]. Under another panel the piano roll needs its divider's band too
 /// ([`least_heights`]).
 pub fn min_height(panel: Panel, rack_content: f32) -> f32 {
     match panel {
         Panel::Rack => rack_content.min(RACK_HEADER_HEIGHT + layout::row_top(1)),
         Panel::PianoRoll => MIN_ROLL_HEIGHT,
+        Panel::Mixer => mixer_layout::LEAST_HEIGHT,
         _ => MIN_HEIGHT,
     }
 }
@@ -240,6 +311,35 @@ fn least_heights(stacked: &[Panel], rack_content: f32) -> Vec<f32> {
 /// tallest lane: an octave (more at the lane's default height).
 pub const NATURAL_ROLL_ROWS: f32 = 12.0;
 
+/// What the mixer's default height gave up: 310 px (its least before) less its
+/// compact strip's [`mixer_layout::DEFAULT_HEIGHT`], 225: 85 px.
+const MIXER_GAVE_UP: f32 = 310.0 - mixer_layout::DEFAULT_HEIGHT;
+
+/// The piano roll's share of [`MIXER_GAVE_UP`] beside the playlist: half, rounded down to a
+/// whole pixel, 42 px; the playlist gets the other half and the odd pixel, 43
+/// ([`given_up_to`]).
+pub const ROLL_SHARE: f32 = (MIXER_GAVE_UP as u32 / 2) as f32;
+
+/// What `panel` of `stacked` gets of [`MIXER_GAVE_UP`] while the mixer is stacked too: the
+/// piano roll [`ROLL_SHARE`] and the playlist the rest while both are, either of them alone all
+/// of it; nothing without the mixer, and nothing for the rack or the mixer. Why: the room the
+/// mixer gave up is meant to make the piano roll and the playlist open bigger, half each, the
+/// playlist the bigger half when it does not split evenly. Why
+/// only beside the mixer: without it nothing was given up, and a roll taller there would take
+/// its pixels from the playlist.
+fn given_up_to(panel: Panel, stacked: &[Panel]) -> f32 {
+    let has = |other: Panel| stacked.contains(&other);
+    if !has(Panel::Mixer) {
+        return 0.0;
+    }
+    match panel {
+        Panel::PianoRoll if has(Panel::Playlist) => ROLL_SHARE,
+        Panel::Playlist if has(Panel::PianoRoll) => MIXER_GAVE_UP - ROLL_SHARE,
+        Panel::PianoRoll | Panel::Playlist => MIXER_GAVE_UP,
+        Panel::Rack | Panel::Mixer | Panel::Browser | Panel::Settings => 0.0,
+    }
+}
+
 /// The heights the dividers left the rack, the piano roll and the mixer, the one source of
 /// them (kept in the settings): what [`stack_heights`] gives each while another panel is the
 /// flexible one, each none until a divider beside it is dragged and after a double-click on
@@ -273,8 +373,9 @@ impl Kept {
         }
     }
 
-    /// The mixer's height: as a divider left it, else [`mixer_layout::DEFAULT_HEIGHT`]. Its
-    /// desk is laid out from it ([`mixer_layout::desk_height`]).
+    /// The mixer's height: as a divider left it, else [`mixer_layout::DEFAULT_HEIGHT`]. The
+    /// stack shows it this tall while it has room ([`natural_height`]); its desk is laid out
+    /// from the height the stack shows ([`stack_heights`]).
     pub fn mixer_height(&self) -> f32 {
         self.mixer.unwrap_or(mixer_layout::DEFAULT_HEIGHT)
     }
@@ -288,26 +389,37 @@ pub fn flexible(stacked: &[Panel]) -> Option<Panel> {
         .find(|panel| stacked.contains(panel))
 }
 
-/// The height `panel` takes in an area `area` tall when another panel is the flexible one, a
-/// divider over it when `under` another panel: the height kept for it ([`Kept`]), else the
-/// rack its content up to half the area, the piano roll its strip, an octave of rows and the
-/// room under its grid ([`UNDER_GRID`]) (and its band under a divider), the mixer
+/// The height `panel` takes among `stacked` (in any order) in an area `area` tall when another
+/// panel is the flexible one, a divider over it when another panel stacks above it: the height
+/// kept for it ([`Kept`]), else the rack its content up to half the area, the piano roll its
+/// strip, an octave of rows and the room under its grid ([`UNDER_GRID`]) (and its band under a
+/// divider), and its part of what the mixer gave up beside it ([`given_up_to`]), the mixer
 /// [`mixer_layout::DEFAULT_HEIGHT`]; never less than its least height.
-pub fn natural_height(panel: Panel, rack_content: f32, kept: &Kept, area: f32, under: bool) -> f32 {
-    let band = divider_room(panel, under);
+pub fn natural_height(
+    panel: Panel,
+    stacked: &[Panel],
+    rack_content: f32,
+    kept: &Kept,
+    area: f32,
+) -> f32 {
+    let band = divider_room(panel, under_another(panel, stacked));
+    let beside_mixer = given_up_to(panel, stacked);
     let natural = kept
         .of(panel)
         .filter(|height| height.is_finite())
         .unwrap_or_else(|| match panel {
             Panel::Rack => rack_height_above_roll(rack_content, area),
-            Panel::PianoRoll => STRIP_HEIGHT + NATURAL_ROLL_ROWS * ROW_HEIGHT + UNDER_GRID + band,
+            Panel::PianoRoll => {
+                STRIP_HEIGHT + NATURAL_ROLL_ROWS * ROW_HEIGHT + UNDER_GRID + beside_mixer + band
+            }
             Panel::Mixer => mixer_layout::DEFAULT_HEIGHT,
             Panel::Playlist | Panel::Browser | Panel::Settings => 0.0,
         });
     natural.max(min_height(panel, rack_content) + band)
 }
 
-/// Whether the stacked panels `stacked` all get their least height in an area `area` tall.
+/// Whether the stacked panels `stacked` all get their least height in an area `area` tall;
+/// when not, the stack scrolls ([`stack_heights`]).
 pub fn fits(stacked: &[Panel], rack_content: f32, area: f32) -> bool {
     least_total(stacked, rack_content) <= area
 }
@@ -318,38 +430,29 @@ fn least_total(stacked: &[Panel], rack_content: f32) -> f32 {
 
 /// The height of each of the stacked panels `stacked` (top to bottom) in an area `area` tall,
 /// the rack's content being `rack_content` tall and the dividers having left `kept`, in their
-/// order; they add up to `area`.
+/// order; they add up to `area` when they [`fits`].
 ///
 /// When they fit, the [`flexible`] panel takes what the others leave, and they their kept or
-/// natural heights ([`natural_height`]); when those leave it less than its least height, each
-/// of the others gives up the same share of what it has above its own least height, so the
-/// flexible one keeps its least. A rack alone takes the whole area, and so does the mixer
-/// alone.
+/// natural heights ([`natural_height`]); when those leave it less than its floor, each of the
+/// others gives up the same share of what it has above its own floor, so the flexible one keeps
+/// its floor. A panel's floor is its least height, and while no panel of the stack (but the
+/// flexible one) keeps a height, the playlist's and the piano roll's floors hold their parts of
+/// what the mixer gave up beside them ([`given_up_to`]), as much of it as the area holds over
+/// the least heights, both by the same fraction. Why the floors: squeezed (four panels at
+/// 1600 × 900), the others' shares took the mixer's room to the rack, and the playlist stayed
+/// at its least; with them the playlist and the roll get 43 and 42 px more than they had beside
+/// the 310 px mixer, the rack the same. Why only with no height kept: a divider dragged sets
+/// heights by hand, down to the least heights. A rack alone takes the whole area, and so does
+/// the mixer alone.
 ///
-/// When they do not fit: the piano roll takes its least height (or the whole area when that is
-/// shorter), so its grid stays whole, and the others share the rest in proportion to their
-/// least heights.
+/// When they do not fit, each takes its least height: they add up to more than `area`, and the
+/// stack scrolls (`App::panels_view`). Why not squeeze them into the area: under its least the
+/// mixer scrolled its strips' lower controls out of view, and its add menu with them.
 pub fn stack_heights(stacked: &[Panel], rack_content: f32, kept: &Kept, area: f32) -> Vec<f32> {
     let least = least_heights(stacked, rack_content);
     let total: f32 = least.iter().sum();
     if total > area {
-        let roll_least = stacked
-            .iter()
-            .zip(&least)
-            .find(|(&panel, _)| panel == Panel::PianoRoll)
-            .map(|(_, &least)| least);
-        let roll = roll_least.map(|least| least.min(area));
-        let rest = area - roll.unwrap_or(0.0);
-        let others = total - roll_least.unwrap_or(0.0);
-        return stacked
-            .iter()
-            .zip(&least)
-            .map(|(&panel, &least)| match (panel, roll) {
-                (Panel::PianoRoll, Some(roll)) => roll,
-                _ if others > 0.0 => least * rest / others,
-                _ => 0.0,
-            })
-            .collect();
+        return least;
     }
     let Some(flex) = flexible(stacked) else {
         let mut heights = least.clone();
@@ -357,38 +460,61 @@ pub fn stack_heights(stacked: &[Panel], rack_content: f32, kept: &Kept, area: f3
         return heights;
     };
     let others = |panel: Panel| panel != flex;
-    let natural: Vec<f32> = stacked
+    let defaults = stacked
+        .iter()
+        .all(|&panel| !others(panel) || kept.of(panel).is_none());
+    let given: Vec<f32> = stacked
         .iter()
         .map(|&panel| {
-            if others(panel) {
-                let under = under_another(panel, stacked);
-                natural_height(panel, rack_content, kept, area, under)
+            if defaults {
+                given_up_to(panel, stacked)
             } else {
                 0.0
             }
         })
         .collect();
-    let flex_least = stacked
+    let extra: f32 = given.iter().sum();
+    let part = if extra > 0.0 {
+        ((area - total) / extra).min(1.0)
+    } else {
+        0.0
+    };
+    let floor: Vec<f32> = least
         .iter()
-        .zip(&least)
+        .zip(&given)
+        .map(|(least, given)| least + given * part)
+        .collect();
+    let natural: Vec<f32> = stacked
+        .iter()
+        .map(|&panel| {
+            if others(panel) {
+                natural_height(panel, stacked, rack_content, kept, area)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let flex_floor = stacked
+        .iter()
+        .zip(&floor)
         .find(|(&panel, _)| panel == flex)
-        .map_or(0.0, |(_, &least)| least);
-    let room = area - flex_least;
+        .map_or(0.0, |(_, &floor)| floor);
+    let room = area - flex_floor;
     let natural_total: f32 = natural.iter().sum();
-    let least_total = total - flex_least;
-    // What each of the others keeps of its height above its least: all of it with room, else
-    // the same share each, so the flexible panel keeps its least height.
-    let kept_share = if natural_total <= room || natural_total <= least_total {
+    let floor_total = floor.iter().sum::<f32>() - flex_floor;
+    // What each of the others keeps of its height above its floor: all of it with room, else
+    // the same share each, so the flexible panel keeps its floor.
+    let kept_share = if natural_total <= room || natural_total <= floor_total {
         1.0
     } else {
-        (room - least_total) / (natural_total - least_total)
+        (room - floor_total) / (natural_total - floor_total)
     };
     let mut heights: Vec<f32> = stacked
         .iter()
-        .zip(natural.iter().zip(&least))
-        .map(|(&panel, (&natural, &least))| {
+        .zip(natural.iter().zip(&floor))
+        .map(|(&panel, (&natural, &floor))| {
             if others(panel) {
-                least + (natural - least) * kept_share
+                floor + (natural - floor) * kept_share
             } else {
                 0.0
             }
@@ -430,8 +556,7 @@ pub fn dragged(
     let flex = flexible(stacked);
     let mut out = *kept;
     let squeezed = stacked.iter().zip(&shown).any(|(&panel, &height)| {
-        let under = under_another(panel, stacked);
-        let natural = natural_height(panel, rack_content, kept, area, under);
+        let natural = natural_height(panel, stacked, rack_content, kept, area);
         Some(panel) != flex && height < natural - 0.01
     });
     if squeezed {
@@ -568,7 +693,7 @@ impl Displaced {
 /// was opened: beside it, the most recently used of the others stay while they fit, the rest
 /// close. None when they all fit, never `opened`, all the others when it alone does not fit,
 /// and none when `opened` is not stacked: the Library and the Settings window take no height of
-/// the stack.
+/// the stack, and neither do the panels popped out of it.
 pub fn closed_to_fit(
     open: Panels,
     opened: Panel,
@@ -582,7 +707,7 @@ pub fn closed_to_fit(
     let mut kept = vec![opened];
     let mut closed = Vec::new();
     for panel in used.order().into_iter().rev() {
-        if panel == opened || !open.is_open(panel) {
+        if panel == opened || !open.in_stack(panel) {
             continue;
         }
         kept.push(panel);
@@ -631,40 +756,156 @@ mod tests {
 
     // The starter document's rack (its header, 8 px, four rows and the add button's row of
     // 38 px each: 24 + 8 + 5 × 38 = 222 px) with the playlist, the piano roll and the mixer in
-    // a 1000 × 560 window (504 px under the toolbar): their least heights (70, 180, 230, 180)
-    // add up to 660 px, so the roll keeps its 230 px and its grid rows (nine over the 10 px
-    // scroll bar, the lane's 6 px handle and the lane's default 64 px; pin moved: five under
-    // the 128 px lane and 8 px divider before, ten with the half lane, nine with the scroll
-    // bar), and the rest's 274 px go 70 : 180 : 180 to the others:
-    // 44.60, 114.70 and 114.70 px. (Resizable dividers, pins moved: the roll's least was 224
-    // and the rest 280; under another panel it now has the divider's 6 px band over its strip,
-    // which its least height counts so its grid keeps the same rows.)
+    // a 1000 × 560 window (504 px under the toolbar): their least heights (70, 180, 230, 225)
+    // add up to 705 px, so each shows at its least and the stack scrolls: the roll keeps its
+    // 230 px and its grid rows (nine over the 10 px scroll bar, the lane's 6 px handle and the
+    // lane's default 64 px), the mixer its 225, every strip whole. At the top of the stack the
+    // roll has no divider over it: its least is 224, so with the mixer under it 449 fit and
+    // 448 do not. The mixer alone in less than its 225 shows its 225 and scrolls too. (Pins
+    // moved: the mixer's least was 180, and a stack too short was squeezed into the
+    // area, the roll keeping its 230 and the rest's 274 px going 70 : 180 : 180 to the others,
+    // 44.60, 114.70 and 114.70 px, which scrolled the mixer's strips' foot out of view; then
+    // 310 until its compact strip: 790 px, 534 and 533, alone in 300.)
     #[test]
-    fn the_piano_roll_keeps_its_grid_with_four_panels_in_a_small_window() {
+    fn a_stack_too_short_shows_every_panel_at_its_least_and_scrolls() {
         assert_eq!(MIN_ROLL_HEIGHT, 224.0);
         let stacked = [Panel::Rack, Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
         assert!(!fits(&stacked, 222.0, 504.0));
         let heights = stack_heights(&stacked, 222.0, &MIXER, 504.0);
-        assert_eq!(heights[2], 230.0);
+        assert_eq!(heights, [70.0, 180.0, 230.0, 225.0]);
         assert_eq!(roll_rows(heights[2]), 9);
-        let expected = [
-            70.0 * 274.0 / 430.0,
-            180.0 * 274.0 / 430.0,
-            230.0,
-            180.0 * 274.0 / 430.0,
-        ];
-        for (height, expected) in heights.iter().zip(expected) {
-            assert!((height - expected).abs() < 1e-3, "{heights:?}");
-        }
-        assert!((heights.iter().sum::<f32>() - 504.0).abs() < 1e-3);
-        // Shorter than the roll's least height, the roll takes the whole area. At the top of
-        // the stack it has no divider over it: its least is 224.
+        assert_eq!(
+            heights.iter().sum::<f32>(),
+            705.0,
+            "past the area: it scrolls"
+        );
         assert_eq!(
             stack_heights(&[Panel::PianoRoll, Panel::Mixer], 0.0, &MIXER, 200.0),
-            [200.0, 0.0]
+            [224.0, 225.0]
         );
-        assert!(fits(&[Panel::PianoRoll, Panel::Mixer], 0.0, 404.0));
+        assert!(fits(&[Panel::PianoRoll, Panel::Mixer], 0.0, 449.0));
+        assert!(!fits(&[Panel::PianoRoll, Panel::Mixer], 0.0, 448.0));
         assert!(!fits(&[Panel::Playlist, Panel::PianoRoll], 0.0, 409.0));
+        assert_eq!(
+            stack_heights(&[Panel::Mixer], 0.0, &NATURAL, 200.0),
+            [225.0]
+        );
+    }
+
+    // By hand, the four panels in a 1600 × 900 window with the hint bar: 900 − 64 − 22 = 814 px
+    // under the toolbar, the starter rack (222) and nothing kept. Their least heights, 70 + 180
+    // + 230 + 225 = 705, fit with 109 px to spare, more than the 85 the mixer gave up: the
+    // playlist's floor is its 180 and its 43, 223, the roll's its 230 and its 42, 272. The
+    // playlist keeps its 223; the rack (222), the roll (356: its octave, its 42 and its band)
+    // and the mixer (225, its default and its least) would take 803 of the 591 left, so each
+    // keeps the same share, 24 / 236, of what it has above its floor (152, 84 and 0): the rack
+    // 85.458, the roll 280.542, the mixer 225. Laid out in whole pixels (85, 223, 280 and the
+    // 226 left) the mixer starts at 64 + 588 = 652, its desk under its 6 px edge at 658, and
+    // its strips end 2 px above the least desk's foot, 658 + 217 = 875, inside the 878 above
+    // the hint bar. With the bar hidden, 836 px: the share 46 / 236, the rack 99.627, the roll
+    // 288.373. (Before, the mixer's least was 180 and its default 400: it showed
+    // 254.3 px of a 394 px desk from y 629, its strips' foot at 1019, cut at the hint bar's
+    // 878; then 310 until its compact strip: the rack 85.458, the playlist 180,
+    // the roll 238.542, the strips' foot at 873.)
+    #[test]
+    fn four_panels_at_900_px_keep_their_least_and_the_mixers_strips_whole() {
+        use crate::ui::layout::{HINT_BAR_HEIGHT, TOOLBAR_HEIGHT};
+        let four = [Panel::Rack, Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
+        let area = 900.0 - TOOLBAR_HEIGHT - HINT_BAR_HEIGHT;
+        assert_eq!(area, 814.0);
+        assert_eq!(least_total(&four, 222.0), 705.0);
+        assert!(fits(&four, 222.0, area));
+        let heights = stack_heights(&four, 222.0, &NATURAL, area);
+        let share = 24.0 / 236.0;
+        let expected = [70.0 + 152.0 * share, 223.0, 272.0 + 84.0 * share, 225.0];
+        assert!(near(&heights, &expected), "{heights:?}");
+        assert!(
+            near(&heights, &[85.458, 223.0, 280.542, 225.0]),
+            "{heights:?}"
+        );
+        for ((&panel, height), least) in four.iter().zip(&heights).zip(least_heights(&four, 222.0))
+        {
+            assert!(
+                *height >= least - 1e-3,
+                "{panel:?} {height} under its least {least}"
+            );
+        }
+        let above: f32 = heights[..3].iter().map(|height| height.floor()).sum();
+        let desk_top = TOOLBAR_HEIGHT + above + DIVIDER_BAND;
+        assert_eq!(desk_top, 658.0);
+        let desk = mixer_layout::desk_height(heights[3]);
+        assert_eq!(desk, mixer_layout::LEAST_DESK);
+        assert_eq!(desk_top + mixer_layout::body_bottom(desk), 875.0);
+        assert!(desk_top + mixer_layout::body_bottom(desk) <= 900.0 - HINT_BAR_HEIGHT);
+        let hidden = stack_heights(&four, 222.0, &NATURAL, 836.0);
+        let share = 46.0 / 236.0;
+        let expected = [70.0 + 152.0 * share, 223.0, 272.0 + 84.0 * share, 225.0];
+        assert!(near(&hidden, &expected), "{hidden:?}");
+        assert!(
+            near(&hidden, &[99.627, 223.0, 288.373, 225.0]),
+            "{hidden:?}"
+        );
+    }
+
+    // The mixer opens 50% shorter, and the room it gives up makes
+    // the piano roll and the playlist open bigger, half each, the playlist the odd pixel. 50% of
+    // 310 is 155, which holds no whole strip, so the mixer opens at its compact strip's least,
+    // 225: 85 px given up, 42 to the roll (ROLL_SHARE) and 43 to the playlist. By hand, the four
+    // panels with nothing kept in a window with room for every natural height, before and now:
+    // 1920 × 1200 with the hint bar (1200 − 64 − 22 = 1114 px) and the starter rack (222):
+    // before the rack 222, the roll 314 (its strip, an octave of rows, the 136 px under its grid
+    // and its band), the mixer 310 and the playlist the 268 left; now the rack 222, the roll
+    // 356, the mixer 225 and the playlist 311. The four fill the same 1114 px; the mixer's 85
+    // are the playlist's 43 and the roll's 42, the playlist's gain less the roll's 1. Squeezed,
+    // 1600 × 900 with the hint bar (814 px): before the playlist at its least, 180, and the
+    // rack, the roll and the mixer each keeping 24 / 236 of what it had above its least, 85.458,
+    // 238.542, 310; now the playlist's and the roll's floors hold their 43 and 42 (223, 272) and
+    // the three keep the same 24 / 236 above them: 85.458, 223, 280.542, 225, the same gains.
+    // The same with the playlist, the roll and the mixer in 1000 × 1000 (936 px, no hint bar):
+    // 312, 314, 310 before, 355, 356, 225 now. Where only the least heights fit now (the four
+    // need 705 px, 790 before), the two take what the area holds over them, 43 : 42: in 1280 ×
+    // 800 with the hint bar (714 px) 9 px of it, the playlist 180 + 43 × 9 / 85 = 184.553 and
+    // the roll 230 + 42 × 9 / 85 = 234.447, the rack and the mixer at their least. Without the
+    // mixer nothing was given up: the playlist over the roll in 714 px keeps 400 and 314, as
+    // before.
+    #[test]
+    fn the_room_the_mixer_gave_up_goes_half_to_the_roll_and_half_to_the_playlist() {
+        assert_eq!(ROLL_SHARE, 42.0);
+        assert_eq!(mixer_layout::DEFAULT_HEIGHT, 225.0);
+        let four = [Panel::Rack, Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
+        let before = [222.0, 268.0, 314.0, 310.0];
+        let now = stack_heights(&four, 222.0, &NATURAL, 1114.0);
+        assert_eq!(now, [222.0, 311.0, 356.0, 225.0]);
+        let gain = |panel: usize| now[panel] - before[panel];
+        assert_eq!(now.iter().sum::<f32>(), before.iter().sum::<f32>());
+        assert_eq!(gain(3), -85.0, "the mixer");
+        assert_eq!(gain(0), 0.0, "the rack");
+        assert_eq!(gain(1) + gain(2), 85.0);
+        let more = gain(1) - gain(2);
+        assert!(
+            more == 0.0 || more == 1.0,
+            "playlist {} roll {}",
+            gain(1),
+            gain(2)
+        );
+        let before = [85.458, 180.0, 238.542, 310.0];
+        let now = stack_heights(&four, 222.0, &NATURAL, 814.0);
+        assert!(near(&now, &[85.458, 223.0, 280.542, 225.0]), "{now:?}");
+        let gains: Vec<f32> = now
+            .iter()
+            .zip(before)
+            .map(|(now, before)| now - before)
+            .collect();
+        assert!(near(&gains, &[0.0, 43.0, 42.0, -85.0]), "{gains:?}");
+        let blend = stack_heights(&four, 222.0, &NATURAL, 714.0);
+        assert!(near(&blend, &[70.0, 184.553, 234.447, 225.0]), "{blend:?}");
+        let three = [Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
+        let before = [312.0, 314.0, 310.0];
+        let now = stack_heights(&three, 0.0, &NATURAL, 936.0);
+        assert_eq!(now, [355.0, 356.0, 225.0]);
+        assert_eq!((now[0] - before[0], now[1] - before[1]), (43.0, 42.0));
+        let two = [Panel::Playlist, Panel::PianoRoll];
+        assert_eq!(stack_heights(&two, 0.0, &NATURAL, 714.0), [400.0, 314.0]);
     }
 
     // With room for every least height: a rack of two channels (24 + 8 + 3 × 38 = 146 px)
@@ -699,12 +940,15 @@ mod tests {
         assert_eq!(min_height(Panel::Rack, 222.0), 70.0);
     }
 
-    // Opening the mixer over the rack, the playlist and the piano roll in 504 px: 654 px of
+    // Opening the mixer over the rack, the playlist and the piano roll in 549 px: 705 px of
     // least heights do not fit, so the most recently used of the others stay while they fit
     // beside it. Used last: the roll, then the mixer; the rack and the playlist least. The roll
-    // (404 px with the mixer) and then the rack (480: the roll has a divider over it now, 6 px)
-    // fit, the playlist (660) does not, so it alone closes; with the rack pressed after the
-    // roll, the same. (Resizable dividers: 474 and 654 before the roll's band; same answers.)
+    // (449 px with the mixer) and then the rack (525: the roll has a divider over it now, 6 px)
+    // fit, the playlist (635 with the roll and the mixer) does not, so it alone closes; with
+    // the rack pressed after the roll, the same. (Resizable dividers: 474 and 654 before the
+    // roll's band; same answers. The mixer's least grew 130 px, 180 to 310, and the
+    // area with it, 504 to 634; then fell 85 px to 225 with its compact strip, and the area with
+    // it, to 549, so the answers stand; with room is 705 now, was 790 and 744.)
     #[test]
     fn a_panel_opened_without_room_closes_the_least_recently_used() {
         let mut open = Panels {
@@ -714,6 +958,7 @@ mod tests {
             mixer: true,
             browser: true,
             settings: false,
+            popped: Popped::NONE,
         };
         let mut used = PanelUse::default();
         used.touch(Panel::Playlist);
@@ -724,13 +969,13 @@ mod tests {
             used.order(),
             [Panel::Rack, Panel::Playlist, Panel::PianoRoll, Panel::Mixer]
         );
-        let closed = closed_to_fit(open, Panel::Mixer, &used, 108.0, 504.0);
+        let closed = closed_to_fit(open, Panel::Mixer, &used, 108.0, 549.0);
         assert_eq!(closed, [Panel::Playlist]);
         used.touch(Panel::Rack);
-        let closed = closed_to_fit(open, Panel::Mixer, &used, 108.0, 504.0);
+        let closed = closed_to_fit(open, Panel::Mixer, &used, 108.0, 549.0);
         assert_eq!(closed, [Panel::Playlist]);
         // With room, nothing closes; and the panel opened never does, even alone too tall.
-        assert!(closed_to_fit(open, Panel::Mixer, &used, 108.0, 744.0).is_empty());
+        assert!(closed_to_fit(open, Panel::Mixer, &used, 108.0, 705.0).is_empty());
         open.rack = false;
         open.playlist = false;
         let closed = closed_to_fit(open, Panel::Mixer, &used, 108.0, 150.0);
@@ -750,6 +995,7 @@ mod tests {
             mixer: false,
             browser: true,
             settings: false,
+            popped: Popped::NONE,
         };
         let stacked: Vec<Panel> = open.stacked().collect();
         assert!(!fits(&stacked, 108.0, 364.0));
@@ -759,18 +1005,19 @@ mod tests {
 
     // Beside the panel opened, the most recently used of the others stay
     // open while they fit, so a small panel used long ago stays when it fits. The stacked
-    // panels opened in turn in 504 px (least heights: rack 70, playlist 180, piano roll 224,
-    // and 230 under another panel with its divider, mixer 180): the playlist and the roll fit
-    // (480); the mixer keeps the roll (404) and the rack (480) but not the playlist (660).
+    // panels opened in turn in 549 px (least heights: rack 70, playlist 180, piano roll 224,
+    // and 230 under another panel with its divider, mixer 225): the playlist and the roll fit
+    // (480); the mixer keeps the roll (449) and the rack (525) but not the playlist (635).
     // Settings then closes nothing (it kept the mixer and the rack and closed
-    // the roll while it was stacked, 180 px).
+    // the roll while it was stacked, 180 px). (504 px with the mixer's old least of
+    // 180, then 634 with 310; the area follows it, so the answers stand.)
     #[test]
     fn the_most_recently_used_panels_that_fit_stay_open() {
         let mut open = Panels::default();
         let mut used = PanelUse::default();
         let mut open_in_turn = |panel: Panel| {
             open.set(panel, true);
-            let closed = closed_to_fit(open, panel, &used, 108.0, 504.0);
+            let closed = closed_to_fit(open, panel, &used, 108.0, 549.0);
             for &shut in &closed {
                 open.set(shut, false);
             }
@@ -801,21 +1048,24 @@ mod tests {
 
     // 6d K6: the playlist is the flexible panel, else the piano roll, else the rack. Maximized
     // on 1920 × 1080 with the hint bar (1080 − 64 − 22 = 994 px under the toolbar), the starter
-    // rack (222) over the playlist leaves it 772; with the mixer under them it keeps its 400 px
-    // and the playlist 372; with the piano roll instead of the playlist, the roll takes what the
+    // rack (222) over the playlist leaves it 772; with the mixer under them it keeps its 225 px
+    // and the playlist 547 (no roll to share the mixer's 85 px with); with the piano roll
+    // instead of the playlist, the roll takes what the
     // rack leaves; the mixer and the settings alone share as before. (Pins moved:
     // 1002 px under the 56 px toolbar gave 780, and the 504 px mixer left 276; 986 under the
-    // 72 px one gave 764 and 364; the
-    // mixer's handle dragged to 600 px leaves the playlist 172, under its least, so the rack and
-    // the mixer give up the same share of their height above their least: (994 − 180 − 250) /
-    // (822 − 250) of it.)
+    // 72 px one gave 764 and 364; the 400 px default mixer left 372, the 310 px
+    // one 462.) The mixer's divider dragged to 600 px leaves the playlist 172, under its least,
+    // so the rack and the mixer give up the same share of their height above their least (70
+    // and 225): (994 − 180 − 295) / (822 − 295) of it, the rack 219.693 and the mixer 594.307
+    // (with the mixer's least of 180, (994 − 180 − 250) / (822 − 250); of 310, of 380). The
+    // make-room rule's area follows the mixer's least: 549 px (504 with 180, 634 with 310).
     #[test]
     fn the_playlist_takes_the_height_the_others_leave() {
         let area = 1080.0 - crate::ui::layout::TOOLBAR_HEIGHT - crate::ui::layout::HINT_BAR_HEIGHT;
         assert_eq!(area, 994.0);
         let rack = 222.0;
         let mixer = &NATURAL;
-        assert_eq!(mixer.mixer_height(), 400.0);
+        assert_eq!(mixer.mixer_height(), 225.0);
         assert_eq!(
             flexible(&[Panel::Rack, Panel::Playlist]),
             Some(Panel::Playlist)
@@ -831,7 +1081,7 @@ mod tests {
                 mixer,
                 area
             ),
-            [222.0, 372.0, 400.0]
+            [222.0, 547.0, 225.0]
         );
         let tall = Kept {
             mixer: Some(600.0),
@@ -843,11 +1093,12 @@ mod tests {
             &tall,
             area,
         );
-        let kept = (994.0 - 180.0 - 250.0) / (822.0 - 250.0);
-        let expected = [70.0 + 152.0 * kept, 180.0, 180.0 + 420.0 * kept];
+        let kept = (994.0 - 180.0 - 295.0) / (822.0 - 295.0);
+        let expected = [70.0 + 152.0 * kept, 180.0, 225.0 + 375.0 * kept];
         for (height, expected) in tall.iter().zip(expected) {
             assert!((height - expected).abs() < 1e-3, "{tall:?}");
         }
+        assert!(near(&tall, &[219.693, 180.0, 594.307]), "{tall:?}");
         assert_eq!(
             flexible(&[Panel::Rack, Panel::PianoRoll]),
             Some(Panel::PianoRoll)
@@ -857,7 +1108,8 @@ mod tests {
             [222.0, 772.0]
         );
         assert_eq!(flexible(&[Panel::Mixer]), None);
-        // The make-room rule still holds the least heights: four panels in 504 px close one.
+        // The make-room rule still holds the least heights: four panels in 549 px close one
+        // (504 px with the mixer's least of 180, 634 with 310).
         let open = Panels {
             rack: true,
             playlist: true,
@@ -865,8 +1117,9 @@ mod tests {
             mixer: true,
             browser: false,
             settings: false,
+            popped: Popped::NONE,
         };
-        let closed = closed_to_fit(open, Panel::Mixer, &PanelUse::default(), 108.0, 504.0);
+        let closed = closed_to_fit(open, Panel::Mixer, &PanelUse::default(), 108.0, 549.0);
         assert_eq!(closed.len(), 1);
     }
 
@@ -897,13 +1150,16 @@ mod tests {
 
     // Resizable dividers, known answers by hand: the playlist, the piano roll and the mixer in
     // a 1000 × 1000 window (936 px under the toolbar, no hint bar), nothing kept. The roll its
-    // octave and its band (314), the mixer its 400, the playlist the 222 left. The line
-    // between the playlist and the roll dragged 50 px down: the playlist (the flexible panel)
-    // grows to 272 and the roll keeps 264; 100 down stops at the roll's least (230, the
-    // playlist 306); 200 up at the playlist's (180, the roll 356). The line between the roll
-    // and the mixer, neither flexible, dragged 20 px up from there (roll 264): both keep what
-    // they show, 244 and 420, the playlist as it was; 400 down stops at the mixer's least. (Pins
-    // moved: 928 px under the 72 px toolbar, the playlist 8 px shorter.)
+    // octave, its 42 px share beside the mixer and its band (356), the mixer its 225, the
+    // playlist the 355 left. The line between the playlist and the roll dragged 50 px down: the
+    // playlist (the flexible panel) grows to 405 and the roll keeps 306; 150 down stops at the
+    // roll's least (230, the playlist 481); 200 up at the playlist's (180, the roll 531). The
+    // line between the roll and the mixer, neither flexible, dragged 20 px up from there (roll
+    // 306): both keep what they show, 286 and 245, the playlist as it was; 400 down stops at the
+    // mixer's least, 225, the roll back at 306. (Pins moved: 928 px under the 72 px toolbar, the
+    // playlist 8 px shorter; the mixer's default 400 → 310, the playlist 90 px
+    // taller, and its least 180 → 310; then both 310 → 225 with its compact strip, the playlist
+    // 43 px taller and the roll 42: were 312, 314, 310, 362, 264, 396, 446, 244, 330.)
     #[test]
     fn a_divider_moves_the_line_between_two_panels() {
         let stacked = [Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
@@ -911,35 +1167,35 @@ mod tests {
         assert_eq!(area, 936.0);
         assert_eq!(
             stack_heights(&stacked, 0.0, &NATURAL, area),
-            [222.0, 314.0, 400.0]
+            [355.0, 356.0, 225.0]
         );
         let drag = |kept: &Kept, lower: usize, moved: f32| {
             let kept = dragged(&stacked, 0.0, kept, area, lower, moved);
             (kept, stack_heights(&stacked, 0.0, &kept, area))
         };
         let (down, heights) = drag(&NATURAL, 1, 50.0);
-        assert_eq!(heights, [272.0, 264.0, 400.0]);
+        assert_eq!(heights, [405.0, 306.0, 225.0]);
         assert_eq!(
             down,
             Kept {
-                piano_roll: Some(264.0),
+                piano_roll: Some(306.0),
                 ..NATURAL
             },
             "the playlist keeps no height: it takes what is left"
         );
-        assert_eq!(drag(&NATURAL, 1, 100.0).1, [306.0, 230.0, 400.0]);
-        assert_eq!(drag(&NATURAL, 1, -200.0).1, [180.0, 356.0, 400.0]);
+        assert_eq!(drag(&NATURAL, 1, 150.0).1, [481.0, 230.0, 225.0]);
+        assert_eq!(drag(&NATURAL, 1, -200.0).1, [180.0, 531.0, 225.0]);
         let (up, heights) = drag(&down, 2, -20.0);
-        assert_eq!(heights, [272.0, 244.0, 420.0]);
+        assert_eq!(heights, [405.0, 286.0, 245.0]);
         assert_eq!(
             up,
             Kept {
-                piano_roll: Some(244.0),
-                mixer: Some(420.0),
+                piano_roll: Some(286.0),
+                mixer: Some(245.0),
                 ..NATURAL
             }
         );
-        assert_eq!(drag(&down, 2, 400.0).1, [272.0, 484.0, 180.0]);
+        assert_eq!(drag(&down, 2, 400.0).1, [405.0, 306.0, 225.0]);
         // The divider over the top panel, or past the stack, is none: nothing moves.
         assert_eq!(drag(&down, 0, 30.0).0, down);
         assert_eq!(drag(&down, 3, 30.0).0, down);
@@ -949,33 +1205,36 @@ mod tests {
         assert_eq!(
             reset(&stacked, &up, 1),
             Kept {
-                mixer: Some(420.0),
+                mixer: Some(245.0),
                 ..NATURAL
             }
         );
         assert_eq!(
             stack_heights(&stacked, 0.0, &reset(&stacked, &up, 2), area),
-            [222.0, 314.0, 400.0]
+            [355.0, 356.0, 225.0]
         );
     }
 
     // With the playlist closed the piano roll is the flexible panel: the starter rack (222)
     // over the roll and the mixer, maximized on 1920 × 1080 with the hint bar (986 px): 222,
-    // 364, 400. The line between the rack and the roll dragged 40 px down keeps the rack 262,
-    // the roll takes the 324 left; the line between the roll and the mixer dragged 100 px up
-    // keeps the mixer 500, the roll 264. A double-click on that line puts the mixer back and
+    // 539, 225. The line between the rack and the roll dragged 40 px down keeps the rack 262,
+    // the roll takes the 499 left; the line between the roll and the mixer dragged 100 px up
+    // keeps the mixer 325, the roll 439. A double-click on that line puts the mixer back and
     // leaves the roll's own kept height (for when the playlist is open) as it was. With the
     // rack and the mixer alone the rack is the flexible one: a rack of 254 px of content over
-    // the mixer in 488 px (the mixer's handle test: the rack shows 88), its
-    // line dragged 40 px up keeps the mixer 418 (the rack at its least, 70), 200 down 200, 300
-    // down 180 (the mixer's least).
+    // the mixer in 488 px (the mixer's divider test: the rack shows 263), its line dragged
+    // 40 px up keeps the mixer 265, 120 up 345, 200 up 418 (the rack at its least, 70), 200
+    // down 225 (the mixer's least). (Pins moved: the mixer's default 400 → 310, its
+    // least 180 → 310; were 364, 324, 500 and 264, the rack 88, and 418, 200 and 180 for 40 up,
+    // 200 and 300 down; then 310 → 225 with its compact strip: were 454, 414, 410, 354, the
+    // rack 178, and 350, 418 and 310 for 40 up, 120 up and 200 down.)
     #[test]
     fn without_the_playlist_the_flexible_panel_absorbs_the_line() {
         let area = 986.0;
         let stacked = [Panel::Rack, Panel::PianoRoll, Panel::Mixer];
         assert_eq!(
             stack_heights(&stacked, 222.0, &NATURAL, area),
-            [222.0, 364.0, 400.0]
+            [222.0, 539.0, 225.0]
         );
         let rack = dragged(&stacked, 222.0, &NATURAL, area, 1, 40.0);
         assert_eq!(
@@ -987,7 +1246,7 @@ mod tests {
         );
         assert_eq!(
             stack_heights(&stacked, 222.0, &rack, area),
-            [262.0, 324.0, 400.0]
+            [262.0, 499.0, 225.0]
         );
         let roll_kept = Kept {
             piano_roll: Some(300.0),
@@ -998,33 +1257,40 @@ mod tests {
             mixer,
             Kept {
                 piano_roll: Some(300.0),
-                mixer: Some(500.0),
+                mixer: Some(325.0),
                 ..NATURAL
             },
             "the roll keeps no new height while it is the flexible one"
         );
         assert_eq!(
             stack_heights(&stacked, 222.0, &mixer, area),
-            [222.0, 264.0, 500.0]
+            [222.0, 439.0, 325.0]
         );
         assert_eq!(reset(&stacked, &mixer, 2), roll_kept);
         let two = [Panel::Rack, Panel::Mixer];
         let rack = RACK_HEADER_HEIGHT + 46.0 * 5.0;
-        assert_eq!(stack_heights(&two, rack, &NATURAL, 488.0), [88.0, 400.0]);
-        for (moved, mixer) in [(-40.0, 418.0), (200.0, 200.0), (300.0, 180.0)] {
+        assert_eq!(stack_heights(&two, rack, &NATURAL, 488.0), [263.0, 225.0]);
+        for (moved, mixer) in [
+            (-40.0, 265.0),
+            (-120.0, 345.0),
+            (-200.0, 418.0),
+            (200.0, 225.0),
+        ] {
             let kept = dragged(&two, rack, &NATURAL, 488.0, 1, moved);
             assert_eq!(kept.mixer, Some(mixer), "moved {moved}");
             assert_eq!(kept.rack, None);
         }
     }
 
-    // The window too small for every least height (the four panels in 504 px, 660 px of least
-    // heights): the stack is squeezed as before and a divider moves nothing. Made smaller
-    // with heights kept (the playlist over the roll kept 406 and the mixer 400, 700 px): the
-    // two give up the same share above their least, (520 − 410) / (806 − 410), 278.89 and
-    // 241.11, the playlist its 180; grown back, the kept heights come back. A drag in the
-    // squeezed stack starts from what it shows: the line between the roll and the mixer 20 px
-    // up, the roll 259 (whole pixels) and the mixer the 261 the two had left.
+    // The window too small for every least height (the four panels in 504 px, 705 px of least
+    // heights): the stack scrolls and a divider moves nothing. Made smaller with heights kept
+    // (the playlist over the roll kept 406 and the mixer 400, to 800 px, room for the 635 px of
+    // least heights): the two give up the same share above their least, (620 − 455) / (806 −
+    // 455), 312.735 and 307.265, the playlist its 180; grown back, the kept heights come back. A
+    // drag in the squeezed stack starts from what it shows: the line between the roll and the
+    // mixer 20 px up, the roll 293 (whole pixels) and the mixer the 327 the two had left.
+    // (Pins moved: 700 px with the mixer's old least of 180 gave 278.89 and 241.11,
+    // the drag 259 and 261; with its least of 310, 282.93 and 337.07, the drag 263 and 357.)
     #[test]
     fn a_window_too_small_squeezes_kept_heights_and_gives_them_back() {
         let four = [Panel::Rack, Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
@@ -1039,18 +1305,19 @@ mod tests {
             stack_heights(&stacked, 0.0, &kept, 986.0),
             [180.0, 406.0, 400.0]
         );
-        let share = 110.0 / 396.0;
-        let small = stack_heights(&stacked, 0.0, &kept, 700.0);
-        let expected = [180.0, 230.0 + 176.0 * share, 180.0 + 220.0 * share];
+        let share = 165.0 / 351.0;
+        let small = stack_heights(&stacked, 0.0, &kept, 800.0);
+        let expected = [180.0, 230.0 + 176.0 * share, 225.0 + 175.0 * share];
         assert!(near(&small, &expected), "{small:?}");
+        assert!(near(&small, &[180.0, 312.735, 307.265]), "{small:?}");
         assert_eq!(
             stack_heights(&stacked, 0.0, &kept, 986.0),
             [180.0, 406.0, 400.0]
         );
-        let moved = dragged(&stacked, 0.0, &kept, 700.0, 2, -20.0);
-        assert_eq!(moved.piano_roll, Some(259.0));
-        let heights = stack_heights(&stacked, 0.0, &moved, 700.0);
-        assert!(near(&heights, &[180.0, 259.0, 261.0]), "{heights:?}");
+        let moved = dragged(&stacked, 0.0, &kept, 800.0, 2, -20.0);
+        assert_eq!(moved.piano_roll, Some(293.0));
+        let heights = stack_heights(&stacked, 0.0, &moved, 800.0);
+        assert!(near(&heights, &[180.0, 293.0, 327.0]), "{heights:?}");
     }
 
     #[test]
@@ -1069,6 +1336,7 @@ mod tests {
                 mixer: false,
                 browser: false,
                 settings: false,
+                popped: Popped::NONE,
             }
         );
         assert_eq!(Panel::from_name("piano-roll"), Some(Panel::PianoRoll));

@@ -1,19 +1,20 @@
 //! The mixer panel (F9): the header with the channel routing control, a strip per insert (name,
-//! mute light, pan knob, fader, meters, route button and send knob), and the slot panel with
-//! the selected insert's effects and the selected effect's parameters.
+//! mute light, pan knob, fader, meters, route button and send knob), and the effects area with
+//! the selected insert's effects as blocks in chain order (each its light, name, remove cross
+//! and knobs) and the add tile after them.
 //!
 //! One canvas draws it all from [`mixer_layout`] positions and only reports presses and the
 //! wheel in its own coordinates; [`MixerState`] turns them into edits. What changes with edits
 //! is drawn into a cached layer the app clears on every message; the meters, a refused route's
-//! flash and the value under the cursor are drawn over it every frame. The slot menu and the
+//! flash and the value under the cursor are drawn over it every frame. The effect menus and the
 //! automation menu are [`crate::ui::menu`] menus on the window's top layer.
 
 use std::time::{Duration, Instant};
 
 use dawsome_engine::dsp::laws::fader_gain;
-use dawsome_engine::processor::{PluginParam, ProcessorHost, Registry};
+use dawsome_engine::processor::{PluginParam, ProcessorFactory, ProcessorHost, Registry};
 use dawsome_engine::project::{
-    AutomationTarget, ChannelId, Insert, InsertId, ProcessorOwner, Project,
+    AutomationTarget, ChannelId, Effect, Insert, InsertId, ProcessorOwner, Project,
 };
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::canvas::{self, Cache, Event, Frame, Geometry, Path, Stroke, Text};
@@ -26,14 +27,16 @@ use crate::app::Message;
 use crate::ui::hint::{hover_change, Hover};
 use crate::ui::menu;
 use crate::ui::mixer_layout::{
-    self, Hit, BODY_TOP, CAP_LINE, CLIP_OFFSET, CLIP_RADIUS, CLIP_Y, FADER_TOP, FADER_TRACK_OFFSET,
-    FADER_TRACK_WIDTH, HEADER_HEIGHT, LABEL_HEIGHT, LED_RADIUS, NAME_SIZE, PAN_SIZE,
-    SELECTED_OUTLINE, SEND_SIZE, SLOT_NAME_INSET, SLOT_NUMBER_INSET, SLOT_PANEL_WIDTH, STRIP_WIDTH,
-    TEXT_SIZE,
+    self, Hit, BLOCK_HEAD, BLOCK_INSET, BODY_TOP, CAP_LINE, CLIP_OFFSET, CLIP_RADIUS, CLIP_Y,
+    EFFECTS_INSET, FADER_TOP, FADER_TRACK_OFFSET, FADER_TRACK_WIDTH, HEADER_HEIGHT,
+    KNOB_ROW_HEIGHT, KNOB_SIZE, KNOB_WIDTH, LABEL_HEIGHT, LED_RADIUS, MARKS_WIDTH, MENU_WIDTH,
+    NAME_SIZE, PAN_SIZE, SELECTED_OUTLINE, SEND_SIZE, STRIP_WIDTH, TEXT_SIZE, TITLE_HEIGHT,
+    TITLE_TOP,
 };
 use crate::ui::mixer_state::{
-    effect_param_text, effect_values, fader_text, is_plugin, pan_text, percent_text, Menu,
-    MixerMessage, MixerState, ADD_MENU, EFFECT_MENU, PLUGIN_EFFECT_ROW, PLUGIN_PARAMS_ROW,
+    effect_param_text, effect_values, fader_text, is_choice, is_plugin, knob_counts, pan_text,
+    percent_text, Menu, MixerMessage, MixerState, ADD_MENU, EFFECT_MENU, PLUGIN_EFFECT_ROW,
+    PLUGIN_KNOBS, PLUGIN_PARAMS_ROW,
 };
 use crate::ui::rack::{draw_automated_dot, draw_knob, draw_linked_dot};
 use crate::ui::style;
@@ -45,6 +48,9 @@ pub const RENAME_INPUT: &str = "mixer-insert-rename";
 /// −6 dB as a linear level, 10^(−6/20), where a meter turns from green to yellow.
 pub const MINUS_6_DB: f32 = 0.501_187_2;
 
+/// The size of a knob's label and value.
+const KNOB_TEXT_SIZE: f32 = 10.0;
+
 /// Two presses at most this far apart in time and space are a double press.
 const DOUBLE_PRESS_TIME: Duration = Duration::from_millis(400);
 const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
@@ -53,8 +59,9 @@ const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
 pub struct MixerPanel<'a> {
     pub project: &'a Project,
     pub state: &'a MixerState,
-    /// The panel's height as the dividers left it ([`crate::ui::panels::Kept::mixer_height`]):
-    /// its desk is laid out from it.
+    /// The panel's height as the stack shows it ([`crate::ui::panels::stack_heights`], never
+    /// under [`mixer_layout::LEAST_HEIGHT`]): its desk is laid out from it, so every strip
+    /// shows whole.
     pub height: f32,
     pub registry: &'a Registry,
     /// The rack's selected channel: the one the header routes.
@@ -74,7 +81,7 @@ pub struct MixerPanel<'a> {
 impl<'a> MixerPanel<'a> {
     pub fn view(mut self) -> Element<'a, Message> {
         let rename = self.rename_box();
-        let slot_menu = self.slot_menu();
+        let effect_menu = self.effect_menu();
         let menu = self.menu.take();
         let desk_height = mixer_layout::desk_height(self.height);
         let desk = canvas::Canvas::new(Desk { panel: self })
@@ -82,11 +89,13 @@ impl<'a> MixerPanel<'a> {
             .height(desk_height);
         let mut layers: Vec<Element<'a, Message>> = vec![desk.into()];
         layers.extend(rename);
-        layers.extend(slot_menu);
+        layers.extend(effect_menu);
         layers.extend(menu);
         let desk: Element<'a, Message> = stack(layers).into();
-        // Why a scrollable: stacked under other panels the mixer can get less than its height;
-        // its own wheel scrolls the strips, so the bar scrolls it up and down.
+        // Why a scrollable, though the desk is laid out from the height the panel is shown at
+        // and never scrolls in it now: it gives the menus over the desk the panel's top as the
+        // top of the area they opened in ([`menu::place_below`]), which they flip up no
+        // further than while they have room; the panel's own wheel scrolls the strips.
         let desk = scrollable(desk)
             .direction(Direction::Vertical(Scrollbar::default()))
             .width(Fill)
@@ -116,19 +125,32 @@ impl<'a> MixerPanel<'a> {
         Some(pin(input).x(left).y(mixer_layout::NAME_TOP - 2.0).into())
     }
 
-    /// The open slot menu under its slot, on the window's top layer: a row per choice, each
-    /// sending its place in the menu.
-    fn slot_menu(&self) -> Option<Element<'a, Message>> {
+    /// The open effect menu under its block's head (the add menu under the add tile's), on the
+    /// window's top layer: a row per choice, each sending its place in the menu.
+    fn effect_menu(&self) -> Option<Element<'a, Message>> {
         let menu = self.state.menu?;
-        let rows = slot_menu_rows(menu, self.registry, self.project)
+        let rows = menu_rows(menu, self.registry, self.project)
             .into_iter()
             .enumerate()
             .map(|(row, label)| {
                 let chosen = Message::Mixer(MixerMessage::MenuChosen(row));
                 menu::row(label, Some(chosen)).into()
             });
-        let panel = menu::panel(column(rows), mixer_layout::MENU_WIDTH);
-        let at = mixer_layout::menu_anchor(menu.slot(), self.state.size().width);
+        let panel = menu::panel(column(rows), MENU_WIDTH);
+        let chain = self.chain();
+        let place = match menu {
+            Menu::Add => chain.len(),
+            Menu::Effect { effect } => self
+                .project
+                .mixer
+                .get(self.state.selected)?
+                .effects
+                .iter()
+                .position(|shown| shown.id == effect)?,
+        };
+        let desk = self.state.desk(self.last());
+        let block = *mixer_layout::chain_rects(&chain, desk).get(place)?;
+        let at = mixer_layout::menu_anchor(block);
         Some(
             pin(menu::floating(panel, self.menu_foot))
                 .x(at.x)
@@ -141,17 +163,22 @@ impl<'a> MixerPanel<'a> {
         self.project.mixer.ids().last().unwrap_or(InsertId::MASTER)
     }
 
-    /// The inserts whose strips are at least partly left of the slot panel, with their left
+    /// The selected insert's effects' knob counts, in chain order: what its blocks lay out by.
+    fn chain(&self) -> Vec<usize> {
+        knob_counts(self.project, self.registry, self.state.selected)
+    }
+
+    /// The inserts whose strips are at least partly left of the effects area, with their left
     /// edges.
     fn visible_strips(&self, width: f32) -> impl Iterator<Item = (InsertId, &Insert, f32)> {
-        let slots_left = mixer_layout::slot_panel_left(width);
+        let area = mixer_layout::effects_left(width, self.last());
         let scroll = self.state.scroll;
         self.project
             .mixer
             .ids()
             .zip(&self.project.mixer.inserts)
             .map(move |(id, insert)| (id, insert, mixer_layout::strip_left(id, scroll)))
-            .filter(move |&(_, _, left)| left + STRIP_WIDTH > 0.0 && left < slots_left)
+            .filter(move |&(_, _, left)| left + STRIP_WIDTH > 0.0 && left < area)
     }
 
     /// The amount the selected insert sends to `to`, when it does and `to` is another insert.
@@ -189,11 +216,11 @@ impl Desk<'_> {
 
     fn draw_body(&self, frame: &mut Frame) {
         let size = frame.size();
-        let slots_left = mixer_layout::slot_panel_left(size.width);
+        let area = mixer_layout::effects_left(size.width, self.panel.last());
         self.draw_header(frame, size.width);
         let strips = Rectangle::new(
             Point::new(0.0, HEADER_HEIGHT),
-            Size::new(slots_left, size.height - HEADER_HEIGHT),
+            Size::new(area, size.height - HEADER_HEIGHT),
         );
         let solo_audible = self.panel.project.mixer.solo_audible();
         // Why the ground is drawn inside the clipped frame: the renderer lays a clipped frame's
@@ -206,7 +233,7 @@ impl Desk<'_> {
                 self.draw_strip(frame, (id, insert), left, heard, strips, size.height);
             }
         });
-        self.draw_slot_panel(frame, size);
+        self.draw_effects(frame, size);
     }
 
     fn draw_header(&self, frame: &mut Frame, width: f32) {
@@ -289,7 +316,7 @@ impl Desk<'_> {
             .as_ref()
             .is_some_and(|(renamed, _)| *renamed == id);
         // Why the area too: a clip inside a clip bounds its drawing by its own box only, so a
-        // name of a strip under the slot panel would run into the panel's title. Why cut to
+        // name of a strip under the effects area would run into the area's title. Why cut to
         // the clip as well: the software renderer draws a clipped frame's text whole.
         if let Some(clip) = name.intersection(&area).filter(|_| !renaming) {
             let at = Point::new(name.x + 4.0, name.center_y());
@@ -394,205 +421,235 @@ impl Desk<'_> {
         }
     }
 
-    fn draw_slot_panel(&self, frame: &mut Frame, size: Size) {
-        let width = size.width;
-        let left = mixer_layout::slot_panel_left(width);
+    /// The effects area: its ground, the selected insert's name, its effects' blocks in chain
+    /// order and the add tile, and the marks of lines scrolled out of view. A block's parts show
+    /// only where they show whole in the view: the software renderer draws a clipped frame's
+    /// text and shapes whole, so a part cut by the view's edge would run over the title.
+    fn draw_effects(&self, frame: &mut Frame, size: Size) {
+        let desk = self.desk(size);
+        let left = mixer_layout::effects_left(size.width, desk.last);
         frame.fill_rectangle(
             Point::new(left, HEADER_HEIGHT),
-            Size::new(SLOT_PANEL_WIDTH, size.height - HEADER_HEIGHT),
+            Size::new(size.width - left, size.height - HEADER_HEIGHT),
             style::PANEL,
         );
-        let state = self.panel.state;
-        let Some(insert) = self.panel.project.mixer.get(state.selected) else {
+        let Some(insert) = self.panel.project.mixer.get(self.panel.state.selected) else {
             return;
         };
-        let title = Point::new(
-            left + SLOT_NUMBER_INSET,
-            mixer_layout::SLOT_NAME_TOP + mixer_layout::SLOT_NAME_HEIGHT / 2.0,
-        );
-        label(frame, &insert.name, title, style::TEXT, NAME_SIZE);
-        for slot in 0..dawsome_engine::project::EFFECT_SLOTS {
-            let row = mixer_layout::slot_rect(slot, width);
-            let effect = insert.effects.iter().find(|effect| effect.slot == slot);
-            if effect.is_some_and(|effect| Some(effect.id) == state.selected_effect) {
-                frame.fill_rectangle(row.position(), row.size(), style::STRIP_SELECTED);
-            }
-            let number = Point::new(row.x + SLOT_NUMBER_INSET, row.center_y());
-            label(
-                frame,
-                &(slot + 1).to_string(),
-                number,
-                style::TEXT_DIM,
-                TEXT_SIZE,
-            );
-            let name_at = Point::new(row.x + SLOT_NAME_INSET, row.center_y());
-            match effect {
-                Some(effect) => {
-                    let name = self
-                        .panel
-                        .registry
-                        .get(&effect.processor.id)
-                        .map_or(effect.processor.display_name(), |factory| factory.name());
-                    label(frame, name, name_at, style::TEXT, NAME_SIZE);
+        let room = size.width - left - EFFECTS_INSET - MARKS_WIDTH;
+        if let Some(shown) = fit_width(&insert.name, room, NAME_SIZE) {
+            let at = Point::new(left + EFFECTS_INSET, TITLE_TOP + TITLE_HEIGHT / 2.0);
+            label(frame, &shown, at, style::TEXT, NAME_SIZE);
+        }
+        let counts = self.panel.chain();
+        // The chain as it shows: a block being dragged at the place it would take.
+        let order = self.panel.state.chain_order(insert.effects.len());
+        let chain: Vec<usize> = order.iter().map(|&place| counts[place]).collect();
+        let view = mixer_layout::blocks_view(desk);
+        let reorder = self.panel.state.reorder;
+        let mut held = None;
+        for (place, &block) in mixer_layout::chain_rects(&chain, desk).iter().enumerate() {
+            let shown = order
+                .get(place)
+                .and_then(|&index| insert.effects.get(index));
+            match (shown, chain.get(place)) {
+                (Some(effect), Some(&count)) if reorder.is_some_and(|r| r.effect == effect.id) => {
+                    draw_gap(frame, block, view);
+                    held = Some((effect, block, count));
                 }
-                None => label(frame, "\u{2014}", name_at, style::TEXT_DIM, NAME_SIZE),
+                (Some(effect), Some(&count)) => self.draw_block(frame, effect, block, count, view),
+                _ => draw_add_tile(frame, block, view),
             }
         }
-        self.draw_params(frame, size);
+        // The dragged block over the others, where the pointer holds it, kept inside the view.
+        if let (Some((effect, block, count)), Some(reorder)) = (held, reorder) {
+            let top_left = reorder.at - reorder.grip;
+            let x = top_left
+                .x
+                .min(view.x + view.width - block.width)
+                .max(view.x);
+            let y = top_left
+                .y
+                .min(view.y + view.height - block.height)
+                .max(view.y);
+            let moved = Rectangle::new(Point::new(x, y), block.size());
+            self.draw_block(frame, effect, moved, count, view);
+            frame.stroke_rectangle(
+                moved.position(),
+                moved.size(),
+                Stroke::default().with_color(style::ACCENT).with_width(1.0),
+            );
+        }
+        let scroll = mixer_layout::effects_scroll(&chain, desk);
+        let more = scroll < mixer_layout::max_effects_scroll(&chain, desk);
+        draw_more_marks(frame, view, size.width, scroll > 0.0, more);
     }
 
-    /// The selected effect's parameters: a label and a slider with the value on it, per row.
-    /// The selected effect's parameters, a row each from the one the wheel scrolled to, as many
-    /// as the desk has rows for, and a mark of the rows above and below when there are more.
-    fn draw_params(&self, frame: &mut Frame, size: Size) {
-        let width = size.width;
-        let rows = mixer_layout::param_rows(size.height);
-        let top = self.panel.state.params_top();
-        let left = mixer_layout::slot_panel_left(width);
-        let Some((_, effect)) = self
-            .panel
-            .state
-            .selected_effect
-            .and_then(|id| self.panel.project.mixer.effect(id))
-        else {
-            return;
-        };
-        let Some(factory) = self.panel.registry.get(&effect.processor.id) else {
-            if let Some(host) = self.panel.registry.host(&effect.processor.id) {
-                let owner = ProcessorOwner::Effect(effect.id);
-                self.draw_plugin_params(frame, size, host, owner);
-                return;
+    /// `effect`'s block at `block`, with `count` knobs, in `view`: its ground, its head (the
+    /// light as a strip's, lit while the effect is on; its name, dim while it is off; the
+    /// remove cross) and its knobs.
+    fn draw_block(
+        &self,
+        frame: &mut Frame,
+        effect: &Effect,
+        block: Rectangle,
+        count: usize,
+        view: Rectangle,
+    ) {
+        if let Some(ground) = block.intersection(&view) {
+            frame.fill_rectangle(ground.position(), ground.size(), style::STRIP);
+        }
+        let head = Rectangle::new(block.position(), Size::new(block.width, BLOCK_HEAD));
+        if shows_whole(view, head) {
+            let lit = if effect.on {
+                style::TRACK_LED_ON
+            } else {
+                style::LED_OFF
+            };
+            let led = mixer_layout::effect_led_center(block);
+            frame.fill(&Path::circle(led, LED_RADIUS), lit);
+            let name = mixer_layout::effect_name_rect(block);
+            let color = if effect.on {
+                style::TEXT
+            } else {
+                style::TEXT_DIM
+            };
+            let shown = effect_name(effect, self.panel.registry);
+            if let Some(shown) = fit_width(shown, name.width, NAME_SIZE) {
+                let at = Point::new(name.x, name.center_y());
+                label(frame, &shown, at, color, NAME_SIZE);
             }
-            let at = Point::new(left + SLOT_NUMBER_INSET, mixer_layout::PARAMS_TOP + 10.0);
-            label(
-                frame,
-                "Not available in this build",
-                at,
-                style::TEXT_DIM,
-                TEXT_SIZE,
-            );
-            return;
+            let cross = mixer_layout::remove_rect(block).center();
+            centered(frame, "\u{d7}", cross, style::TEXT_DIM, 14.0);
+            // The arrows, but none past either end of the chain.
+            let place = self
+                .panel
+                .project
+                .mixer
+                .get(self.panel.state.selected)
+                .and_then(|insert| insert.effects.iter().position(|e| e.id == effect.id));
+            let count = self
+                .panel
+                .project
+                .mixer
+                .get(self.panel.state.selected)
+                .map_or(0, |insert| insert.effects.len());
+            if place.is_some_and(|place| place > 0) {
+                let at = mixer_layout::earlier_rect(block).center();
+                centered(frame, "\u{2039}", at, style::TEXT_DIM, 14.0);
+            }
+            if place.is_some_and(|place| place + 1 < count) {
+                let at = mixer_layout::later_rect(block).center();
+                centered(frame, "\u{203a}", at, style::TEXT_DIM, 14.0);
+            }
+        }
+        let registry = self.panel.registry;
+        let words = if let Some(factory) = registry.get(&effect.processor.id) {
+            self.draw_native_knobs(frame, effect, factory, (block, count), view);
+            None
+        } else if let Some(host) = registry.host(&effect.processor.id) {
+            self.draw_plugin_knobs(frame, effect, host, (block, count), view);
+            // A plugin that is missing has no instance to read, and some have no parameters.
+            (count == 0).then_some("No parameters")
+        } else {
+            Some("Not in this build")
         };
+        let row = Rectangle::new(
+            Point::new(block.x + BLOCK_INSET, block.y + BLOCK_HEAD),
+            Size::new(block.width - 2.0 * BLOCK_INSET, KNOB_ROW_HEIGHT),
+        );
+        if let Some(words) = words.filter(|_| shows_whole(view, row)) {
+            if let Some(shown) = fit_width(words, row.width, KNOB_TEXT_SIZE) {
+                let at = Point::new(row.x, row.center_y());
+                label(frame, &shown, at, style::TEXT_DIM, KNOB_TEXT_SIZE);
+            }
+        }
+    }
+
+    /// A native effect's knobs: each parameter's label, its knob (a choice's button) and value,
+    /// the value an automation set last while one governs it, and its automated and linked dots.
+    fn draw_native_knobs(
+        &self,
+        frame: &mut Frame,
+        effect: &Effect,
+        factory: &dyn ProcessorFactory,
+        (block, count): (Rectangle, usize),
+        view: Rectangle,
+    ) {
         let values = effect_values(effect, self.panel.registry).unwrap_or_default();
-        draw_more_marks(frame, width, size.height, top, factory.params().len());
-        for (index, (info, &value)) in factory
-            .params()
-            .iter()
-            .zip(&values)
-            .enumerate()
-            .skip(top)
-            .take(rows)
-        {
-            let row = mixer_layout::param_row_rect(index - top, width);
-            let at = Point::new(left + mixer_layout::PARAM_LABEL_INSET, row.center_y());
-            label(frame, info.label, at, style::TEXT_DIM, 10.0);
+        let rate = self.panel.project.sample_rate;
+        for (index, (info, &value)) in factory.params().iter().zip(&values).enumerate() {
+            let cell = mixer_layout::knob_cell(block, count, index);
+            if !shows_whole(view, cell) {
+                continue;
+            }
             let target = AutomationTarget::EffectParam {
                 effect: effect.id,
                 key: info.key.to_owned(),
             };
             let automation = self.panel.automated.get(&target).copied();
             let value = automation.flatten().unwrap_or(value);
-            let slider = mixer_layout::slider_rect(index - top, width);
-            if automation.is_some() {
-                let dot = Point::new(slider.x - 6.0, slider.center_y());
-                draw_automated_dot(frame, dot, 4.0);
-            }
-            if self.panel.project.midi_links.get(&target).is_some() {
-                // At the slider's top right corner, as a knob's sits at its box's.
-                let corner = Point::new(slider.x + slider.width, slider.y);
-                draw_linked_dot(frame, corner, 0.0);
-            }
-            frame.fill_rectangle(slider.position(), slider.size(), style::FADER_TRACK);
-            let span = info.max - info.min;
-            let fraction = if span > 0.0 {
-                ((value - info.min) / span).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            frame.fill_rectangle(
-                slider.position(),
-                Size::new(slider.width * fraction, slider.height),
-                style::SLIDER_FILL,
+            let text = effect_param_text(factory, index, value, rate).unwrap_or_default();
+            let knob = (!is_choice(factory, index)).then(|| fraction(value, info.min, info.max));
+            let dots = (
+                automation.is_some(),
+                self.panel.project.midi_links.get(&target).is_some(),
             );
-            let rate = self.panel.project.sample_rate;
-            let shown = effect_param_text(factory, index, value, rate).unwrap_or_default();
-            centered(frame, &shown, slider.center(), style::TEXT, 10.0);
+            draw_knob_cell(frame, cell, (info.label, &text), knob, dots);
         }
     }
 
-    /// A plugin effect's first parameters (those not hidden), read from its host: a label and a
-    /// slider with the plugin's own text for the value, per row.
-    fn draw_plugin_params(
+    /// A plugin effect's knobs: its first parameters not hidden, read from its host, each with
+    /// the plugin's own text for its value.
+    fn draw_plugin_knobs(
         &self,
         frame: &mut Frame,
-        size: Size,
+        effect: &Effect,
         host: &dyn ProcessorHost,
-        owner: ProcessorOwner,
+        (block, count): (Rectangle, usize),
+        view: Rectangle,
     ) {
-        let width = size.width;
-        let left = mixer_layout::slot_panel_left(width);
-        let shown: Vec<PluginParam> = host
+        let owner = ProcessorOwner::Effect(effect.id);
+        let params: Vec<PluginParam> = host
             .params(owner)
             .into_iter()
             .filter(|param| !param.hidden)
+            .take(count.min(PLUGIN_KNOBS))
             .collect();
-        let top = self.panel.state.params_top();
-        draw_more_marks(frame, width, size.height, top, shown.len());
-        let params: Vec<PluginParam> = shown
-            .into_iter()
-            .skip(top)
-            .take(mixer_layout::param_rows(size.height))
-            .collect();
-        if params.is_empty() {
-            // A plugin that is missing has no instance to read, and some have no parameters.
-            let at = Point::new(left + SLOT_NUMBER_INSET, mixer_layout::PARAMS_TOP + 10.0);
-            label(
-                frame,
-                "No parameters to show",
-                at,
-                style::TEXT_DIM,
-                TEXT_SIZE,
-            );
-            return;
-        }
         for (index, param) in params.iter().enumerate() {
-            let row = mixer_layout::param_row_rect(index, width);
-            let at = Point::new(left + mixer_layout::PARAM_LABEL_INSET, row.center_y());
-            label(frame, &param.name, at, style::TEXT_DIM, 10.0);
-            let slider = mixer_layout::slider_rect(index, width);
-            frame.fill_rectangle(slider.position(), slider.size(), style::FADER_TRACK);
+            let cell = mixer_layout::knob_cell(block, count, index);
+            if !shows_whole(view, cell) {
+                continue;
+            }
             let value = host.value(owner, param.id).unwrap_or(param.default);
-            let span = param.max - param.min;
-            let fraction = if span > 0.0 {
-                ((value - param.min) / span).clamp(0.0, 1.0) as f32
-            } else {
-                0.0
-            };
-            frame.fill_rectangle(
-                slider.position(),
-                Size::new(slider.width * fraction, slider.height),
-                style::SLIDER_FILL,
-            );
             let text = host
                 .value_text(owner, param.id, value)
                 .unwrap_or_else(|| format!("{value:.2}"));
-            centered(frame, &text, slider.center(), style::TEXT, 10.0);
+            // Only shown, so f32 is plenty.
+            let knob = fraction(value as f32, param.min as f32, param.max as f32);
+            draw_knob_cell(
+                frame,
+                cell,
+                (&param.name, &text),
+                Some(knob),
+                (false, false),
+            );
         }
     }
 
     /// The meters, the clip light, a refusal's flash and notice and the value under the cursor.
     fn draw_overlay(&self, frame: &mut Frame, cursor: Option<Point>) {
         let (width, desk) = (frame.width(), frame.height());
-        let slots_left = mixer_layout::slot_panel_left(width);
+        let area = mixer_layout::effects_left(width, self.panel.last());
         let strips = Rectangle::new(
             Point::new(0.0, HEADER_HEIGHT),
-            Size::new(slots_left, desk - HEADER_HEIGHT),
+            Size::new(area, desk - HEADER_HEIGHT),
         );
         let state = self.panel.state;
         let flashing = state.flashing(self.panel.now);
         // Why the meters and the flash are cut to the strips' area as well as clipped: the
-        // software renderer draws a clipped frame's shapes whole, so a strip under the slot
-        // panel would show its meter over the panel.
+        // software renderer draws a clipped frame's shapes whole, so a strip under the effects
+        // area would show its meter over the area.
         frame.with_clip(strips, |frame| {
             for (id, _, left) in self.panel.visible_strips(width) {
                 for side in 0..2 {
@@ -641,7 +698,7 @@ impl Desk<'_> {
         let state = self.panel.state;
         let mixer = &self.panel.project.mixer;
         let width = size.width;
-        let hit = mixer_layout::hit_test(at, self.desk(size))?;
+        let hit = mixer_layout::hit_test(at, self.desk(size), &self.panel.chain())?;
         let shown = |target: AutomationTarget, stored: f32| {
             let automated = self.panel.automated.get(&target).copied().flatten();
             automated.unwrap_or(stored)
@@ -666,10 +723,22 @@ impl Desk<'_> {
             _ => return None,
         };
         let left = mixer_layout::strip_left(strip, state.scroll);
-        Some((
-            tip_rect(left, at.y, mixer_layout::slot_panel_left(width)),
-            value,
-        ))
+        let area = mixer_layout::effects_left(width, self.panel.last());
+        Some((tip_rect(left, at.y, area), value))
+    }
+}
+
+impl Desk<'_> {
+    /// Whether knob `knob` of the selected insert's effect at `block` is a choice's button.
+    fn is_choice(&self, block: usize, knob: usize) -> bool {
+        let panel = &self.panel;
+        panel
+            .project
+            .mixer
+            .get(panel.state.selected)
+            .and_then(|insert| insert.effects.get(block))
+            .and_then(|effect| panel.registry.get(&effect.processor.id))
+            .is_some_and(|factory| is_choice(factory, knob))
     }
 }
 
@@ -707,12 +776,26 @@ impl canvas::Program<Message> for Desk<'_> {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => cursor
                 .position_in(bounds)
                 .map(|at| send(MixerMessage::Scrolled { at, delta: *delta }).and_capture()),
+            // A block held by its name follows the pointer anywhere, and is let go anywhere.
+            Event::Mouse(mouse::Event::CursorMoved { .. })
+                if self.panel.state.reorder.is_some() =>
+            {
+                cursor
+                    .position_from(bounds.position())
+                    .map(|at| send(MixerMessage::ReorderMoved(at)).and_capture())
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if self.panel.state.reorder.is_some() =>
+            {
+                Some(send(MixerMessage::ReorderEnded).and_capture())
+            }
             // The value under the cursor follows it, and the hint bar names what is under it.
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let desk = self.desk(bounds.size());
+                let chain = self.panel.chain();
                 let now = cursor
                     .position_in(bounds)
-                    .and_then(|at| mixer_layout::hit_test(at, desk))
+                    .and_then(|at| mixer_layout::hit_test(at, desk, &chain))
                     .map(Hover::Mixer);
                 hover_change(&mut state.hover, now)
                     .or_else(|| cursor.is_over(bounds).then(canvas::Action::request_redraw))
@@ -749,31 +832,34 @@ impl canvas::Program<Message> for Desk<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.panel.state.reorder.is_some() {
+            return mouse::Interaction::Grabbing;
+        }
         let Some(at) = cursor.position_in(bounds) else {
             return mouse::Interaction::default();
         };
-        match mixer_layout::hit_test(at, self.desk(bounds.size())) {
+        match mixer_layout::hit_test(at, self.desk(bounds.size()), &self.panel.chain()) {
+            Some(Hit::EffectName(_)) => mouse::Interaction::Grab,
             Some(Hit::Fader(_)) => mouse::Interaction::ResizingVertically,
-            Some(Hit::Pan(_) | Hit::Send(_) | Hit::Param(_)) => {
+            Some(Hit::Knob { block, knob }) if self.is_choice(block, knob) => {
+                mouse::Interaction::Pointer
+            }
+            Some(Hit::Pan(_) | Hit::Send(_) | Hit::Knob { .. }) => {
                 mouse::Interaction::ResizingHorizontally
             }
-            Some(Hit::Strip(_) | Hit::Name(_)) | None => mouse::Interaction::default(),
+            Some(Hit::Strip(_) | Hit::Name(_) | Hit::Block(_)) | None => {
+                mouse::Interaction::default()
+            }
             Some(_) => mouse::Interaction::Pointer,
         }
     }
 }
 
-/// The marks beside the parameter rows when the selected effect has more than the desk shows:
-/// a small triangle at the slot panel's right edge, up at the first row while rows are
-/// scrolled above it, down at the last while more follow, so the wheel's reach is seen.
-fn draw_more_marks(frame: &mut Frame, width: f32, desk: f32, top: usize, count: usize) {
-    let rows = mixer_layout::param_rows(desk);
-    if rows == 0 || count <= rows {
-        return;
-    }
-    let x = width - 8.0;
-    let first = mixer_layout::param_row_rect(0, width).center_y();
-    let last = mixer_layout::param_row_rect(rows - 1, width).center_y();
+/// The marks at the effects area's right edge while lines are scrolled out of view: a small
+/// triangle pointing up at the view's top while lines are above it, down at its foot while more
+/// follow, so the wheel's reach is seen.
+fn draw_more_marks(frame: &mut Frame, view: Rectangle, width: f32, above: bool, below: bool) {
+    let x = width - MARKS_WIDTH / 2.0;
     let triangle = |tip: f32, base: f32| {
         Path::new(|path| {
             path.move_to(Point::new(x, tip));
@@ -782,12 +868,115 @@ fn draw_more_marks(frame: &mut Frame, width: f32, desk: f32, top: usize, count: 
             path.close();
         })
     };
-    if top > 0 {
-        frame.fill(&triangle(first - 3.0, first + 3.0), style::TEXT_DIM);
+    if above {
+        let top = view.y + 6.0;
+        frame.fill(&triangle(top - 3.0, top + 3.0), style::TEXT_DIM);
     }
-    if top + rows < count {
-        frame.fill(&triangle(last + 3.0, last - 3.0), style::TEXT_DIM);
+    if below {
+        let foot = view.y + view.height - 6.0;
+        frame.fill(&triangle(foot + 3.0, foot - 3.0), style::TEXT_DIM);
     }
+}
+
+/// Whether `rect` lies wholly inside `view`.
+fn shows_whole(view: Rectangle, rect: Rectangle) -> bool {
+    rect.x >= view.x
+        && rect.y >= view.y
+        && rect.x + rect.width <= view.x + view.width
+        && rect.y + rect.height <= view.y + view.height
+}
+
+/// How far along `min..max` `value` is, from 0 to 1.
+fn fraction(value: f32, min: f32, max: f32) -> f32 {
+    let span = max - min;
+    if span > 0.0 {
+        ((value - min) / span).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// The name an effect's block shows: a native effect's own, a plugin's saved name, else its id.
+pub(crate) fn effect_name<'a>(effect: &'a Effect, registry: &'a Registry) -> &'a str {
+    registry
+        .get(&effect.processor.id)
+        .map_or(effect.processor.display_name(), |factory| factory.name())
+}
+
+/// One knob's place `cell`: its `name` over it, then the knob at `knob` (a fraction of its
+/// range) with its `value` under it, or with no fraction a choice's button holding the value's
+/// name; its automated and linked `dots` at the knob's corner, as a strip's knobs have them.
+fn draw_knob_cell(
+    frame: &mut Frame,
+    cell: Rectangle,
+    (name, value): (&str, &str),
+    knob: Option<f32>,
+    (automated, linked): (bool, bool),
+) {
+    let room = KNOB_WIDTH - 4.0;
+    if let Some(shown) = fit_width(name, room, KNOB_TEXT_SIZE) {
+        let at = mixer_layout::knob_label_center(cell);
+        centered(frame, &shown, at, style::TEXT_DIM, KNOB_TEXT_SIZE);
+    }
+    let center = mixer_layout::knob_rect(cell).center();
+    match knob {
+        Some(fraction) => {
+            draw_knob(frame, center, KNOB_SIZE, fraction);
+            if let Some(shown) = fit_width(value, room, KNOB_TEXT_SIZE) {
+                let at = mixer_layout::knob_value_center(cell);
+                centered(frame, &shown, at, style::TEXT, KNOB_TEXT_SIZE);
+            }
+        }
+        None => {
+            let button = mixer_layout::choice_rect(cell);
+            frame.fill_rectangle(button.position(), button.size(), style::BUTTON);
+            if let Some(shown) = fit_width(value, button.width - 4.0, KNOB_TEXT_SIZE) {
+                centered(frame, &shown, button.center(), style::TEXT, KNOB_TEXT_SIZE);
+            }
+        }
+    }
+    if automated {
+        draw_automated_dot(frame, center, KNOB_SIZE);
+    }
+    if linked {
+        draw_linked_dot(frame, center, KNOB_SIZE);
+    }
+}
+
+/// The place a dragged block left, while it shows whole in `view`: a dim outline.
+fn draw_gap(frame: &mut Frame, gap: Rectangle, view: Rectangle) {
+    if !shows_whole(view, gap) {
+        return;
+    }
+    frame.stroke_rectangle(
+        Point::new(gap.x + 0.5, gap.y + 0.5),
+        Size::new(gap.width - 1.0, gap.height - 1.0),
+        Stroke::default()
+            .with_color(style::TEXT_DIM)
+            .with_width(1.0),
+    );
+}
+
+/// The add tile at `tile`, as far as it shows in `view` ([`mixer_layout::shown_tile`]): a dim
+/// outline round "+ Add effect".
+fn draw_add_tile(frame: &mut Frame, tile: Rectangle, view: Rectangle) {
+    let Some(tile) = mixer_layout::shown_tile(tile, view) else {
+        return;
+    };
+    frame.stroke_rectangle(
+        Point::new(tile.x + 0.5, tile.y + 0.5),
+        Size::new(tile.width - 1.0, tile.height - 1.0),
+        Stroke::default()
+            .with_color(style::TEXT_DIM)
+            .with_width(1.0),
+    );
+    centered(
+        frame,
+        "+ Add effect",
+        tile.center(),
+        style::TEXT_DIM,
+        NAME_SIZE,
+    );
 }
 
 /// A meter column filled from the bottom to `level`: green to −6 dB, yellow to 0 dB, red above,
@@ -830,17 +1019,17 @@ fn draw_meter(frame: &mut Frame, meter: Rectangle, level: f32, mark: f32) {
     }
 }
 
-/// The words of an open slot menu's rows, top to bottom, one per row [`Menu::rows`] counts:
-/// under an empty slot the native effects by name and the plugin row; under a filled one
-/// Remove, Move up and Move down, and for a plugin effect its parameters (its parameter window).
-fn slot_menu_rows(menu: Menu, registry: &Registry, project: &Project) -> Vec<&'static str> {
+/// The words of an open effect menu's rows, top to bottom, one per row [`Menu::rows`] counts:
+/// under the add tile the native effects by name and the plugin row; under an effect Remove,
+/// and for a plugin effect its parameters (its parameter window).
+fn menu_rows(menu: Menu, registry: &Registry, project: &Project) -> Vec<&'static str> {
     match menu {
-        Menu::Add { .. } => ADD_MENU
+        Menu::Add => ADD_MENU
             .iter()
             .map(|id| registry.get(id).map_or(*id, |factory| factory.name()))
             .chain([PLUGIN_EFFECT_ROW])
             .collect(),
-        Menu::Effect { effect, .. } => {
+        Menu::Effect { effect } => {
             let mut rows = EFFECT_MENU.to_vec();
             if is_plugin(project, effect) {
                 rows.push(PLUGIN_PARAMS_ROW);
@@ -856,9 +1045,9 @@ const TIP_INSET: f32 = 2.0;
 
 /// Where the tip over a control of the strip whose left edge is `left` shows, the cursor at
 /// height `y`: across the strip, just inside its sides, 22 px above the cursor (no higher than
-/// the strip's top), and no further right than `limit`, the slot panel's left edge. Why inside
+/// the strip's top), and no further right than `limit`, the effects area's left edge. Why inside
 /// the strip: a tip beside the cursor covered the next strip's controls. Why the limit: a strip
-/// running under the slot panel shows only its left part there, and the panel stays whole.
+/// running under the effects area shows only its left part there, and the area stays whole.
 fn tip_rect(left: f32, y: f32, limit: f32) -> Rectangle {
     let x = left + TIP_INSET;
     let right = (left + STRIP_WIDTH - TIP_INSET).min(limit);
@@ -995,15 +1184,15 @@ mod tests {
         assert_eq!(tip(&state, &automated, five, send).as_deref(), Some("25%"));
     }
 
-    // Every row of a slot menu holds its words on one line, 10 px of the row either side of
+    // Every row of an effect menu holds its words on one line, 10 px of the row either side of
     // them (`menu::row`). Why: at the menus' 13 px, "Compressor (Pressure4)" ran past the 120 px
     // the slot menu had in the canvas.
     #[test]
-    fn a_slot_menus_rows_hold_their_words() {
+    fn an_effect_menus_rows_hold_their_words() {
         use crate::ui::text_fit::text_width;
         let project = Project::load_json(P5_GAIN).expect("loads");
         let registry = Registry::native();
-        let added = slot_menu_rows(Menu::Add { slot: 0 }, &registry, &project);
+        let added = menu_rows(Menu::Add, &registry, &project);
         assert_eq!(added.len(), ADD_MENU.len() + 1);
         for words in added
             .into_iter()
@@ -1019,22 +1208,22 @@ mod tests {
         }
     }
 
-    // At 1000 px strip 12 runs under the slot panel: its left edge is at 12 + 62·12 = 756 and
-    // the panel's at 1000 − 200 = 800. The tip over its fader starts 2 px inside the strip and
-    // stops at the panel's edge.
+    // At 1000 px strip 10 runs under the effects area: its left edge is at 12 + 62·10 = 632 and
+    // the area's at 1000 − 332 = 668 (p5_gain's sixteen inserts end at 1068). The tip over its
+    // fader starts 2 px inside the strip and stops at the area's edge.
     #[test]
-    fn a_tip_stops_at_the_slot_panel() {
+    fn a_tip_stops_at_the_effects_area() {
         let project = Project::load_json(P5_GAIN).expect("loads");
         let state = MixerState::new(1000.0, mixer_layout::DEFAULT_HEIGHT);
-        let left = mixer_layout::strip_left(InsertId(12), 0.0);
-        assert_eq!(left, 756.0);
+        let left = mixer_layout::strip_left(InsertId(10), 0.0);
+        assert_eq!(left, 632.0);
         let fader = mixer_layout::fader_rect(left, state.size().height).center();
         let (rect, _) =
             tip_at(&project, &state, &BTreeMap::new(), fader).expect("a tip over the fader");
-        assert_eq!(rect.x, 758.0);
+        assert_eq!(rect.x, 634.0);
         assert!(
-            rect.x + rect.width <= 800.0,
-            "{rect:?} reaches under the slot panel"
+            rect.x + rect.width <= 668.0,
+            "{rect:?} reaches under the effects area"
         );
     }
 }

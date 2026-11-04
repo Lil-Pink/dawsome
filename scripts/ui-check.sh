@@ -33,8 +33,8 @@
 #    it otherwise): the bar fills the window's last 22 px in the panels' ground, the roll's
 #    velocity lane ending where it starts.
 # 2c. p3_roll with the rack, the playlist, the piano roll and the mixer at 1000x560, too short
-#    for every panel's least height: the roll keeps its grid of five rows and its lane where
-#    crates/app/src/ui/panels.rs stacks it, the other three squeezed.
+#    for every panel's least height: each shows at its least and the stack scrolls; the roll
+#    keeps its grid of nine rows and its lane where crates/app/src/ui/panels.rs stacks it.
 # 1f. The instrument window opened at start (--open-instrument channel:1), a window of its own,
 #    shot alone (--screenshot-window instrument): on the test set "Round robin" (a drum: one
 #    pad) and the starter document's Kick 909 (a kit drum: one pad), and on the test set
@@ -68,11 +68,13 @@
 #    menu stays above the hint bar and under the rack's header (too tall to flip up there, it
 #    sits as low as it fits), every row whole, no menu label over the bar; and p8_ui
 #    with the playlist alone at 1000x260 and the curve menu open on its automation's handle
-#    (--curve-menu automation:1): the menu flips up at the tracks' foot, every row whole
-#    (positions from crates/app/src/ui/menu.rs, ui/layout.rs and ui/playlist_layout.rs).
-# 2i. p5_gain with the mixer alone at 1000x400, the hint bar on and the add menu of insert 12's
-#    last slot open (--slot-menu insert:12,slot:9): the menu flips up above the hint bar and
-#    moves left inside the window, every row whole; and p10_library with the Library alone at
+#    (--curve-menu automation:1): too short for the playlist's least height, the stack scrolls,
+#    and the menu, which flipped up would leave the stack, sits as low as it fits at the tracks'
+#    foot, on the hint bar's top, every row whole (positions from crates/app/src/ui/menu.rs,
+#    ui/layout.rs, ui/panels.rs and ui/playlist_layout.rs).
+# 2i. p5_gain with the mixer alone at 1000x480, the hint bar on and the add menu of insert 12's
+#    add tile open (--slot-menu insert:12,slot:0): the menu, too tall to flip up, sits on the
+#    hint bar's top, every row whole; and p10_library with the Library alone at
 #    1000x784, the hint bar on and the menu of Port A's row, its last whole row, open
 #    (--library-menu "device:Port A"): the menu flips up at the panel's foot, its row whole
 #    (positions from crates/app/src/ui/menu.rs, ui/mixer_layout.rs, ui/browser.rs and the
@@ -82,13 +84,13 @@
 #    lines, bar numbers and the loop strip (positions from
 #    crates/app/src/ui/playlist_layout.rs, colors as gen_p4_expected.py prints them).
 # 4. p5_gain and p5_delay_sync with the mixer alone: probes fader caps, strip bodies, the
-#    selection outline, route buttons, meters and the slot names (positions from
-#    crates/app/src/ui/mixer_layout.rs, colors of the mixer's palette); and that the name of
-#    strip 12, which runs under the slot panel at 1000 px, stops at the panel's edge. Each run
-#    says which renderer drew it.
+#    selection outline, route buttons, meters, the delay's block (its name, its lit light) and
+#    the add tile (positions from crates/app/src/ui/mixer_layout.rs, colors of the mixer's
+#    palette); and that the name of strip 10, which runs under the effects area at 1000 px,
+#    stops at the area's edge. Each run says which renderer drew it.
 # 4b. The same mixer shots and probes with the software renderer forced (ICED_BACKEND=tiny-skia),
 #    the one the toolkit falls back to without a usable GPU: it draws a clipped canvas frame's
-#    text whole, so only names the mixer cuts itself stop at the slot panel.
+#    text whole, so only names the mixer cuts itself stop at the effects area.
 # 5. The plugin picker over tests/fixtures/p7_catalogue.json's instruments: its rows as text
 #    (the order gen_p7_expected.py prints), three alternating row bands and the dimmer
 #    failed file (positions from crates/app/src/ui/picker.rs). A scripted run reads the
@@ -382,19 +384,19 @@ for backend in picked tiny-skia; do
         forced=(ICED_BACKEND=tiny-skia)
         suffix=_software
     fi
-    shot="$out_dir/p5_slot_menu$suffix.png"
+    shot="$out_dir/p5_add_menu$suffix.png"
     rm -f -- "$shot"
     renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- \
-        --load tests/fixtures/p5_gain.json --panels mixer --window-size 1000x400 --hints on \
-        --slot-menu insert:12,slot:9 --screenshot "$shot" --screenshot-after 800 \
+        --load tests/fixtures/p5_gain.json --panels mixer --window-size 1000x480 --hints on \
+        --slot-menu insert:12,slot:0 --screenshot "$shot" --screenshot-after 800 \
         --quit-after 4000 --stats | sed -n 's/^renderer: //p')"
-    echo "ui-check: the slot menu drew with ${renderer:-no renderer}"
+    echo "ui-check: the add menu drew with ${renderer:-no renderer}"
     if [ "$backend" = tiny-skia ] && [ "$renderer" != tiny-skia ]; then
-        echo "ui-check: the forced software run of the slot menu drew with '$renderer'" >&2
+        echo "ui-check: the forced software run of the add menu drew with '$renderer'" >&2
         exit 1
     fi
     DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
-        probe::fixes::p5_a_slot_menu_shows_whole_at_the_window_foot --nocapture
+        probe::fixes::p5_the_add_menu_shows_whole_at_the_window_foot --nocapture
 
     shot="$out_dir/p5_library_row_menu$suffix.png"
     rm -f -- "$shot"
@@ -470,9 +472,9 @@ mixer_probes() {
     DAWSOME_UI_SHOT="$1" cargo test -q -p dawsome-app -- --ignored --exact \
         probe::tests::p5_screenshot_shows_the_mixer --nocapture
     DAWSOME_UI_SHOT="$1" cargo test -q -p dawsome-app -- --ignored --exact \
-        probe::tests::p5_strip_names_stop_at_the_slot_panel --nocapture
+        probe::tests::p5_strip_names_stop_at_the_effects_area --nocapture
     DAWSOME_UI_SHOT="$2" cargo test -q -p dawsome-app -- --ignored --exact \
-        probe::tests::p5_delay_screenshot_names_the_effect_in_slot_1 --nocapture
+        probe::tests::p5_delay_screenshot_shows_the_delays_block_lit --nocapture
 }
 for fixture in p5_gain p5_delay_sync; do
     renderer="$(mixer_shot "$fixture" "$out_dir/$fixture.png")"

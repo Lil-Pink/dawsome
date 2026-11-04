@@ -65,6 +65,12 @@ drag the line between two of them up or down. Double-click the line to reset the
 
 ![Drag the line between two stacked panels up or down](dividers.png)
 
+Want the piano roll or the mixer on a second screen? Hold the line above it and drag sideways
+instead. The line turns orange along its length and an outline follows your pointer; let go and
+the panel opens in a window of its own, right there. Drag it anywhere, even to another screen;
+it stays above the main window. Close that window and the panel goes back where it was. Changed
+your mind mid-drag? Drag back to resize, or press **Esc**.
+
 ## The toolbar
 The toolbar runs across the top of the main window. On its left are the controls for playing:
 **Play**, **Stop**, **Record** and the metronome. **Space** plays and stops too, so you rarely
@@ -446,7 +452,7 @@ an export puts in the file.
 A new channel plays straight into the master, which is fine while you sketch. When you want to
 work on one sound by itself, give it an insert of its own.
 
-![The master selected: its first slot holds the Limiter](mixer.png)
+![The master selected: its Limiter, switched on](mixer.png)
 
 ## A first routine
 Try this with one sound, such as your kick. Then do the same for the others.
@@ -457,11 +463,11 @@ Try this with one sound, such as your kick. Then do the same for the others.
   one insert along, and **−** one back.)
 - **Name the strip.** Double-click the name at the top of the strip, type "Kick" and press Enter.
   A named strip is easy to find later.
-- **Shape it with EQ.** The panel on the mixer's right shows the selected strip's ten effect
-  slots. Click the first empty slot and choose **EQ**. Its settings appear under the slots. Raise
-  **Low gain** a few dB for a fuller kick. On a piano or a pad, try lowering it instead, so it
-  leaves room for the bass.
-- **Check the master.** Click the master strip. Its first slot already holds the **Limiter**.
+- **Shape it with EQ.** The area on the mixer's right shows the selected strip's effects. Click
+  **+ Add effect** and choose **EQ**. It appears as a block with its settings as knobs, and its
+  green light off: click the light to switch it on. Drag **Low gain** to the right a few dB for a
+  fuller kick. On a piano or a pad, try lowering it instead, so it leaves room for the bass.
+- **Check the master.** Click the master strip. It already holds the **Limiter**, its light on.
   Leave it there: it keeps the loudest moments from distorting.
 - **Balance with the faders.** Play the song. Choose the part that matters most, often the kick
   or the melody, and leave its fader alone. Then move each of the other faders until it sits
@@ -489,23 +495,43 @@ into it.
   stays on until you click it.
 
 ## Effects
-An effect changes the sound that passes through it. Each insert has ten slots, and the sound goes
-through them from top to bottom. Click an empty slot to add one:
+An effect changes the sound that passes through it. Each insert holds up to ten, shown as blocks
+in a row, and the sound goes through them in order, from the first to the last. Click **+ Add
+effect**, after the last block, to add one at the end:
 - **EQ** turns the lows, middles and highs up or down. Reach for it first.
 - **Compressor (Pressure4)** evens out the loud and quiet moments, so a part sits steadily.
 - **Saturator (Density)** adds warmth and grit.
 - **Delay** repeats the sound as an echo, in milliseconds or in time with the tempo.
 - **Reverb** adds the sound of a room.
 - **Limiter** keeps the peaks under a ceiling.
+- **Filter** cuts the highs or the lows, keeps only a band, or cuts a narrow notch. Sweep its
+  cutoff for a rise.
+- **Distortion** pushes the sound hard, from a little warmth to heavy fuzz.
+- **Chorus** thickens and widens a sound, as if several played it together.
+- **Flanger** sweeps a whooshing "jet" through the sound.
+- **Phaser** sweeps soft notches up and down the sound, a slow swirl.
+- **Gate** silences the quiet moments between the hits, such as a noisy tail or hum.
+- **Stereo width** makes the sound wider or narrower. At 0% it is mono.
 
-Plugin effects, CLAP or VST3, go in the same slots. Click a full slot to show its settings, and
-right-click it to remove it or move it.
+Plugin effects, CLAP or VST3, go in the same row; double-click a plugin's name to open its own
+window.
+
+Every block works the same way:
+- **The green light** switches the effect on or off, just like a strip's. **A new effect starts
+  off**, so you can hear the sound without it first; click its light to hear the difference.
+- **The knobs** are its settings. Drag one to the right to turn it up, double-click it to put it
+  back, and right-click it to automate it. A setting with a few choices, such as the Filter's
+  type, is a button: click it for the next choice.
+- **The order** matters: an EQ before a distortion sounds different from one after it. Drag a
+  block by its name past its neighbour to swap them, or click the small ‹ and › in its corner to
+  move it one place.
+- **Remove it** with the × in its corner, or right-click it and choose **Remove**.
 
 ## Sharing one reverb with a send
 A send passes some of a strip's sound to another strip as well. It's the usual way to put several
 sounds in the same room.
-- Put a **Reverb** on a spare insert, name it "Room", and turn the reverb's **Mix** all the way
-  up. The dry sound still comes through the strips that send to it.
+- Put a **Reverb** on a spare insert, switch its light on, name the insert "Room", and turn the
+  reverb's **Mix** all the way up. The dry sound still comes through the strips that send to it.
 - Select a strip you want in the room. Click the send button under the Room strip's fader, then
   drag the knob under that button to set how much goes there.
 - A send that would make a loop is refused.
@@ -514,8 +540,8 @@ sounds in the same room.
 A sound file, and your speakers, can only hold sound up to a certain level. Anything louder is
 clipped: its peaks are cut flat, and it sounds harsh and crackly. A chord, or a drum hit over a
 bass, adds up and gets there quickly. So every new project starts with a **Limiter** in the
-master's first slot, holding the peaks just under the top (−0.3 dB). A project saved before the
-Limiter came keeps its master as it was; add one from an empty slot.
+master, holding the peaks just under the top (−0.3 dB). A project saved before the Limiter came
+keeps its master as it was; add one with **+ Add effect**.
 
 ## Plugins
 Dawsome hosts CLAP and VST® 3 plugins, instruments and effects made by others. Surge XT, a free
@@ -525,9 +551,9 @@ both formats is listed once, as CLAP.
 Double-click a plugin channel's name to open the plugin's own window. A plugin that has none opens
 its parameter window instead: a list of its settings. Right-click the name for the channel's
 menu: **Plugin window…** opens the plugin's own window too, and **Parameters…** opens the list for
-any plugin (a mixer slot's menu has it for an effect). Drag a setting's slider to change it (hold
-Shift to go finer), double-click it for its default, and right-click it to automate it. A plugin
-that crashes can't take Dawsome down with it, and its settings are saved in your project.
+any plugin (an effect's right-click menu in the mixer has it). Drag a setting's slider to change
+it (hold Shift to go finer), double-click it for its default, and right-click it to automate it. A
+plugin that crashes can't take Dawsome down with it, and its settings are saved in your project.
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 

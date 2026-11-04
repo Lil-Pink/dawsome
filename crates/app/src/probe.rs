@@ -883,66 +883,106 @@ mod tests {
         assert!(wrong.is_empty(), "wrong color at {wrong:?}");
     }
 
-    // p5_delay_sync with the mixer alone (insert 1 selected): slot 1 holds the delay, so its row
-    // box [830, 990] × [124, 142] has bright text (every channel above 0x90); slot 2 is empty, its
-    // dim dash leaves the box [830, 990] × [146, 164] dark. (Pins moved 22 px
-    // down under the 72 px toolbar and the mixer's 6 px handle: 110 and 132; then 8 px up under
-    // the 64 px toolbar.)
+    // p5_delay_sync with the mixer alone at 1000 x 560 (insert 1 selected, its desk 560 − 64 − 6
+    // = 490 px): the effects area starts at 1000 − 332 = 668 (sixteen inserts end at 1068), its
+    // view at (674, 52). Insert 1's delay, four knobs, is the first block, 252 x 84 at (674, 52):
+    // its name box (698..874, under the 64 px toolbar and the 6 px handle window y 122..144)
+    // has bright text (every channel above 0x90), and its light at (674 + 12, 52 + 11), window
+    // (686, 133), is lit #6CC24A: the fixture says nothing of it, so it is on. The add tile,
+    // 192 x 84, does not fit beside it (674 + 252 + 6 + 192 = 1124 > 986) and starts the next
+    // line at (674, 142): it is drawn (pixels other than the area's ground) and its words are
+    // dim (no bright pixel), window box [680, 860] × [216, 292].
     #[test]
     #[ignore = "needs a screenshot of p5_delay_sync with --panels mixer: scripts/ui-check.sh takes one and runs this"]
-    fn p5_delay_screenshot_names_the_effect_in_slot_1() {
-        use crate::ui::mixer_layout as mix;
-
-        let shot = read_ui_shot();
-        let width = shot.width as f32 / shot.scale;
-        let row = |slot: u8| {
-            let rect = mix::slot_rect(slot, width);
-            let top = mix::in_window(rect.position()).y;
-            ((rect.x + 30.0)..(rect.x + 190.0), (top + 2.0)..(top + 20.0))
-        };
-        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);
-        let (x1, y1) = row(0);
-        let (x2, y2) = row(1);
-        assert_eq!((x1.start, y1.start, y1.end), (830.0, 124.0, 142.0));
-        assert_eq!((x2.start, y2.start, y2.end), (830.0, 146.0, 164.0));
-        let filled = shot.count_matching(x1, y1, bright);
-        let empty = shot.count_matching(x2, y2, bright);
-        println!("slot 1 bright px {filled}, slot 2 bright px {empty}");
-        assert!(filled > 0, "slot 1 names its effect");
-        assert_eq!(empty, 0, "slot 2 is empty");
-    }
-
-    // p5_gain with the mixer alone at 1000 px: strip 12 (x 756..816) runs under the slot panel
-    // (from x 800), and its name must stop at the panel's edge rather than run into the
-    // panel's title ("Insert 3", from x 806): the panel's ground between the two, over the
-    // title and name rows (window y 94..118 under the 64 px toolbar and the mixer's handle;
-    // pins moved from 80..104, and 102..126 under the 72 px toolbar), holds no text.
-    #[test]
-    #[ignore = "needs a screenshot of p5_gain with --panels mixer: scripts/ui-check.sh takes one and runs this"]
-    fn p5_strip_names_stop_at_the_slot_panel() {
+    fn p5_delay_screenshot_shows_the_delays_block_lit() {
         use dawsome_engine::project::InsertId;
 
         use crate::ui::mixer_layout as mix;
 
         let shot = read_ui_shot();
         let width = shot.width as f32 / shot.scale;
-        let edge = mix::slot_panel_left(width);
-        let strip = mix::strip_left(InsertId(12), 0.0);
-        assert_eq!((width, edge), (1000.0, 800.0));
+        let desk = mix::Desk {
+            size: iced::Size::new(width, 560.0 - layout::TOOLBAR_HEIGHT - mix::HANDLE_HEIGHT),
+            scroll: 0.0,
+            last: InsertId(16),
+            effects_scroll: 0.0,
+        };
+        let rects = mix::chain_rects(&[4], desk);
+        let [delay, tile] = rects[..] else {
+            panic!("the delay and the add tile: {rects:?}");
+        };
+        let window = |rect: iced::Rectangle| iced::Rectangle {
+            y: mix::in_window(rect.position()).y,
+            ..rect
+        };
+        let name = window(mix::effect_name_rect(delay));
+        let light = mix::in_window(mix::effect_led_center(delay));
+        let tile = window(tile);
+        assert_eq!(
+            (name.x, name.x + name.width, name.y, name.y + name.height),
+            (698.0, 874.0, 122.0, 144.0)
+        );
+        assert_eq!(light, Point::new(686.0, 133.0));
+        assert_eq!((tile.x, tile.y), (674.0, 212.0));
+        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);
+        let named = shot.count_matching(
+            name.x..name.x + name.width,
+            name.y..name.y + name.height,
+            bright,
+        );
+        let inside = (tile.x + 6.0)..(tile.x + tile.width - 6.0);
+        let rows = (tile.y + 4.0)..(tile.y + tile.height - 4.0);
+        let ground = rgb8(crate::ui::style::PANEL);
+        let drawn = shot.count_matching(inside.clone(), rows.clone(), |pixel| {
+            !near(pixel, ground, TOLERANCE)
+        });
+        let loud = shot.count_matching(inside, rows, bright);
+        println!("name bright px {named}, tile drawn px {drawn}, tile bright px {loud}");
+        assert!(named > 0, "the delay's block names it");
+        let lit = vec![(
+            "the delay's light, on".to_owned(),
+            light,
+            rgb8(crate::ui::style::TRACK_LED_ON),
+        )];
+        let wrong = wrong_colors(&shot, &lit);
+        assert!(wrong.is_empty(), "wrong color at {wrong:?}");
+        assert!(drawn > 0, "the add tile is drawn");
+        assert_eq!(loud, 0, "the add tile's words are dim");
+    }
+
+    // p5_gain with the mixer alone at 1000 px: the effects area starts at 1000 − 332 = 668, so
+    // strip 10 (x 632..692) runs under it, and its name must stop at the area's edge rather
+    // than run into the area's title ("Insert 3", from x 674): the area's ground between the
+    // two, over the title and name rows (window y 94..114 under the 64 px toolbar and the
+    // mixer's handle: the title from mixer y 24, the compact strip's name row 28..44), holds no
+    // text. (Strip 12 crossed the slot panel's edge at 800 before the effects area took the
+    // strips' room. Pin moved with the compact strip: the name row was 32..48, to 118.)
+    #[test]
+    #[ignore = "needs a screenshot of p5_gain with --panels mixer: scripts/ui-check.sh takes one and runs this"]
+    fn p5_strip_names_stop_at_the_effects_area() {
+        use dawsome_engine::project::InsertId;
+
+        use crate::ui::mixer_layout as mix;
+
+        let shot = read_ui_shot();
+        let width = shot.width as f32 / shot.scale;
+        let edge = mix::effects_left(width, InsertId(16));
+        let strip = mix::strip_left(InsertId(10), 0.0);
+        assert_eq!((width, edge), (1000.0, 668.0));
         assert!(
             strip < edge && strip + mix::STRIP_WIDTH > edge,
-            "strip 12 crosses the edge"
+            "strip 10 crosses the edge"
         );
-        let title_left = edge + mix::SLOT_NUMBER_INSET;
-        let rows = mix::in_window(Point::new(0.0, mix::SLOT_NAME_TOP)).y
+        let title_left = edge + mix::EFFECTS_INSET;
+        let rows = mix::in_window(Point::new(0.0, mix::TITLE_TOP)).y
             ..mix::in_window(Point::new(0.0, mix::NAME_TOP + mix::NAME_HEIGHT)).y;
-        assert_eq!((rows.start, rows.end), (94.0, 118.0));
+        assert_eq!((rows.start, rows.end), (94.0, 114.0));
         let ground = rgb8(crate::ui::style::PANEL);
         let text = shot.count_matching(edge..title_left, rows, |pixel| {
             !near(pixel, ground, TOLERANCE)
         });
-        println!("pixels other than the panel's ground left of its title: {text}");
-        assert_eq!(text, 0, "strip 12's name runs into the slot panel");
+        println!("pixels other than the area's ground left of its title: {text}");
+        assert_eq!(text, 0, "strip 10's name runs into the effects area");
     }
 
     // p8_notice at 1000 px with no audio device: two missing samples with long names and the

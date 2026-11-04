@@ -236,6 +236,9 @@ struct Running {
     values: Vec<f32>,
     /// It stands in for a plugin that could not be created (missing, or it failed).
     stand_in: bool,
+    /// Its effect was on at the last compile (a plugin channel always is; a processor made
+    /// since starts clear, so it counts as on): one that was off is cleared when switched on.
+    on: bool,
 }
 
 /// A sound file as a channel plays it: its path as the project writes it, and its edits.
@@ -847,8 +850,24 @@ impl Compiler {
                     processor,
                     values,
                     stand_in,
+                    on: true,
                 },
             );
+        }
+        // An effect switched back on starts clear: while it was off it was passed by holding
+        // what it had (a delay's echoes, a reverb's tail), which would sound again.
+        for effect in project
+            .mixer
+            .inserts
+            .iter()
+            .flat_map(|insert| &insert.effects)
+        {
+            if let Some(running) = self.running.get_mut(&ProcessorOwner::Effect(effect.id)) {
+                if effect.on && !running.on {
+                    delta.reset.push(running.slot);
+                }
+                running.on = effect.on;
+            }
         }
         let installed: BTreeSet<ProcessorSlot> =
             delta.install.iter().map(|&(slot, _)| slot).collect();
@@ -944,9 +963,12 @@ impl Compiler {
                     fader: Ramp::settled(fader_gain(insert.fader)),
                     pan: Ramp::settled(insert.pan),
                     audible,
+                    // An effect that is off is left out: its processor keeps running in its
+                    // slot, settings and all, and the insert's sound passes it by.
                     effects: insert
                         .effects
                         .iter()
+                        .filter(|effect| effect.on)
                         .filter_map(|effect| self.running.get(&ProcessorOwner::Effect(effect.id)))
                         .map(|running| running.slot)
                         .collect(),
@@ -1796,12 +1818,74 @@ mod tests {
             slot: 0,
             id: EffectId(2),
             processor: ProcessorRef::new("dawsome.reverb"),
+            on: true,
         };
         let added = edit(&mut project, again);
         let installed: Vec<ProcessorSlot> = added.delta.install.iter().map(|&(s, _)| s).collect();
         assert_eq!(installed, [ProcessorSlot(1)], "slot 0 is not back yet");
         compiler.release([ProcessorSlot(0)]);
         assert_eq!(compiler.free.first(), Some(&ProcessorSlot(0)));
+    }
+
+    // An effect switched off leaves its insert's chain and keeps its processor (no install, no
+    // removal, its slot still taking live values); switched on again it is back in the chain
+    // and cleared once, in the same update; an edit that leaves it on clears nothing. An effect
+    // added off gets its processor but no place in the chain.
+    #[test]
+    fn an_effect_that_is_off_is_passed_by_and_cleared_when_switched_on() {
+        use crate::edit::Edit;
+
+        let mut project = load(P5_DELAY_SYNC);
+        let mut compiler = Compiler::new();
+        compile_update(&mut compiler, &project, &Touched::default());
+        let mut edit = |project: &mut Project, edit| {
+            let applied = crate::edit::apply(project, edit).expect("applies");
+            compile_update(&mut compiler, project, &applied.touched)
+        };
+        let switch = |on| Edit::SetEffectOn {
+            effect: EffectId(1),
+            on,
+        };
+        let off = edit(&mut project, switch(false));
+        assert!(off.plan.mixer.order[0].effects.is_empty(), "passed by");
+        assert_eq!(off.plan.mixer.effects, [(EffectId(1), ProcessorSlot(0))]);
+        assert!(off.delta.install.is_empty() && off.delta.remove.is_empty());
+        assert!(off.delta.reset.is_empty());
+        let on = edit(&mut project, switch(true));
+        assert_eq!(on.plan.mixer.order[0].effects, [ProcessorSlot(0)]);
+        assert!(on.delta.install.is_empty() && on.delta.remove.is_empty());
+        assert_eq!(on.delta.reset, [ProcessorSlot(0)]);
+        let feedback = Edit::SetEffectParam {
+            effect: EffectId(1),
+            key: "feedback".into(),
+            value: Some(0.75),
+        };
+        assert!(edit(&mut project, feedback).delta.reset.is_empty());
+        let added = edit(
+            &mut project,
+            Edit::AddEffect {
+                insert: InsertId(1),
+                slot: 1,
+                id: EffectId(2),
+                processor: ProcessorRef::new("dawsome.reverb"),
+                on: false,
+            },
+        );
+        let installed: Vec<ProcessorSlot> = added.delta.install.iter().map(|&(s, _)| s).collect();
+        assert_eq!(installed, [ProcessorSlot(1)]);
+        assert_eq!(added.plan.mixer.order[0].effects, [ProcessorSlot(0)]);
+        let first_on = edit(
+            &mut project,
+            Edit::SetEffectOn {
+                effect: EffectId(2),
+                on: true,
+            },
+        );
+        assert_eq!(
+            first_on.plan.mixer.order[0].effects,
+            [ProcessorSlot(0), ProcessorSlot(1)]
+        );
+        assert_eq!(first_on.delta.reset, [ProcessorSlot(1)]);
     }
 
     // A plugin this build could not create stands in silently, and asking for the stand-ins
@@ -1841,6 +1925,7 @@ mod tests {
                     id: EffectId(next),
                     slot,
                     processor: ProcessorRef::new("vendor.missing"),
+                    on: true,
                 });
                 next += 1;
             }

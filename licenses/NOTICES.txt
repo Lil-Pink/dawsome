@@ -1,4 +1,4 @@
-Dawsome 0.1.1 bundles these works; each keeps its own license.
+Dawsome 0.1.2 bundles these works; each keeps its own license.
 
 Dawsome itself is GPL-3.0-or-later: NOTICE holds its notice and LICENSE the license. This file
 holds the license and notice texts of the works built into its two programs, dawsome and

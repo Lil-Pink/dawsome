@@ -14,7 +14,13 @@ The rules:
             default -0.3); exp2 from + - * / alone (gen_p11's), so 0 dB is exactly 1
   release   r = exp2(-log2(e) / (ms / 1000 * sr)) for the release parameter ms (an f32,
             1..1000, default 100): the gain's reduction falls to 1/e of itself in that time
+  gain      G = exp2(dB / 20 * log2 10) for the gain parameter dB (an f32, 0..24, default 0;
+            added later, an additive key: a project without it plays as
+            before, since G = 1 exactly multiplies by exactly 1), kept in f64: the input is
+            raised by G before the limiter looks at it, the Gain knob other DAWs' limiters
+            have
   limiter   per stereo frame (l, r) of its input, in f64, from a reduction d = 0:
+              l, r = l * G, r * G (after an infinite side is held, below)
               d = d * r, set to 0 when below 1e-30 (the engine's TINY rule)
               g = 1 - d
               p = max(|l|, |r|)
@@ -47,8 +53,8 @@ The rules:
             reading, speed = semitone_speed * tune * F / R
   band      such a zone's file above the project's rate (F > R) is low-passed once, on load,
             at F, its frames as many and its points as written: read at F / R times its speed a
-            frame holds everything up to F / 2, and above R / 2 that folds down (found by the
-            review of the not-whole rule: a 96 kHz file's 32 kHz tone came out at 16 kHz at its
+            frame holds everything up to F / 2, and above R / 2 that folds down (under the
+            not-whole rule alone, a 96 kHz file's 32 kHz tone came out at 16 kHz at its
             full level, where the converter that rule bypasses left it at -167 dBFS). The taps h,
             2H + 1 of them (H their half), from + - * / and sqrt alone (sin and the Bessel I0
             by their series), as band_taps() restates them:
@@ -85,6 +91,9 @@ The rules:
   p24_dc.json      key 64: 0.1 s of silence, then 0.25 s of C exactly (a step to the ceiling)
   p24_hard.json    p24_burst with the ceiling at 0 dBFS and the release at 1 ms
   p24_silence.json the chord set with no notes, the Limiter
+  p24_gain12.json  p24_under (key 60 on the chord set, -1 dBFS) with the Limiter's gain at +12 dB:
+                   +11 dBFS into it, so the limiter works throughout (louder and denser at the
+                   ceiling)
   p24_loop96/      a 44.1 kHz file (20 periods of a 100 Hz sine, 441 frames each) looping 5
                    periods [4410, 6614]; p24_loop96.json plays it at 96 kHz for one bar
   p24_looplast/    a 48 kHz file (20 periods of a 100 Hz sine, 480 frames each) looping its last
@@ -97,7 +106,7 @@ The rules:
                    limited first: its file is above the project's rate)
   p24_alias96/     a 96 kHz file (267 periods of 15 frames: f32(0.25 sin(2 pi 19200 i / 96000) +
                    0.25 sin(2 pi 32000 i / 96000))) looping [2000, 3004], 1005 frames, 502.5 at
-                   48 kHz; p24_alias96.json plays it at 48 kHz (the review's probe)
+                   48 kHz; p24_alias96.json plays it at 48 kHz
   p24_seam96/      a 96 kHz file of 4200 frames: 0.5 sin(2 pi i / 105) up to the loop's end, 0.5
                    held after it (the file goes on with another sound); looping 3 periods
                    [2100, 2414], 315 frames, 157.5 at 48 kHz; p24_seam96.json plays it at 48 kHz
@@ -109,7 +118,8 @@ The cases (the spec's five, and the loops'):
   (2) chord     two full-scale notes summed, then limited: to the bit
   (3) under     a mix under the ceiling throughout: bit for bit the render without the limiter
   (4) saturated the spike (the gain snaps to C/10 and recovers), the DC step at C (no change),
-                hard (0 dB, 1 ms), silence (every frame +0.0)
+                hard (0 dB, 1 ms), silence (every frame +0.0), gain12 (the chord's -1 dBFS sine
+                raised 12 dB, the first frame past C exactly on C, every frame at C or under)
   (5) blocks    burst, chord and spike at --block 1, 7, 64 and 4096 give the 512 render's bytes
   (6) loop96    the render repeats every N * 96000/44100 = 4800 frames from the loop's start
                 (9600), to the bit
@@ -177,8 +187,12 @@ def release_of(ms, rate):
 F32_MAX = 3.4028234663852886e38  # f32::MAX
 
 
-def limit(left, right, db=DEFAULT_CEILING_DB, ms=DEFAULT_RELEASE_MS, rate=SR):
-    c, r = ceiling_of(db), release_of(ms, rate)
+def gain_of(db):
+    return exp2(float(f32(db)) / 20.0 * LOG2_10)
+
+
+def limit(left, right, db=DEFAULT_CEILING_DB, ms=DEFAULT_RELEASE_MS, rate=SR, gain_db=0.0):
+    c, r, gain = ceiling_of(db), release_of(ms, rate), gain_of(gain_db)
     d = 0.0
     out_l, out_r = [], []
     for x, y in zip(left, right):
@@ -187,7 +201,7 @@ def limit(left, right, db=DEFAULT_CEILING_DB, ms=DEFAULT_RELEASE_MS, rate=SR):
         g = 1.0 - d
         # an infinite side is held to f32's largest value first (the engine's rule), so it
         # leaves at the ceiling instead of as NaN
-        x, y = (max(-F32_MAX, min(F32_MAX, v)) for v in (x, y))
+        x, y = (max(-F32_MAX, min(F32_MAX, v)) * gain for v in (x, y))
         p = max(abs(x), abs(y))
         if p * g > c:
             g = c / p
@@ -382,6 +396,7 @@ PROJECTS = {
     "p24_dc.json": project(TONES_SET, [64]),
     "p24_hard.json": project(TONES_SET, [60], volume=2.0, params=HARD),
     "p24_silence.json": project(CHORD_SET, []),
+    "p24_gain12.json": project(CHORD_SET, [60], params={"gain_db": 12.0}),
     "p24_loop96.json": project("p24_loop96/sine.sfz", [60], limiter=False, rate=UP_RATE),
     "p24_looplast.json": project("p24_looplast/sine.sfz", [60], limiter=False),
     "p24_loop48.json": project("p24_loop48/sine.sfz", [60], limiter=False, rate=48000),
@@ -420,7 +435,7 @@ TONE_ZONES = [TONES[k] for k in sorted(TONES)]
 def bus(name):
     if name in ("burst", "hard"): return mixed(TONE_ZONES, [60], 2.0)
     if name == "chord": return mixed([CHORD], [60, 67], 1.0)
-    if name == "under": return mixed([CHORD], [60], 1.0)
+    if name in ("under", "gain12"): return mixed([CHORD], [60], 1.0)
     if name == "spike": return mixed(TONE_ZONES, [62], 1.0)
     if name == "dc": return mixed(TONE_ZONES, [64], 1.0)
     if name == "silence": return [0.0] * FRAMES, [0.0] * FRAMES
@@ -436,7 +451,9 @@ RENDERS = {
     "dc": ("p24_dc.json", DEFAULT_CEILING_DB, DEFAULT_RELEASE_MS),
     "hard": ("p24_hard.json", HARD["ceiling_db"], HARD["release_ms"]),
     "silence": ("p24_silence.json", DEFAULT_CEILING_DB, DEFAULT_RELEASE_MS),
+    "gain12": ("p24_gain12.json", DEFAULT_CEILING_DB, DEFAULT_RELEASE_MS),
 }
+GAIN_DB = {"gain12": 12.0}                           # the cases with a gain; 0 dB elsewhere
 
 
 def sha256_of(left, right):
@@ -461,14 +478,15 @@ def probes(left, right, around):
 def case_render(name):
     _, db, ms = RENDERS[name]
     left, right = bus(name)
-    return (left, right), limit(left, right, db, ms)
+    return (left, right), limit(left, right, db, ms, gain_db=GAIN_DB.get(name, 0.0))
 
 
 def render_answer(name):
     fixture, db, ms = RENDERS[name]
     (inl, inr), (left, right) = case_render(name)
     c = ceiling_of(db)
-    over = first_over(inl, inr, c)
+    gain = gain_of(GAIN_DB.get(name, 0.0))
+    over = first_over([x * gain for x in inl], [y * gain for y in inr], c)
     marks = [over] if over is not None else []
     marks += [LOUD_FRAMES] if name in ("burst", "hard") else []
     marks += [SPIKE_AT] if name == "spike" else []
@@ -481,6 +499,10 @@ def render_answer(name):
               "first_over": None if over is None else [over, left[over], right[over]],
               "unchanged": (left, right) == (inl, inr),
               "probes": probes(left, right, marks)}
+    if name in GAIN_DB:
+        answer["gain_db"] = GAIN_DB[name]
+        answer["gain"] = gain
+        answer["peak_in_raised"] = answer["peak_in"] * gain
     return answer
 
 
@@ -618,7 +640,9 @@ def expected():
                         "params": [{"key": "ceiling_db", "default": DEFAULT_CEILING_DB,
                                     "min": -12.0, "max": 0.0, "unit": "dB"},
                                    {"key": "release_ms", "default": DEFAULT_RELEASE_MS,
-                                    "min": 1.0, "max": 1000.0, "unit": "ms"}],
+                                    "min": 1.0, "max": 1000.0, "unit": "ms"},
+                                   {"key": "gain_db", "default": 0.0,
+                                    "min": 0.0, "max": 24.0, "unit": "dB"}],
                         "ceiling_default": C_DEFAULT, "ceiling_0": ceiling_of(0.0),
                         "ceiling_min": ceiling_of(-12.0),
                         "release_default_44100": release_of(DEFAULT_RELEASE_MS, SR),

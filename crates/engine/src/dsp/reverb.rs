@@ -16,7 +16,7 @@
 //! - Every length scales with the sample rate, rounded to the nearest frame.
 
 use super::{blend, snap};
-use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory};
+use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Taper};
 
 pub const ID: &str = "dawsome.reverb";
 
@@ -41,6 +41,7 @@ const fn unit_param(key: &'static str, label: &'static str, default: f32) -> Par
         default,
         unit: "%",
         whole: false,
+        taper: Taper::Linear,
     }
 }
 

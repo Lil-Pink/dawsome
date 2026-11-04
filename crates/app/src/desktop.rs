@@ -8,6 +8,8 @@ use iced::window::{self, Icon};
 use iced::{Point, Size};
 use thiserror::Error;
 
+use crate::ui::panels::Panel;
+
 /// The window's application id, and its class on X11: the name of the desktop entry
 /// (`assets/dawsome.desktop`), so a Linux desktop shows the entry's name and icon for the window.
 #[cfg(target_os = "linux")]
@@ -50,7 +52,7 @@ pub fn window_settings(size: Size) -> window::Settings {
 
 /// The app's windows beside the main one, each an OS window the app opens and closes to match
 /// its state: the instrument window, the Settings window, the Help window, the parameter
-/// window and the sample editor.
+/// window, the sample editor, and a stacked panel popped out of the main window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopOut {
     Instrument,
@@ -60,7 +62,17 @@ pub enum PopOut {
     Params,
     /// The sample editor: one channel's sound.
     SampleEditor,
+    /// The rack, the playlist, the piano roll or the mixer, popped out of the stack.
+    Panel(Panel),
 }
+
+/// A popped panel's window when no size of its own is known (a size kept that is unusable):
+/// as wide as the default main window, a little taller than the piano roll's natural height.
+pub const PANEL_WINDOW_SIZE: Size = Size::new(1000.0, 480.0);
+
+/// The least width of a popped panel's window: the rack's knobs and a few steps, the playlist's
+/// and the piano roll's tools, the mixer's header.
+pub const PANEL_WINDOW_MIN_WIDTH: f32 = 480.0;
 
 impl PopOut {
     /// Its size at its first opening.
@@ -71,10 +83,12 @@ impl PopOut {
             PopOut::Help => crate::ui::help_window::WINDOW_SIZE,
             PopOut::Params => crate::ui::param_window::WINDOW_SIZE,
             PopOut::SampleEditor => crate::ui::sample_editor::WINDOW_SIZE,
+            PopOut::Panel(_) => PANEL_WINDOW_SIZE,
         }
     }
 
-    /// The least the window is made.
+    /// The least the window is made. A popped panel's: its least height in the stack, the
+    /// rack's with its header and a row ([`crate::ui::panels::min_height`]).
     pub fn least_size(self) -> Size {
         match self {
             PopOut::Instrument => crate::ui::instrument_window::WINDOW_MIN,
@@ -82,6 +96,10 @@ impl PopOut {
             PopOut::Help => crate::ui::help_window::WINDOW_MIN,
             PopOut::Params => crate::ui::param_window::WINDOW_MIN,
             PopOut::SampleEditor => crate::ui::sample_editor::WINDOW_MIN,
+            PopOut::Panel(panel) => Size::new(
+                PANEL_WINDOW_MIN_WIDTH,
+                crate::ui::panels::min_height(panel, f32::INFINITY),
+            ),
         }
     }
 }

@@ -13,7 +13,9 @@ use dawsome_engine::compile::{ClipHint, ClipSound, Compiler, Sounds};
 use dawsome_engine::dsp::sampler::SampleBuffer;
 use dawsome_engine::edit::{self, Edit, EditError, Touched};
 use dawsome_engine::plan::{PlanUpdate, PlayMode};
-use dawsome_engine::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Registry};
+use dawsome_engine::processor::{
+    ParamInfo, ProcessContext, Processor, ProcessorFactory, Registry, Taper,
+};
 use dawsome_engine::project::{
     AutomationId, AutomationPoint, AutomationTarget, ChannelId, Clip, ClipId, Curve, Effect,
     EffectId, InsertId, Pattern, PatternId, PatternKind, ProcessorRef, Project, TrackId,
@@ -500,6 +502,7 @@ const MIX: ParamInfo = ParamInfo {
     default: 0.3,
     unit: "%",
     whole: false,
+    taper: Taper::Linear,
 };
 
 impl ProcessorFactory for RecorderFactory {
@@ -542,6 +545,7 @@ fn grid_project() -> Project {
         id: EffectId(1),
         slot: 0,
         processor: ProcessorRef::new("test.recorder"),
+        on: true,
     });
     project.mixer.next_effect_id = EffectId(2);
     edit::apply(
@@ -908,6 +912,7 @@ fn process_never_touches_the_heap_with_audio_clips_and_automation_in_play() {
         id: EffectId(1),
         slot: 0,
         processor: ProcessorRef::new("dawsome.delay"),
+        on: true,
     });
     project.mixer.next_effect_id = EffectId(2);
     let first = project.playlist.next_clip_id;

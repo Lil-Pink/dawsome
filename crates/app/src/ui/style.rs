@@ -307,6 +307,20 @@ pub fn callout(_theme: &Theme) -> container::Style {
     }
 }
 
+/// The outline of the window a panel pops out into, following the cursor while a divider is
+/// dragged sideways: the dialogs' dimming inside an accent frame.
+pub fn pop_out_outline(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color::from_rgba8(0x0B, 0x0C, 0x0E, 0.6))),
+        border: Border {
+            color: ACCENT,
+            width: 2.0,
+            radius: 3.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
 /// A dialog box, and the File menu's list.
 pub fn dialog(_theme: &Theme) -> container::Style {
     container::Style {

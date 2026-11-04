@@ -69,6 +69,8 @@ pub enum ShotWindow {
     Params,
     /// The sample editor.
     SampleEditor,
+    /// A stacked panel's own window, popped out of the stack.
+    Panel(crate::ui::panels::Panel),
 }
 
 /// The app's windows a screenshot can be of, as far as they are open.
@@ -86,6 +88,9 @@ pub struct Windows {
     pub params: Option<window::Id>,
     /// The sample editor's window, while it is open.
     pub sample_editor: Option<window::Id>,
+    /// Each stacked panel's own window while it is popped out, in
+    /// [`crate::ui::panels::Panel::STACKED`]'s order.
+    pub panels: [Option<window::Id>; 4],
 }
 
 /// Steps of a headless run.
@@ -201,6 +206,21 @@ impl Runner {
                             return self.fail("there is no sample editor to take a screenshot of")
                         }
                     },
+                    (ShotWindow::Panel(panel), _) => {
+                        let popped = panel
+                            .stacked_index()
+                            .and_then(|at| windows.panels.get(at).copied().flatten());
+                        match popped {
+                            Some(id) => Task::done(Some(id)),
+                            None => {
+                                return self.fail(&format!(
+                                    "there is no window of the {} popped out to take a \
+                                     screenshot of",
+                                    panel.title()
+                                ))
+                            }
+                        }
+                    }
                 };
                 self.capture = Capture::InFlight;
                 shot.and_then(window::screenshot).map(Message::Captured)
@@ -377,6 +397,22 @@ mod tests {
             };
             let _ = runner.update(Message::CaptureDue, open);
             assert_eq!(failed.load(Ordering::Relaxed), fails, "{sample_editor:?}");
+        }
+        // A popped panel's own window likewise, found in its place among the four (the piano
+        // roll's is the third); another panel's window open is not it.
+        let roll = crate::ui::panels::Panel::PianoRoll;
+        let id = Some(window::Id::unique());
+        for (panels, fails) in [
+            ([None; 4], true),
+            ([None, None, None, id], true),
+            ([None, None, id, None], false),
+        ] {
+            let failed = Arc::new(AtomicBool::new(false));
+            let mut runner = Runner::new(script.clone(), Arc::clone(&failed));
+            runner.shoot(ShotWindow::Panel(roll));
+            let open = Windows { panels, ..open };
+            let _ = runner.update(Message::CaptureDue, open);
+            assert_eq!(failed.load(Ordering::Relaxed), fails, "{panels:?}");
         }
     }
 
