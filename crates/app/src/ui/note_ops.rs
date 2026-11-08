@@ -317,25 +317,36 @@ pub fn humanized(target: &Target, notes: &[Note], seed: u64, step: Ticks) -> Cha
     replaced(target, notes, add)
 }
 
-/// `notes` that start from tick `from.0` to tick `to.0` (either way round) given velocities on
-/// the line from `from.1` to `to.1` steps, by where each starts, rounded half away from zero;
-/// the rest stay. A line no wider than a tick gives its notes the end's value.
-pub fn ramped(target: &Target, notes: &[Note], from: (Ticks, u8), to: (Ticks, u8)) -> Change {
+/// `notes` whose stems stand from tick `from.0` to tick `to.0` (either way round) given
+/// velocities on the line from `from.1` to `to.1` steps, by the tick each one's stem stands for
+/// (`stem_tick`; none for a note without a stem in view), rounded half away from zero; the rest
+/// stay. A line no wider than a tick gives its notes the end's value. Why the stem's tick and
+/// not the start: a note scrolled half out of view has its stem pinned at the lane's left edge,
+/// right of its start, where the ramp is drawn across it.
+pub fn ramped(
+    target: &Target,
+    notes: &[Note],
+    from: (Ticks, u8),
+    to: (Ticks, u8),
+    stem_tick: impl Fn(&Note) -> Option<Ticks>,
+) -> Change {
     let (low, high) = (from.0 .0.min(to.0 .0), from.0 .0.max(to.0 .0));
-    let reached: Vec<Note> = notes
+    let reached: Vec<(Note, i64)> = notes
         .iter()
-        .filter(|note| (low..=high).contains(&note.start.0))
-        .cloned()
+        .filter_map(|note| {
+            let tick = stem_tick(note)?.0;
+            (low..=high).contains(&tick).then(|| (note.clone(), tick))
+        })
         .collect();
     let width = to.0 .0 - from.0 .0;
     let rise = i64::from(to.1) - i64::from(from.1);
     let add = reached
         .iter()
-        .map(|note| {
+        .map(|(note, tick)| {
             let steps = if width == 0 {
                 i64::from(to.1)
             } else {
-                let scaled = rise * (note.start.0 - from.0 .0);
+                let scaled = rise * (tick - from.0 .0);
                 let rounded = (scaled.abs() * 2 + width.abs()) / (2 * width.abs());
                 i64::from(from.1) + rounded * scaled.signum() * width.signum()
             };
@@ -347,6 +358,7 @@ pub fn ramped(target: &Target, notes: &[Note], from: (Ticks, u8), to: (Ticks, u8
             }
         })
         .collect();
+    let reached: Vec<Note> = reached.into_iter().map(|(note, _)| note).collect();
     replaced(target, &reached, add)
 }
 
@@ -650,7 +662,7 @@ mod tests {
         });
     }
 
-    // Swing, spec swing.md §7's table worked by hand: P = 2U, d = floor(P·S/1000), r = t mod P;
+    // Swing's quantize table worked by hand: P = 2U, d = floor(P·S/1000), r = t mod P;
     // the pair's lines are at its start and d into it, a tie going to the later one.
     // U 24 at 66.7 %, d 32: 30 → 32 (2 vs 30); 14 → 0 (14 vs 18); 16 → 32 (16 vs 16, a tie).
     // U 24 at 75 %, d 36: 41 → 36 (5 vs 7); 42 → 48 (6 vs 6, a tie, the next pair's line).
@@ -934,6 +946,11 @@ mod tests {
         round_trip(&notes, |target, notes| humanized(target, notes, 0, STEP));
     }
 
+    /// Each note's stem at its start, as in a view scrolled to the pattern's start.
+    fn at_start(note: &Note) -> Option<Ticks> {
+        Some(note.start)
+    }
+
     // From (0, 32) to (192, 128): 0 → 32, 96 → 80, 192 → 128; drawn the other way the same
     // line gives the reverse. A line one tick wide sets its notes to its end's value; notes
     // outside the line stay. Rounding: 128·1/100 = 1.28 → 1, 128·99/100 = 126.72 → 127.
@@ -946,25 +963,38 @@ mod tests {
         ];
         let target = on(&notes);
         assert_eq!(
-            ramped(&target, &notes, (Ticks(0), 32), (Ticks(192), 128)).add,
+            ramped(&target, &notes, (Ticks(0), 32), (Ticks(192), 128), at_start).add,
             [nv(0, 24, 60, 32), nv(96, 24, 62, 80), nv(192, 24, 64, 128)]
         );
         assert_eq!(
-            ramped(&target, &notes, (Ticks(192), 32), (Ticks(0), 128)).add,
+            ramped(&target, &notes, (Ticks(192), 32), (Ticks(0), 128), at_start).add,
             [nv(0, 24, 60, 128), nv(96, 24, 62, 80), nv(192, 24, 64, 32)]
         );
-        let point = ramped(&target, &notes, (Ticks(96), 50), (Ticks(96), 120));
+        let point = ramped(&target, &notes, (Ticks(96), 50), (Ticks(96), 120), at_start);
         assert_eq!(point.add, [nv(96, 24, 62, 120)]);
         assert_eq!(point.remove, [nv(96, 24, 62, 100)]);
         let fine = [nv(1, 0, 60, 7), nv(50, 0, 60, 7), nv(99, 0, 60, 7)];
         assert_eq!(
-            ramped(&on(&fine), &fine, (Ticks(0), 0), (Ticks(100), 128)).add,
+            ramped(
+                &on(&fine),
+                &fine,
+                (Ticks(0), 0),
+                (Ticks(100), 128),
+                at_start
+            )
+            .add,
             [nv(1, 0, 60, 1), nv(50, 0, 60, 64), nv(99, 0, 60, 127)]
         );
-        let missed = ramped(&target, &notes, (Ticks(200), 0), (Ticks(300), 128));
+        let missed = ramped(
+            &target,
+            &notes,
+            (Ticks(200), 0),
+            (Ticks(300), 128),
+            at_start,
+        );
         assert!(missed.is_empty());
         round_trip(&notes, |target, notes| {
-            ramped(target, notes, (Ticks(0), 32), (Ticks(192), 128))
+            ramped(target, notes, (Ticks(0), 32), (Ticks(192), 128), at_start)
         });
     }
 

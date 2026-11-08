@@ -459,27 +459,58 @@ impl App {
         }
     }
 
-    pub(super) fn settings_message(&mut self, message: SettingsMessage) {
+    pub(super) fn settings_message(&mut self, message: SettingsMessage) -> Task<Message> {
         let at = match message {
             SettingsMessage::Pressed(at) => at,
-            SettingsMessage::KeysPressed(at) => return self.keys_page_pressed(at),
+            SettingsMessage::KeysPressed(at) => {
+                self.keys_page_pressed(at);
+                return Task::none();
+            }
+            SettingsMessage::WheelDragged(part, at) => {
+                self.pick_color(crate::ui::theme_page::wheel(), part, at);
+                return Task::none();
+            }
+            SettingsMessage::WheelReleased => {
+                self.color_released();
+                return Task::none();
+            }
+            SettingsMessage::ColorTargetChosen(target) => {
+                self.choose_color_target(target);
+                return Task::none();
+            }
+            SettingsMessage::HexTyped(typed) => {
+                self.hex_typed(typed);
+                return Task::none();
+            }
+            SettingsMessage::HexEntered => {
+                self.hex_entered();
+                return Task::none();
+            }
         };
         if let Some(page) = crate::ui::settings_layout::tab_at(at) {
             self.show_settings_page(page);
-            return;
+            return Task::none();
         }
-        if self.settings_page != SettingsPage::General {
-            return;
+        match self.settings_page {
+            SettingsPage::General => {}
+            SettingsPage::Theme => {
+                self.theme_page_pressed(at);
+                return Task::none();
+            }
+            SettingsPage::Keys => return Task::none(),
         }
         if let Some(index) = self.settings_panel().audio_layout().hit(at) {
             self.choose_output(index);
-            return;
+            return Task::none();
         }
         if let Some(index) = self.settings_panel().input_layout().hit(at) {
             self.choose_input(index);
-            return;
+            return Task::none();
         }
         if let Some(hit) = self.settings_panel().latency_layout().hit(at) {
+            if hit == Hit::ResetDefaults {
+                return self.reset_pressed();
+            }
             let message = match hit {
                 Hit::LatencyDown => LatencyMessage::Down,
                 Hit::LatencyUp => LatencyMessage::Up,
@@ -487,7 +518,7 @@ impl App {
                 _ => LatencyMessage::Measure,
             };
             self.latency_message(message);
-            return;
+            return Task::none();
         }
         match self.settings_layout().hit(at) {
             Some(Hit::AllPorts) => {
@@ -496,7 +527,7 @@ impl App {
             }
             Some(Hit::Port(index)) => {
                 let Some(name) = self.ports.names().get(index).cloned() else {
-                    return;
+                    return Task::none();
                 };
                 self.settings.midi_inputs.toggle(&name, self.ports.names());
                 self.inputs_changed();
@@ -512,8 +543,25 @@ impl App {
                 self.save_settings();
             }
             Some(Hit::Page(page)) => self.show_settings_page(page),
-            Some(Hit::Measure | Hit::LatencyDown | Hit::LatencyUp | Hit::LatencyClear) | None => {}
+            Some(Hit::ZoomDown) => return self.zoom_by(crate::zoom::Step::Smaller),
+            Some(Hit::ZoomUp) => return self.zoom_by(crate::zoom::Step::Larger),
+            Some(Hit::ZoomValue) => return self.zoom_value_pressed(),
+            // The Theme page's, which `theme_page_pressed` takes.
+            Some(
+                Hit::Theme(_)
+                | Hit::ColorChoice
+                | Hit::Wheel(..)
+                | Hit::Hex(_)
+                | Hit::OwnColor(_)
+                | Hit::Measure
+                | Hit::LatencyDown
+                | Hit::LatencyUp
+                | Hit::LatencyClear
+                | Hit::ResetDefaults,
+            )
+            | None => {}
         }
+        Task::none()
     }
 
     /// Shows the settings on `page`; a row waiting for its keys gives up.
@@ -575,6 +623,7 @@ impl App {
             problem: self.ports.problem(),
             octave: super::typing::octave_name(self.typing.base),
             hints: self.shows_hints(),
+            zoom: self.zoom(),
             outputs: choices,
             playing: self.output_status(),
             resampling: self.audio_note.clone(),
@@ -587,6 +636,11 @@ impl App {
                 .line_in_latency()
                 .map(crate::settings::InputLatency::words),
             measuring: self.measuring_latency(),
+            reset_armed: self.reset_armed.is_some(),
+            width: self
+                .settings_place
+                .size(crate::desktop::PopOut::Settings)
+                .width,
         }
     }
 

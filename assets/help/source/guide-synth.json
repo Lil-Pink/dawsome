@@ -1,0 +1,82 @@
+{
+ "format_version": 9,
+ "sample_rate": 44100,
+ "tempo_mbpm": 120000,
+ "ppq": 96,
+ "next_channel_id": 2,
+ "channels": [
+  {
+   "id": 1,
+   "name": "Lead",
+   "kind": "synth",
+   "processor": {
+    "id": "dawsome.synth",
+    "params": {
+     "osc2_wave": 2,
+     "osc2_cents": 7,
+     "osc_mix": 0.5,
+     "unison": 2,
+     "detune": 12,
+     "cutoff": 0.7,
+     "resonance": 0.25,
+     "filter_env": 0.3,
+     "glide_ms": 60
+    }
+   },
+   "volume": 0.5625,
+   "pan": 0.0,
+   "mute": false
+  }
+ ],
+ "patterns": [
+  {
+   "id": 1,
+   "name": "Lead",
+   "length_bars": 2,
+   "notes": [
+    {
+     "channel": 1,
+     "tick": 0,
+     "length": 96,
+     "velocity": 0.8,
+     "key": 72
+    },
+    {
+     "channel": 1,
+     "tick": 96,
+     "length": 96,
+     "velocity": 0.8,
+     "key": 74
+    },
+    {
+     "channel": 1,
+     "tick": 192,
+     "length": 144,
+     "velocity": 0.8,
+     "key": 75
+    },
+    {
+     "channel": 1,
+     "tick": 384,
+     "length": 96,
+     "velocity": 0.8,
+     "key": 79
+    },
+    {
+     "channel": 1,
+     "tick": 480,
+     "length": 96,
+     "velocity": 0.8,
+     "key": 77
+    },
+    {
+     "channel": 1,
+     "tick": 576,
+     "length": 192,
+     "velocity": 0.8,
+     "key": 75
+    }
+   ]
+  }
+ ]
+}

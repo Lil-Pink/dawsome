@@ -202,7 +202,7 @@ mod tests {
             .collect()
     }
 
-    // The spec's numbers, at the rates libraries ship (44.8 kHz, just above, to 384 kHz) over
+    // The targets, at the rates libraries ship (44.8 kHz, just above, to 384 kHz) over
     // 44.1 and 48 kHz: an odd number of taps, symmetric to the bit, 0 dB at DC, flat to
     // 0.45 · rate within 0.001 dB and at least 90 dB down from 0.5 · rate to the file's half.
     #[test]

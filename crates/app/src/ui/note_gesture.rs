@@ -36,11 +36,14 @@ pub fn velocity_of_steps(steps: u8) -> f32 {
 }
 
 /// What positions snap to. Alt held while dragging snaps to single ticks whatever is chosen.
+/// Line by default: the finest line drawn at the zoom, so a click lands on, and draws, the
+/// smallest cell the grid shows. Why not Step (the former default): at 64 px a step
+/// the grid draws half steps, and a click's note covered two of them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Snap {
     /// The finest grid line drawn, which follows the zoom.
-    Line,
     #[default]
+    Line,
     Step,
     Beat,
     Bar,
@@ -336,7 +339,7 @@ pub fn duplicated(target: &Target, notes: &[Note], unit: Ticks, step: Ticks) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::piano_layout::DEFAULT_ZOOM;
+    use crate::ui::piano_layout::ZOOM;
 
     fn note(channel: u32, tick: i64, length: i64, velocity: f32, key: u8) -> Note {
         Note {
@@ -372,7 +375,7 @@ mod tests {
         View {
             top: 69,
             scroll: Ticks(0),
-            zoom: DEFAULT_ZOOM,
+            zoom: ZOOM.default,
             step: Ticks(24),
             rows: crate::ui::piano_layout::Rows::ALL,
         }

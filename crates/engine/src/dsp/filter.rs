@@ -97,15 +97,15 @@ const TYPES: [(&str, Response); 4] = [
 ];
 
 /// log2 1000, from log2 10 by a product alone, so every platform and the generator get its bits.
-const LOG2_1000: f64 = 3.0 * LOG2_10;
+pub(super) const LOG2_1000: f64 = 3.0 * LOG2_10;
 
 /// The cutoff control's frequency: 20 Hz at 0, 20 kHz at 1, evenly in octaves.
-fn cutoff_hz(cutoff: f32) -> f64 {
+pub(super) fn cutoff_hz(cutoff: f32) -> f64 {
     20.0 * exp2(f64::from(cutoff) * LOG2_1000)
 }
 
 /// The resonance control's Q: 0.5 at 0, 20 at 1 (0.5·2^(r·log2 40)), evenly in octaves.
-fn q(resonance: f32) -> f64 {
+pub(super) fn q(resonance: f32) -> f64 {
     0.5 * exp2(f64::from(resonance) * (2.0 + LOG2_10))
 }
 

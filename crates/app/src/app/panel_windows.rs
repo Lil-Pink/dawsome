@@ -1,5 +1,7 @@
 //! The stacked panels popped out of the main window, each shown in a window of its own beside
-//! it: a divider dragged sideways pops the panel under it ([`super::dividers`]). The panel stays
+//! it: a divider dragged sideways pops the panel under it ([`super::dividers`]), and the
+//! pop-out button at the right end of its header pops it where its window last was, or at its
+//! first place ([`App::pop_out_by_button`], [`crate::ui::pop_out`]). The panel stays
 //! open: `App::panels.popped` says which are popped, the stack lays out the others as though it
 //! were closed, and [`App::sync_panel_windows`] opens and closes each panel's window to match
 //! after every message, as the other pop-out windows' do, at their level (above the main window
@@ -24,13 +26,15 @@ use crate::desktop::{self, PopOut};
 use crate::settings::{Settings, WindowPlace};
 use crate::ui::panels::{self, Panel};
 use crate::ui::{browser, mixer_layout, style};
+use crate::zoom::Zoom;
 
 /// A popped panel's own window.
 #[derive(Debug, Clone, Copy)]
 struct PanelWindow {
     /// Its window while it is open or opening.
     window: Option<window::Id>,
-    /// Where it opens: its size and position as it last was.
+    /// Where it opens: its size and position as it last was, its size in the window's own
+    /// pixels (the settings keep it in the system's).
     place: WindowPlace,
 }
 
@@ -43,14 +47,15 @@ pub(super) struct PanelWindows {
 }
 
 impl PanelWindows {
-    /// Closed, each opening where `settings` kept it, else at its first size where the system
-    /// puts it.
-    pub fn new(settings: &Settings) -> Self {
+    /// Closed, each opening where `settings` kept it (at `zoom`), else at its first size where
+    /// the system puts it.
+    pub fn new(settings: &Settings, zoom: Zoom) -> Self {
         let windows = Panel::STACKED.map(|panel| PanelWindow {
             window: None,
-            place: settings
-                .panel_window(panel)
-                .unwrap_or_else(|| WindowPlace::first(PopOut::Panel(panel))),
+            place: settings.panel_window(panel).map_or_else(
+                || WindowPlace::first(PopOut::Panel(panel)),
+                |kept| kept.zoomed(zoom),
+            ),
         });
         Self {
             windows,
@@ -89,6 +94,22 @@ impl PanelWindows {
     pub fn place(&self, panel: Panel) -> Option<WindowPlace> {
         Some(self.of(panel)?.place)
     }
+
+    /// Each place from zoom `was` to `now`, the window keeping its size on the screen.
+    pub fn rezoom(&mut self, was: Zoom, now: Zoom) {
+        for kept in &mut self.windows {
+            kept.place = kept.place.system(was).zoomed(now);
+        }
+    }
+
+    /// Each open panel window, with what it is.
+    pub fn open(&self) -> impl Iterator<Item = (Option<window::Id>, PopOut)> + '_ {
+        Panel::STACKED
+            .into_iter()
+            .zip(&self.windows)
+            .filter(|(_, kept)| kept.window.is_some())
+            .map(|(panel, kept)| (kept.window, PopOut::Panel(panel)))
+    }
 }
 
 impl App {
@@ -98,6 +119,7 @@ impl App {
     /// [`App::sync_windows`] keeps).
     pub(super) fn sync_panel_windows(&mut self) -> Task<Message> {
         let level = pop_out_level(self.windows_above);
+        let zoom = self.zoom();
         let restack = self.panel_windows.above != self.windows_above;
         self.panel_windows.above = self.windows_above;
         let mut tasks = Vec::new();
@@ -114,6 +136,7 @@ impl App {
                         kept.place.size(pop_out),
                         kept.place.position(),
                         level,
+                        zoom,
                     );
                     let (id, opened) = window::open(settings);
                     kept.window = Some(id);
@@ -171,6 +194,7 @@ impl App {
         let Some(place) = self.panel_windows.place(panel) else {
             return;
         };
+        let place = place.system(self.zoom());
         if self.settings.panel_window(panel) != Some(place) {
             self.settings.set_panel_window(panel, place);
             self.save_settings();
@@ -181,9 +205,13 @@ impl App {
     /// whether any changed.
     pub(super) fn keep_panel_places(&mut self) -> bool {
         let mut changed = false;
+        let zoom = self.zoom();
         for panel in Panel::STACKED {
             let open = self.panel_windows.window(panel).is_some();
-            let place = self.panel_windows.place(panel);
+            let place = self
+                .panel_windows
+                .place(panel)
+                .map(|place| place.system(zoom));
             if let (true, Some(place)) = (open, place) {
                 if self.settings.panel_window(panel) != Some(place) {
                     self.settings.set_panel_window(panel, place);
@@ -204,14 +232,34 @@ impl App {
             return;
         }
         let pop_out = PopOut::Panel(panel);
+        let zoom = self.zoom();
         let size = match self.settings.panel_window(panel) {
-            Some(kept) => kept.size(pop_out),
+            Some(kept) => kept.zoomed(zoom).size(pop_out),
             None => self.docked_size(panel),
         };
-        let position = self.main_position.map(|main| main + (at - Point::ORIGIN));
+        // `at` in the main window's own pixels, its position in the system's.
+        let position = self
+            .main_position
+            .map(|main| main + (at - Point::ORIGIN) * zoom.factor());
         if let Some(kept) = self.panel_windows.of_mut(panel) {
             kept.place = WindowPlace::of(size, position);
         }
+        self.popped_out(panel);
+    }
+
+    /// The pop-out button on `panel`'s header: the panel out of the stack into its own window,
+    /// where that window last was (kept while the app runs, and in the settings), else at its
+    /// first place, its first size where the system puts it ([`WindowPlace::first`]); then as
+    /// the divider's drag ends ([`App::pop_out`]).
+    pub(super) fn pop_out_by_button(&mut self, panel: Panel) {
+        if self.panels.in_stack(panel) {
+            self.popped_out(panel);
+        }
+    }
+
+    /// `panel` out of the stack, its window opening where `panel_windows` keeps its place
+    /// ([`App::sync_panel_windows`]); it takes the keys.
+    fn popped_out(&mut self, panel: Panel) {
         self.panels.pop_out(panel);
         self.focus = panel;
         self.panel_moved();
@@ -252,7 +300,7 @@ impl App {
 
     /// Lays the mixer's desk out from the height it shows now, so a press before its canvas
     /// reports its size finds what is drawn.
-    fn lay_out_mixer_desk(&mut self) {
+    pub(super) fn lay_out_mixer_desk(&mut self) {
         let desk = mixer_layout::desk_height(self.mixer_panel_height());
         self.mixer.set_desk_height(desk);
     }
@@ -365,7 +413,7 @@ mod tests {
     }
 
     /// p3_roll with the playlist, the piano roll and the mixer open in a 1000 × 1000 window,
-    /// no hint bar (936 px under the toolbar: 355, 356, 225), the main window known to the app
+    /// no hint bar (936 px under the toolbar: 350, 351, 235), the main window known to the app
     /// and holding the keyboard.
     fn three_panels() -> (App, Player, window::Id) {
         let (mut app, player) = app_on(&Path::new(FIXTURES).join("p3_roll.json"));
@@ -390,34 +438,34 @@ mod tests {
         app.panel_windows.window(panel).expect("its window")
     }
 
-    // The roll's height kept by its divider (dragged 50 px down: the playlist 405, the roll
-    // 306), the roll popped (the playlist 711, the mixer 225), then its window's X: the roll
-    // is back between them at its kept 306 (405, 306, 225), its window closed and its place
-    // kept in the settings (as the stack showed it, 1000 × 306; no position in a test's app).
+    // The roll's height kept by its divider (dragged 50 px down: the playlist 400, the roll
+    // 301), the roll popped (the playlist 701, the mixer 235), then its window's X: the roll
+    // is back between them at its kept 301 (400, 301, 235), its window closed and its place
+    // kept in the settings (as the stack showed it, 1000 × 301; no position in a test's app).
     // Popped again, the system closing its window docks it likewise.
     #[test]
     fn closing_a_popped_panels_window_puts_it_back_at_its_kept_height() {
         let (mut app, _player, _main) = three_panels();
         let mut window = Window::new(&app);
-        let line = TOOLBAR_HEIGHT + 355.0;
+        let line = TOOLBAR_HEIGHT + 350.0;
         let from = Point::new(500.0, line + 3.0);
         window.drag(&mut app, from, Point::new(from.x, from.y + 50.0));
-        assert_eq!(shown(&app), [405.0, 306.0, 225.0]);
-        let id = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 405.0, Panel::PianoRoll);
-        assert_eq!(shown(&app), [711.0, 225.0]);
-        let place = WindowPlace::of(Size::new(1000.0, 306.0), None);
+        assert_eq!(shown(&app), [400.0, 301.0, 235.0]);
+        let id = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 400.0, Panel::PianoRoll);
+        assert_eq!(shown(&app), [701.0, 235.0]);
+        let place = WindowPlace::of(Size::new(1000.0, 301.0), None);
         assert_eq!(app.panel_windows.place(Panel::PianoRoll), Some(place));
         let _ = app.update(Message::WindowCloseRequested(id));
         assert!(app.panels.piano_roll && !app.panels.popped.has(Panel::PianoRoll));
         assert_eq!(app.panel_windows.window(Panel::PianoRoll), None);
-        assert_eq!(shown(&app), [405.0, 306.0, 225.0]);
-        assert_eq!(app.settings.kept_heights().piano_roll, Some(306.0));
+        assert_eq!(shown(&app), [400.0, 301.0, 235.0]);
+        assert_eq!(app.settings.kept_heights().piano_roll, Some(301.0));
         assert_eq!(app.settings.panel_window(Panel::PianoRoll), Some(place));
-        let id = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 405.0, Panel::PianoRoll);
+        let id = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 400.0, Panel::PianoRoll);
         let _ = app.update(Message::WindowClosed(id));
         assert!(!app.panels.popped.has(Panel::PianoRoll));
         assert_eq!(app.panel_windows.window(Panel::PianoRoll), None);
-        assert_eq!(shown(&app), [405.0, 306.0, 225.0]);
+        assert_eq!(shown(&app), [400.0, 301.0, 235.0]);
     }
 
     // The roll's key (F7) while it is popped and the main window has the keyboard: the roll
@@ -428,7 +476,7 @@ mod tests {
     #[test]
     fn a_popped_panels_key_raises_its_window_or_docks_it_from_there() {
         let (mut app, _player, main) = three_panels();
-        let id = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 355.0, Panel::PianoRoll);
+        let id = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 350.0, Panel::PianoRoll);
         app.focus = Panel::Playlist;
         let mut window = Window::new(&app);
         window.tap(&mut app, Named::F7, Code::F7);
@@ -450,7 +498,7 @@ mod tests {
         window.tap(&mut app, Named::F7, Code::F7);
         assert!(app.panels.piano_roll && !app.panels.popped.has(Panel::PianoRoll));
         assert_eq!(app.panel_windows.window(Panel::PianoRoll), None);
-        assert_eq!(shown(&app), [355.0, 356.0, 225.0]);
+        assert_eq!(shown(&app), [350.0, 351.0, 235.0]);
     }
 
     // The popped roll's window shows the roll and takes its presses: a click on its grid,
@@ -461,9 +509,9 @@ mod tests {
     #[test]
     fn a_popped_panels_window_shows_it_and_takes_its_events() {
         let (mut app, _player, _main) = three_panels();
-        let roll = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 355.0, Panel::PianoRoll);
+        let roll = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 350.0, Panel::PianoRoll);
         app.focus = Panel::Playlist;
-        let size = Size::new(1000.0, 356.0);
+        let size = Size::new(1000.0, 351.0);
         let mut window = Window::pop_out(&app, roll, size);
         let published = window.click(&mut app, Point::new(600.0, 200.0));
         assert!(
@@ -473,7 +521,7 @@ mod tests {
             "{published:?}"
         );
         assert_eq!(app.focus, Panel::PianoRoll);
-        let mixer = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 711.0, Panel::Mixer);
+        let mixer = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 701.0, Panel::Mixer);
         let opened = WindowChange::Opened {
             size: Size::new(1000.0, 400.0),
             position: Some(Point::new(30.0, 40.0)),
@@ -502,6 +550,168 @@ mod tests {
         let _ = app.update(Message::Escape(mixer));
         assert!(app.panels.popped.has(Panel::Mixer), "Esc closes no panel");
         assert_eq!(app.panel_windows.window(Panel::Mixer), Some(mixer));
+    }
+
+    // The pop-out button at the right end of a docked panel's header, pressed through the main
+    // window's widgets, pops its panel out as the divider's sideways drag does. In the three
+    // panels' window (the playlist 350 px from y 64, the roll 351 from 414 under its 6 px
+    // band, the mixer 235 from 765 under its 6 px top edge), each button is the 24 px square
+    // 12 px from the window's right edge, x 1000 − 12 − 24 = 964..988: the playlist's in its
+    // header, y 64..88 (its middle 76); the roll's in its 28 px strip, y 420..448, centred
+    // (434); the mixer's in its header on its desk, y 771..795 (783). Each opens where its
+    // window last was: the playlist's, never opened, at the first place (1000 × 480, where the
+    // system puts it); the roll's, popped once by its divider and moved, where it was moved to.
+    // In the roll's own window the spot shows nothing: the cursor over it names no pop-out.
+    #[test]
+    fn a_headers_pop_out_button_pops_its_panel_where_its_window_was() {
+        let (mut app, _player, _main) = three_panels();
+        let first = WindowPlace::first(PopOut::Panel(Panel::Playlist));
+        assert_eq!(first, WindowPlace::of(Size::new(1000.0, 480.0), None));
+        let mut window = Window::new(&app);
+        let published = window.click(&mut app, Point::new(976.0, TOOLBAR_HEIGHT + 12.0));
+        assert!(
+            published
+                .iter()
+                .any(|message| matches!(message, Message::PopOutPanel(Panel::Playlist))),
+            "{published:?}"
+        );
+        assert!(app.panels.popped.has(Panel::Playlist));
+        assert_eq!(app.panel_windows.place(Panel::Playlist), Some(first));
+        let _ = app.update(Message::WindowCloseRequested(
+            app.panel_windows
+                .window(Panel::Playlist)
+                .expect("its window"),
+        ));
+        assert_eq!(shown(&app), [350.0, 351.0, 235.0]);
+        let roll = pop_by_divider(&mut app, TOOLBAR_HEIGHT + 350.0, Panel::PianoRoll);
+        let moved = Point::new(1930.0, 120.0);
+        let _ = app.update(Message::Windowed(roll, WindowChange::Moved(moved)));
+        let size = app
+            .panel_windows
+            .place(Panel::PianoRoll)
+            .expect("kept")
+            .size(PopOut::Panel(Panel::PianoRoll));
+        let mut popped = Window::pop_out(&app, roll, size);
+        // What the main window's cursor was over last is forgotten first: the spot in the popped
+        // window is empty (Notes stands beside Fold), so nothing there would name anything.
+        app.hover = None;
+        let _ = popped.mouse(
+            &mut app,
+            mouse::Event::CursorMoved {
+                position: Point::new(size.width - 24.0, 14.0),
+            },
+            mouse::Cursor::Available(Point::new(size.width - 24.0, 14.0)),
+        );
+        assert!(
+            !matches!(app.hover, Some(crate::ui::hint::Hover::PopOut(_))),
+            "{:?}",
+            app.hover
+        );
+        let _ = app.update(Message::WindowCloseRequested(roll));
+        assert!(!app.panels.popped.has(Panel::PianoRoll));
+        let mut window = Window::new(&app);
+        let published = window.click(&mut app, Point::new(976.0, TOOLBAR_HEIGHT + 370.0));
+        assert!(
+            published
+                .iter()
+                .any(|message| matches!(message, Message::PopOutPanel(Panel::PianoRoll))),
+            "{published:?}"
+        );
+        assert_eq!(
+            app.panel_windows.place(Panel::PianoRoll),
+            Some(WindowPlace::of(size, Some(moved)))
+        );
+        assert_eq!(shown(&app), [701.0, 235.0]);
+        let mut window = Window::new(&app);
+        let _ = window.click(
+            &mut app,
+            Point::new(976.0, TOOLBAR_HEIGHT + 701.0 + 6.0 + 12.0),
+        );
+        assert!(app.panels.popped.has(Panel::Mixer));
+        assert_eq!(app.panels.stacked().collect::<Vec<_>>(), [Panel::Playlist]);
+    }
+
+    // The pop-out buttons are mini grips: in the three panels' window, the playlist's (its
+    // 24 px target at 964..988 by 64..88, its middle (976, 76)) and the mixer's (its header at
+    // 771..795, its middle (976, 783)) are each the dividers' two lines at 6 px, x 973..979 on
+    // rows 74 and 77 (781 and 784 for the mixer's: a pixel above and under the middle row), by
+    // hand 2 × 6 × 1 = 12 pixels at a scale of 1, every other pixel of the target the header's
+    // ground (its corner's, 2 px in, as 2 px left of the target: no face or frame). At rest the
+    // 12 are the disabled text's tone (Graphite's #6E747C), under the pointer the text's (the
+    // playlist's, which tracks the pointer itself; the mixer draws its own with the desk's).
+    // (Pins moved: a window and an arrow, 12 px of 1.5 px strokes, in 970..982 by 70..82.)
+    #[test]
+    fn the_pop_out_buttons_are_mini_grips_dim_until_the_pointer_comes() {
+        use crate::ui::pop_out::glyph_lines;
+        let (mut app, _player, _main) = three_panels();
+        let theme = crate::ui::palette::palette();
+        let mut window = Window::new(&app);
+        let near = |found: [u8; 3], color: iced::Color| {
+            let [r, g, b, _] = color.into_rgba8();
+            found
+                .iter()
+                .zip([r, g, b])
+                .all(|(&value, wanted)| value.abs_diff(wanted) <= 2)
+        };
+        // The target's pixels other than its corner's ground, by place, and their colours.
+        let ink = |window: &mut Window, app: &App, top: f32| {
+            let shot = window.snapshot(app);
+            let pixel = |x: usize, y: usize| {
+                let offset = (y * shot.size.width as usize + x) * 4;
+                [
+                    shot.rgba[offset],
+                    shot.rgba[offset + 1],
+                    shot.rgba[offset + 2],
+                ]
+            };
+            let top = top as usize;
+            let ground = pixel(966, top + 2);
+            assert_eq!(ground, pixel(960, top + 2), "no face or frame");
+            (964..988)
+                .flat_map(|x| (top..top + 24).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel(x, y) != ground)
+                .map(|(x, y)| ((x, y), pixel(x, y)))
+                .collect::<Vec<_>>()
+        };
+        let expected = |top: f32| {
+            let mut places: Vec<(usize, usize)> = glyph_lines(iced::Point::new(964.0, top))
+                .iter()
+                .flat_map(|line| {
+                    let y = line.y as usize;
+                    (line.x as usize..(line.x + line.width) as usize).map(move |x| (x, y))
+                })
+                .collect();
+            places.sort_unstable();
+            places
+        };
+        assert_eq!(expected(64.0).first(), Some(&(973, 74)));
+        assert_eq!(expected(64.0).last(), Some(&(978, 77)));
+        for (what, top) in [("the playlist's", 64.0), ("the mixer's", 771.0)] {
+            let mut found = ink(&mut window, &app, top);
+            found.sort_unstable_by_key(|&(at, _)| at);
+            let places: Vec<_> = found.iter().map(|&(at, _)| at).collect();
+            assert_eq!(places, expected(top), "{what}: its 12 pixels and no other");
+            assert!(
+                found
+                    .iter()
+                    .all(|&(_, color)| near(color, theme.text_disabled)),
+                "{what}: at rest in the disabled tone"
+            );
+        }
+        let position = iced::Point::new(976.0, 76.0);
+        let _ = window.mouse(
+            &mut app,
+            iced::mouse::Event::CursorMoved { position },
+            iced::mouse::Cursor::Available(position),
+        );
+        let lit = ink(&mut window, &app, 64.0);
+        assert_eq!(lit.len(), 12);
+        assert!(
+            lit.iter().all(|&(_, color)| near(color, theme.text)),
+            "under the pointer in the text's tone"
+        );
+        assert_eq!(crate::ui::pop_out::glyph_color(false), theme.text_disabled);
+        assert_eq!(crate::ui::pop_out::glyph_color(true), theme.text);
     }
 
     fn temp_dir(test: &str) -> PathBuf {
@@ -554,7 +764,7 @@ mod tests {
             serde_json::json!({"mixer": {"width": 1200.0, "height": 420.0, "position": [1930.0, 120.0]}})
         );
         let settings = Settings::load(Some(&file));
-        let start = start_window(settings.window.as_ref());
+        let start = start_window(settings.window.as_ref(), crate::zoom::Zoom::DEFAULT);
         assert!(start.panels.mixer && start.panels.popped.has(Panel::Mixer));
         let project = crate::project_file::open(&path).expect("opens").project;
         let (mut next, _player) = boot(project, &path, host, start.panels);

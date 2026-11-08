@@ -4,31 +4,51 @@
 //!
 //! The panel, top to bottom: the header strip ([`HEADER_HEIGHT`]), the ruler ([`RULER_HEIGHT`]:
 //! the bar-number band over the loop strip), the tracks (the rest), and at the foot the
-//! timeline's scroll bar ([`TIME_BAR_HEIGHT`]), under the lanes from x 120, the well under the
-//! track headers. Why at the foot: a bar over the tracks read as jarring beside every other
-//! view's, which sit under what they scroll; it was in the header's room before.
+//! timeline's scroll bar ([`TIME_BAR_HEIGHT`]), its rail the panel's whole width, under the
+//! track headers too, so its thumb starts at the panel's left edge at the song's start. Why at
+//! the foot: a bar over the tracks read as jarring beside every other view's, which sit under
+//! what they scroll; it was in the header's room before. Why the whole width: from x 120 the
+//! thumb at the start read as already scrolled.
 //!
 //! Ruler and track coordinates start at their canvas's top-left corner and share x: the track
 //! header column is x 0..120 and the timeline starts at x 120, where tick t is at
 //! x = 120 + (t − scroll)·px_per_bar/bar_ticks. Row r, counted from the top visible track,
 //! spans y = (h+1)r .. (h+1)r + h for the lane height h, with a 1 px gap under it. By default
-//! the lanes fit the tracks there are and the "+ Track" row into the track area, 32 to 96 px
-//! ([`fitted_lane`], [`Lanes::Fit`]); Alt+wheel steps through 32, 48, 64 and 96 and keeps the
-//! height chosen ([`Lanes::Fixed`]). [`Grid::lane`] is the height now, whichever it is.
+//! the lanes fit the tracks there are and the "+ Track" row into the track area, 32 to 106 px
+//! ([`fitted_lane`], [`Lanes::Fit`]), the "+ Track" row taking its own 24 px and the tracks the
+//! rest; Alt+wheel steps through 32, 48, 64, 85 and 106 and keeps the height chosen
+//! ([`Lanes::Fixed`]). [`Grid::lane`] is the height now, whichever it is. Why 106 (96 before,
+//! and the "+ Track" row a lane's share): the lanes were asked about a tenth taller, open alone
+//! and stacked, where the row under "+ Track" left a lane's height empty.
+//! Only the rows the track area holds whole show ([`Grid::rows`]), headers and lanes alike: a
+//! row its foot would cut is left as the well, and comes into view whole as the tracks scroll,
+//! a row a notch; the "+ Track" row shows when its 24 px fit whole under the last track
+//! ([`Grid::shows_add_track`]).
+//!
+//! The zoom is any number of pixels per bar from 16 to 256 ([`Grid::zoom`], [`ZOOM`]). The lanes
+//! draw a bar as four beats by the grid rules the piano roll shares ([`grid_rules`]): beat lines
+//! fading in as the beats grow apart ([`grid_rules::beat_alpha`]), bar lines, a stronger line at
+//! the start of every four bars ([`grid_rules::strong`]) and every other bar shaded, or every
+//! other four bars when far out ([`grid_rules::shaded`]). A scroll along time comes to rest on a
+//! whole cell, a beat while beat lines are drawn and else a bar ([`Grid::landed`]), so the view
+//! never starts on a sliver of one.
 //!
 //! Probe coordinates (window, logical, the playlist alone under the 72 px toolbar, 64 px per
 //! bar): the ruler's number band is y 96..112 and its loop strip y 112..124; track 1's lane
 //! starts at y 124, bar 2 at x 184; in a 1000 x 560 window the tracks end at y 550 and the bar
 //! is y 550..560. With the Library open the playlist starts 300 px right.
 
+use std::sync::OnceLock;
+
 use dawsome_engine::project::{Clip, LoopRange};
 use dawsome_engine::time::Ticks;
 use iced::{Point, Rectangle, Size};
 
+use crate::ui::add_words;
+use crate::ui::grid_rules::{self, ZoomRange, NUMBER_BAND_HEIGHT};
 use crate::ui::scroll::{self, Span};
 
 pub const HEADER_HEIGHT: f32 = 24.0;
-pub const NUMBER_BAND_HEIGHT: f32 = 16.0;
 pub const LOOP_STRIP_HEIGHT: f32 = 12.0;
 pub const RULER_HEIGHT: f32 = NUMBER_BAND_HEIGHT + LOOP_STRIP_HEIGHT;
 /// The timeline's scroll bar under the tracks: the one bar every scrolling view has.
@@ -41,34 +61,45 @@ pub const TRACK_HEADER_WIDTH: f32 = 120.0;
 /// needs none: the track headers are past it.
 pub const EDGE_SCROLL_INSET: f32 = 2.0;
 /// The lowest lane: the height a lane has before the playlist knows its tracks' room, and the
-/// least that fitted lanes shrink to before the tracks scroll.
+/// lowest of the heights Alt+wheel chooses ([`LANE_HEIGHTS`]).
 pub const LANE_HEIGHT: f32 = 32.0;
+/// The least that fitted lanes shrink to before the tracks scroll ([`fitted_lane`]): the
+/// ladder's bottom, [`LANE_HEIGHT`], so the lanes squeeze all the way as tracks are added. Why
+/// not higher: a floor of 64 px, the lowest tracks scrolling off below it, was tried and the
+/// full squeeze preferred; one number, should it be tried again.
+pub const FIT_FLOOR: f32 = LANE_HEIGHT;
 pub const LANE_GAP: f32 = 1.0;
 /// The lane heights Alt+wheel steps through, lowest first; fitted lanes stay between the first
-/// and the last.
-pub const LANE_HEIGHTS: [f32; 4] = [32.0, 48.0, 64.0, 96.0];
+/// and the last. The last is the cap, 106: 96 (the cap before) a tenth taller, 105.6, rounded
+/// up; 85 between 64 and it keeps the steps about even (16, 16, 21, 21).
+pub const LANE_HEIGHTS: [f32; 5] = [32.0, 48.0, 64.0, 85.0, 106.0];
 const TALLEST_LANE: f32 = LANE_HEIGHTS[LANE_HEIGHTS.len() - 1];
 
 /// How tall the playlist's lanes are.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Lanes {
     /// The tracks there are and the "+ Track" row fill the track area ([`fitted_lane`]): a
-    /// new project's few tracks are tall, and they shrink as tracks are added, down to
-    /// [`LANE_HEIGHT`], then scroll. The default.
+    /// new project's few tracks are tall, up to 106 px, and they shrink as tracks are added,
+    /// down to [`FIT_FLOOR`], 32 px, then scroll. The default.
     Fit,
     /// The height chosen with Alt+wheel, kept whatever the tracks and the room.
     Fixed(f32),
 }
 
 /// The lane height that fits `tracks` tracks and the "+ Track" row under them into a track
-/// area `height` tall: the whole pixels of each row's share less the gap under it, kept to
-/// [`LANE_HEIGHT`]..96.
+/// area `height` tall: the "+ Track" row takes its own height and a gap, the tracks share the
+/// rest, each the whole pixels of its share less the gap under it, kept to
+/// [`FIT_FLOOR`]..106: floor((height − 24 − 1) / tracks) − 1. Why not a lane's share for the
+/// "+ Track" row (height / (tracks + 1), as before): the 24 px button left the rest of that
+/// share empty, about a lane under it, which the lanes now take. Under the floor the tracks
+/// scroll instead.
 pub fn fitted_lane(tracks: usize, height: f32) -> f32 {
-    let rows = (tracks + 1) as f32;
-    kept_lane((height / rows).floor() - LANE_GAP)
+    let room = height - ADD_TRACK_HEIGHT - LANE_GAP;
+    let share = room / tracks.max(1) as f32;
+    (share.floor() - LANE_GAP).clamp(FIT_FLOOR, TALLEST_LANE)
 }
 
-/// `height` kept to the lane heights there are, [`LANE_HEIGHT`]..96 (a stored height that is
+/// `height` kept to the lane heights there are, [`LANE_HEIGHT`]..106 (a stored height that is
 /// out of range reads back so).
 pub fn kept_lane(height: f32) -> f32 {
     height.clamp(LANE_HEIGHT, TALLEST_LANE)
@@ -76,27 +107,25 @@ pub fn kept_lane(height: f32) -> f32 {
 
 pub const LED_CENTER_X: f32 = 10.0;
 pub const LED_RADIUS: f32 = 5.0;
-/// The mute light takes clicks this far either side of its center; the light itself is small.
-pub const LED_HIT_HALF_WIDTH: f32 = 9.0;
+/// The mute light takes clicks this far either side of its center, a 24 px target (was 18); the
+/// light itself is small.
+pub const LED_HIT_HALF_WIDTH: f32 = 12.0;
 /// Track names start here.
 pub const NAME_X: f32 = 22.0;
 /// The arm light at each header's right end (Record's takes land on its track), its radius,
-/// and how far either side of its center a press reaches it.
+/// and how far either side of its center a press reaches it: a 24 px target (was 16).
 pub const ARM_CENTER_X: f32 = TRACK_HEADER_WIDTH - 12.0;
 pub const ARM_RADIUS: f32 = 4.0;
-pub const ARM_HIT_HALF_WIDTH: f32 = 8.0;
-pub const NAME_SIZE: f32 = 12.0;
-/// The "+ Track" button under the last track: its inset from the column's edges and height.
-pub const ADD_TRACK_INSET: f32 = 6.0;
-pub const ADD_TRACK_HEIGHT: f32 = 20.0;
-
-/// Bar numbers start this far right of their bar line.
-pub const LABEL_INSET: f32 = 3.0;
-pub const LABEL_SIZE: f32 = 11.0;
+pub const ARM_HIT_HALF_WIDTH: f32 = 12.0;
+/// The "+ Track" control under the last track: its words alone ([`add_words`]), centred in the
+/// header column, and its row's height, 24 px (was 20): it stands right under the last track's
+/// lane and the gap under it, and fitted lanes leave it that room ([`fitted_lane`]). (It stood
+/// 6 px down a row a lane tall before, then was a button 6 px in from the column's sides.)
+pub const ADD_TRACK_LABEL: &str = "+ Track";
+pub const ADD_TRACK_HEIGHT: f32 = add_words::HEIGHT;
 
 /// A clip's title strip, over its body.
 pub const TITLE_HEIGHT: f32 = 10.0;
-pub const TITLE_SIZE: f32 = 9.0;
 pub const NOTE_MARK_WIDTH: f32 = 2.0;
 pub const SELECTED_OUTLINE: f32 = 2.0;
 
@@ -124,38 +153,85 @@ pub const LOOP_EDGE: f32 = 4.0;
 /// The song-position marker: a downward triangle this wide in the number band.
 pub const MARKER_WIDTH: f32 = 7.0;
 
-/// Pixels per bar at each zoom level, from farthest out to closest in.
-pub const ZOOM_LEVELS: [f32; 5] = [16.0, 32.0, 64.0, 128.0, 256.0];
-/// 64 pixels per bar.
-pub const DEFAULT_ZOOM: usize = 2;
-
-/// Beat lines are drawn only when beats are at least this far apart.
-pub const MIN_BEAT_SPACING: f32 = 8.0;
+/// The zoom, in pixels per bar: 16 to 256, 64 to start. − and + halve and double it
+/// ([`ZoomRange::stepped`]), so from the start they reach 16, 32, 128 and 256, the stops the zoom
+/// had before it was continuous; a Ctrl+wheel notch moves it a quarter of a doubling
+/// ([`ZoomRange::wheeled`]).
+pub const ZOOM: ZoomRange = ZoomRange {
+    min: 16.0,
+    max: 256.0,
+    default: 64.0,
+};
 
 /// Which part of the timeline and which tracks the playlist shows, and how ticks map to x.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grid {
     /// The tick at the timeline's left edge (x = [`TRACK_HEADER_WIDTH`]); never negative.
     pub scroll: Ticks,
-    /// Index into [`ZOOM_LEVELS`].
-    pub zoom: usize,
+    /// Pixels per bar, in [`ZOOM`]'s range.
+    pub zoom: f32,
     /// Ticks in one bar, at least 1.
     pub bar: Ticks,
     /// Index, in track order, of the track in the top row.
     pub top: usize,
-    /// The lane height now, [`LANE_HEIGHT`]..96: fitted, or one of [`LANE_HEIGHTS`] chosen.
+    /// The lane height now, [`LANE_HEIGHT`]..106: fitted, or one of [`LANE_HEIGHTS`] chosen.
     /// The one height the drawing and every hit test read.
     pub lane: f32,
+    /// The track area's height, which the rows shown fill whole ([`Grid::rows`],
+    /// [`Grid::shows_add_track`]).
+    pub area: f32,
 }
 
 impl Grid {
     pub fn px_per_bar(&self) -> f32 {
-        ZOOM_LEVELS[self.zoom.min(ZOOM_LEVELS.len() - 1)]
+        ZOOM.kept(self.zoom)
     }
 
     /// Ticks in one beat (a quarter of a bar), at least 1.
     pub fn beat(&self) -> Ticks {
         Ticks((self.bar.0 / 4).max(1))
+    }
+
+    /// The cell a scroll comes to rest on ([`grid_rules::cell`]): a beat while beat lines are
+    /// drawn, else a bar.
+    pub fn cell(&self) -> Ticks {
+        grid_rules::cell(self.beat(), self.bar, self.px_per_bar())
+    }
+
+    /// `tick` moved to the nearest cell's start ([`grid_rules::landed`]).
+    pub fn landed(&self, tick: Ticks) -> Ticks {
+        grid_rules::landed(tick, self.cell())
+    }
+
+    /// Where a scroll from the view's start towards `to` comes to rest
+    /// ([`grid_rules::landed_towards`]): a short move still moves a cell.
+    pub fn landed_towards(&self, to: Ticks) -> Ticks {
+        grid_rules::landed_towards(self.scroll, to, self.cell())
+    }
+
+    /// The start of the cell holding `tick`.
+    pub fn cell_start(&self, tick: Ticks) -> Ticks {
+        grid_rules::cell_start(tick, self.cell())
+    }
+
+    /// This grid at `px` pixels per bar (kept), scrolled so that what shows at `x` now shows
+    /// there still ([`grid_rules::anchored_scroll`]).
+    pub fn zoomed_at(&self, px: f32, x: f32) -> Grid {
+        let from_left = f64::from(x) - f64::from(TRACK_HEADER_WIDTH);
+        let zoomed = Grid {
+            zoom: ZOOM.kept(px),
+            ..*self
+        };
+        Grid {
+            scroll: grid_rules::anchored_scroll(
+                self.scroll,
+                from_left,
+                self.ticks(),
+                self.px_per_bar(),
+                zoomed.px_per_bar(),
+            ),
+            ..zoomed
+        }
     }
 
     /// The x where `tick` starts.
@@ -191,9 +267,36 @@ impl Grid {
         self.top as i64 + (y / self.row_pitch()).floor() as i64
     }
 
-    /// The top of the row showing track `index`, or `None` for a track scrolled above the top.
+    /// The track index of the row under y, while that row shows ([`Grid::shows`]); none above
+    /// the first row or in the strip under the rows shown. A gap belongs to the row above it.
+    pub fn shown_index_at(&self, y: f32) -> Option<usize> {
+        let index = usize::try_from(self.track_index_at(y)).ok()?;
+        self.row_top_of(index).is_some().then_some(index)
+    }
+
+    /// The top of the row showing track `index`; `None` for a track not shown: scrolled above
+    /// the top row, or under the rows the track area holds whole.
     pub fn row_top_of(&self, index: usize) -> Option<f32> {
-        index.checked_sub(self.top).map(|row| self.row_top(row))
+        let row = index.checked_sub(self.top)?;
+        self.shows(row).then(|| self.row_top(row))
+    }
+
+    /// The rows the track area holds whole, counted from the top row ([`Grid::whole_rows`]):
+    /// the ones drawn and hit. Why whole rows only: a divider dragged up (or a smaller window)
+    /// cut the last track in half under the scroll bar, its header and its lane.
+    pub fn rows(&self) -> usize {
+        self.whole_rows(self.area)
+    }
+
+    /// Whether row `row`, counted from the top row, shows: the track area holds it whole.
+    pub fn shows(&self, row: usize) -> bool {
+        row < self.rows()
+    }
+
+    /// Whether the "+ Track" row under the last of `below` tracks (counted from the top row)
+    /// shows: its 24 px end inside the track area, so the tracks above it show too.
+    pub fn shows_add_track(&self, below: usize) -> bool {
+        self.row_top(below) + ADD_TRACK_HEIGHT <= self.area
     }
 
     /// From one row's top to the next.
@@ -206,9 +309,10 @@ impl Grid {
         row as f32 * self.row_pitch()
     }
 
-    /// Rows at least partly inside a track area `height` tall.
-    pub fn visible_rows(&self, height: f32) -> usize {
-        (height / self.row_pitch()).ceil().max(0.0) as usize
+    /// The rows wholly inside a track area `height` tall: each row's lane ends inside it, the
+    /// gap under the last need not, so n rows take n·(lane + 1) − 1 px.
+    pub fn whole_rows(&self, height: f32) -> usize {
+        ((height + LANE_GAP) / self.row_pitch()).floor().max(0.0) as usize
     }
 
     /// The next of [`LANE_HEIGHTS`] above the lane height now (`taller`) or below it, staying
@@ -305,17 +409,18 @@ pub enum HeaderHit {
     AddTrack,
 }
 
-/// The header control under `point` with `rows` tracks shown from the top row on (the "+
-/// Track" button sits under the last of them).
+/// The header control under `point` with `rows` tracks from the top row on (the "+ Track"
+/// button sits under the last of them), of the rows that show ([`Grid::shows`],
+/// [`Grid::shows_add_track`]).
 pub fn header_hit(grid: &Grid, point: Point, rows: usize) -> Option<HeaderHit> {
     if !(0.0..TRACK_HEADER_WIDTH).contains(&point.x) || point.y < 0.0 {
         return None;
     }
-    if add_track_rect(grid, rows).contains(point) {
+    if grid.shows_add_track(rows) && add_track_rect(grid, rows).contains(point) {
         return Some(HeaderHit::AddTrack);
     }
     let row = (point.y / grid.row_pitch()).floor() as usize;
-    if row >= rows || point.y - grid.row_top(row) >= grid.lane {
+    if row >= rows || !grid.shows(row) || point.y - grid.row_top(row) >= grid.lane {
         return None;
     }
     let led = (point.x - LED_CENTER_X).abs() <= LED_HIT_HALF_WIDTH;
@@ -344,11 +449,15 @@ pub fn tracks_rect(panel: Rectangle) -> Rectangle {
     )
 }
 
-/// The "+ Track" button under the last of `rows` rows.
+/// The "+ Track" control under the last of `rows` rows, where a press takes it: right under its
+/// lane and the gap under that, its row's height, as wide as [`add_words::width`] gives,
+/// centred in the header column.
 pub fn add_track_rect(grid: &Grid, rows: usize) -> Rectangle {
+    static WIDTH: OnceLock<f32> = OnceLock::new();
+    let width = *WIDTH.get_or_init(|| add_words::width(ADD_TRACK_LABEL));
     Rectangle::new(
-        Point::new(ADD_TRACK_INSET, grid.row_top(rows) + ADD_TRACK_INSET),
-        Size::new(TRACK_HEADER_WIDTH - 2.0 * ADD_TRACK_INSET, ADD_TRACK_HEIGHT),
+        Point::new((TRACK_HEADER_WIDTH - width) / 2.0, grid.row_top(rows)),
+        Size::new(width, ADD_TRACK_HEIGHT),
     )
 }
 
@@ -398,9 +507,25 @@ pub fn loop_edge_under(grid: &Grid, range: &LoopRange, x: f32) -> Option<LoopEdg
 /// from 1, line x).
 pub fn visible_bars(grid: &Grid, width: f32) -> impl Iterator<Item = (i64, f32)> + '_ {
     let bar = grid.bar.0.max(1);
-    let first = grid.scroll.0.div_euclid(bar) + i64::from(grid.scroll.0 % bar != 0);
-    let last = grid.tick_at(width).0.div_euclid(bar);
-    (first..=last).map(move |index| (index + 1, grid.x_of(Ticks(index * bar))))
+    grid_rules::bar_lines(grid.scroll, grid.tick_at(width), grid.bar)
+        .map(move |index| (index + 1, grid.x_of(Ticks(index * bar))))
+}
+
+/// The x spans the shaded bars ([`grid_rules::shaded`]) take on the timeline of a canvas
+/// `width` wide, left to right: one a shaded bar, or a shaded four bars far out, cut to the
+/// timeline.
+pub fn shaded_spans(grid: &Grid, width: f32) -> impl Iterator<Item = (f32, f32)> + '_ {
+    grid_rules::shaded_ticks(
+        grid.scroll,
+        grid.tick_at(width),
+        grid.bar,
+        grid.px_per_bar(),
+    )
+    .filter_map(move |(start, end)| {
+        let left = grid.x_of(start).max(TRACK_HEADER_WIDTH);
+        let right = grid.x_of(end).min(width);
+        (right > left).then_some((left, right))
+    })
 }
 
 /// How far past the song's end the scroll bar reaches.
@@ -431,15 +556,18 @@ mod tests {
     use dawsome_engine::project::{PatternId, TrackId};
 
     use super::*;
+    use crate::ui::grid_rules::{beat_alpha, shaded, strong};
 
-    /// The grid as the playlist opens: no scroll, 64 px per bar, a bar of 384 ticks.
+    /// The grid as the playlist opens: no scroll, 64 px per bar, a bar of 384 ticks, the 12
+    /// rows a 426 px track area holds whole (the playlist alone in a 1000 x 560 window).
     fn grid() -> Grid {
         Grid {
             scroll: Ticks(0),
-            zoom: DEFAULT_ZOOM,
+            zoom: ZOOM.default,
             bar: Ticks(384),
             top: 0,
             lane: LANE_HEIGHT,
+            area: 426.0,
         }
     }
 
@@ -481,7 +609,10 @@ mod tests {
         };
         assert_eq!(then.x_in(200.0, &scrolled), 136.0);
         assert_eq!(scrolled.x_in(136.0, &then), 200.0);
-        let zoomed = Grid { zoom: 3, ..then };
+        let zoomed = Grid {
+            zoom: 128.0,
+            ..then
+        };
         assert_eq!(then.x_in(200.0, &zoomed), 280.0);
         assert_eq!(then.x_in(200.3, &then), 200.3);
         let lower = Grid { top: 4, ..then };
@@ -498,7 +629,7 @@ mod tests {
         assert_eq!(grid.tick_at(119.0), Ticks(-6), "left of the timeline");
         let scrolled = Grid {
             scroll: Ticks(768),
-            zoom: 0,
+            zoom: 16.0,
             ..grid
         };
         // 16 px per bar is 24 ticks a pixel.
@@ -529,6 +660,17 @@ mod tests {
         assert_eq!(grid.track_index_at(-1.0), 2);
         assert_eq!(grid.row_top_of(4), Some(33.0));
         assert_eq!(grid.row_top_of(2), None);
+        // The 12 rows shown are tracks 3..=14; track 15 is under them.
+        assert_eq!(grid.row_top_of(14), Some(363.0));
+        assert_eq!(grid.row_top_of(15), None);
+        assert_eq!(grid.shown_index_at(32.5), Some(3));
+        assert_eq!(
+            grid.shown_index_at(395.0),
+            Some(14),
+            "row 11's lane: y 363..395"
+        );
+        assert_eq!(grid.shown_index_at(396.0), None, "row 12 is not shown");
+        assert_eq!(grid.shown_index_at(-1.0), None, "above the first row");
     }
 
     // A clip 64 px wide (x 120..184): its last 6 px are the resize handle.
@@ -573,11 +715,28 @@ mod tests {
         assert_eq!(at(18.0, 49.0), Some(HeaderHit::Led { row: 1 }));
         assert_eq!(at(60.0, 49.0), Some(HeaderHit::Name { row: 1 }));
         assert_eq!(at(60.0, 32.5), None, "the gap under a row");
-        // The button sits under row 8: y 264 + 6 .. + 20.
+        // The button sits right under row 7's lane and its gap: y 8 · 33 = 264 .. 288 (it stood
+        // 6 px down a row a lane tall, 270..294, before the "+ Track" row took its own height).
+        assert_eq!(at(60.0, 263.5), None, "row 7's gap");
+        assert_eq!(at(60.0, 264.0), Some(HeaderHit::AddTrack));
         assert_eq!(at(60.0, 275.0), Some(HeaderHit::AddTrack));
+        assert_eq!(at(60.0, 288.0), None, "under the button");
         assert_eq!(at(60.0, 300.0), None);
         assert_eq!(at(130.0, 16.0), None, "the timeline");
         assert_eq!(led_center(&grid(), 1), Point::new(10.0, 49.0));
+        // Three rows shown (a 118 px track area): row 3's light, its name and the "+ Track"
+        // button under it (y 99..123 with three tracks, past the area's foot at 118) are none,
+        // as they are not drawn; with two tracks the button is y 66..90, inside it.
+        let three = Grid {
+            area: 118.0,
+            ..grid()
+        };
+        let at = |x, y, rows| header_hit(&three, Point::new(x, y), rows);
+        assert_eq!(at(10.0, 82.0, 8), Some(HeaderHit::Led { row: 2 }));
+        assert_eq!(at(10.0, 115.0, 8), None);
+        assert_eq!(at(60.0, 115.0, 8), None);
+        assert_eq!(at(60.0, 110.0, 3), None);
+        assert_eq!(at(60.0, 77.0, 2), Some(HeaderHit::AddTrack), "row 2 shows");
     }
 
     // Loop 384..768 is drawn x 184..248; presses within 4 px of an edge move it.
@@ -630,45 +789,141 @@ mod tests {
     }
 
     // Alone in a 1000x560 window the track area is 560 − 72 − 24 − 28 − 10 = 426 tall (the
-    // scroll bar's 10 px under it): 13 rows of 32 px show (12.9), and 8 tracks fit in 46 px
-    // lanes (426 / 9 = 47.3, less the gap). (Pins moved: 452 under the 56 px toolbar,
-    // then 436 and 14 rows with the bar in the header.)
+    // scroll bar's 10 px under it): 12 rows of 32 px show whole (12 · 33 − 1 = 395 px; 13
+    // would take 428). 8 tracks share 426 − 24 − 1 = 401 px in lanes of floor(401 / 8) − 1 =
+    // 49 px: 8 rows whole (8 · 50 − 1 = 399; 9 take 449) and the "+ Track" row right under
+    // them, y 400..424, inside the 426. (Pins moved: 452 under the 56 px toolbar, then 436 and
+    // 14 rows with the bar in the header; then 13 rows, the 13th cut to 30 px, until rows
+    // showed whole only; 8 tracks in 46 px lanes, 426 / 9 = 47.3 less the gap, while the
+    // "+ Track" row took a lane's share; 64 px lanes, 6 rows, while 64 was the fitted lanes'
+    // floor.)
     #[test]
     fn the_track_area_fills_the_panel_under_the_ruler() {
         let size = tracks_size_alone(Size::new(1000.0, 560.0), 72.0);
         assert_eq!(size, Size::new(1000.0, 426.0));
-        assert_eq!(grid().visible_rows(426.0), 13);
-        assert_eq!(grid().visible_rows(33.0), 1);
-        assert_eq!(fitted_lane(8, 426.0), 46.0);
-    }
-
-    // By hand: lanes that fit share the track area among the tracks and the
-    // "+ Track" row, whole pixels less the 1 px gap. The 436 px area holds 8 tracks and the row
-    // in 9 rows of 48 px (436 / 9 = 48.4): 47 px lanes. Two tracks in 3 rows would be 144 px,
-    // kept to 96; 30 tracks in 31 rows (14 px) keep 32 and scroll. 13 tracks in 14 rows of
-    // 31 px (436 / 14 = 31.1) would be 30, kept to 32. A height out of range reads back kept.
-    #[test]
-    fn fitted_lanes_share_the_track_area_among_the_tracks() {
-        assert_eq!(fitted_lane(8, 436.0), 47.0);
-        assert_eq!(fitted_lane(2, 436.0), 96.0);
-        assert_eq!(fitted_lane(30, 436.0), 32.0);
-        assert_eq!(fitted_lane(13, 436.0), 32.0);
-        assert_eq!(fitted_lane(0, 0.0), 32.0, "no room yet");
+        assert_eq!(grid().whole_rows(426.0), 12);
+        assert_eq!(grid().whole_rows(33.0), 1);
+        assert_eq!(fitted_lane(8, 426.0), 49.0);
         let fitted = Grid {
-            lane: fitted_lane(8, 436.0),
+            lane: fitted_lane(8, 426.0),
             ..grid()
         };
-        assert_eq!(
-            fitted.row_top(9),
-            432.0,
-            "the + Track row ends inside the area"
-        );
-        assert_eq!(fitted.track_index_at(47.5), 0, "the gap under row 0");
-        assert_eq!(fitted.track_index_at(48.0), 1);
-        assert_eq!((kept_lane(300.0), kept_lane(4.0)), (96.0, 32.0));
+        assert_eq!(fitted.rows(), 8);
+        assert!(fitted.shows_add_track(8), "400 + 24 = 424, inside the 426");
     }
 
-    // P6, by hand: at 64 px a bar a 1000 px tracks canvas shows 880 px of timeline, 13.75 bars
+    // The whole-row law by hand, n rows taking n · (lane + 1) − 1 px. A playlist panel h tall
+    // has h − 24 (header) − 28 (ruler) − 10 (scroll bar) px of track area. At its least, 180
+    // (the roll's divider dragged as far up as it goes): 118 px, 3 rows of 32 (98 px; 4 take
+    // 131), where 4 were drawn before, the 4th cut to 118 − 99 = 19 px under the bar. At the
+    // divider test's heights (panels.rs), 355, 405 and 481: 293, 343 and 419 px, 8, 10 and 12
+    // rows of 32 (263, 329, 395 px; one more takes 296, 362, 428). At 293 px rows of 48 fit 6
+    // exactly (6 · 49 − 1 = 293: the gap under the last falls outside), rows of 64 four (259;
+    // 5 take 324) and rows of 96 three (290). One pixel short of n rows shows n − 1; less than
+    // a lane shows none.
+    #[test]
+    fn only_rows_the_track_area_holds_whole_show() {
+        let lane = |lane| Grid { lane, ..grid() };
+        let area = |panel: f32| panel - HEADER_HEIGHT - RULER_HEIGHT - TIME_BAR_HEIGHT;
+        let rows_32 = |panel| lane(32.0).whole_rows(area(panel));
+        assert_eq!(area(180.0), 118.0);
+        assert_eq!(rows_32(180.0), 3);
+        assert_eq!(
+            [rows_32(355.0), rows_32(405.0), rows_32(481.0)],
+            [8, 10, 12]
+        );
+        assert_eq!(lane(48.0).whole_rows(293.0), 6);
+        assert_eq!(lane(64.0).whole_rows(293.0), 4);
+        assert_eq!(lane(96.0).whole_rows(293.0), 3);
+        assert_eq!(lane(32.0).whole_rows(197.0), 6);
+        assert_eq!(lane(32.0).whole_rows(196.0), 5);
+        assert_eq!(lane(32.0).whole_rows(31.0), 0);
+        assert_eq!(lane(32.0).whole_rows(0.0), 0);
+    }
+
+    // By hand, fitted lanes: the "+ Track" row takes its own 24 px and a gap, the tracks share
+    // what is left, each floor(share) less the 1 px gap under it, kept to 32..106. In a 567 px
+    // area 6 tracks share 567 − 24 − 1 = 542 px: floor(542 / 6 = 90.33) − 1 = 89 px lanes,
+    // 11 % taller than the 80 they were when the "+ Track" row took a lane's share,
+    // floor(567 / 7 = 81) − 1 (90 px lanes would not fit: 6 · 91 + 24 = 570). Their rows take
+    // 6 · 90 = 540 px, the "+ Track" row 540..564, 3 px of the well under it (an 81 px row
+    // under the button before, 51 px of it empty). In a 436 px area (411 to share): 5 tracks
+    // floor(82.2) − 1 = 81, the "+ Track" row 410..434; 6 tracks floor(68.5) − 1 = 67; 7 tracks
+    // floor(58.7) − 1 = 57; 8 tracks floor(51.4) − 1 = 50, as in the 434 px area of the
+    // playlist alone in a 1000 × 560 window, floor(409 / 8 = 51.1) − 1 (pin moved: 47 = floor(436 / 9) − 1
+    // before, its 9 rows and the "+ Track" row whole); 13 tracks floor(31.6) − 1 = 30 and 30
+    // tracks 12, kept to the floor, 32, and they scroll. (7, 8 and 30 tracks were 64 while 64
+    // was the floor.) Two tracks, floor(205.5) − 1 = 204, and one, 410, are kept to the 106 cap
+    // (96 before; two were 144 when the cap was 160). With no room yet (0 px) the share is
+    // negative: 32 (64 under that floor).
+    // Alone at 1920 × 1080 (954 px of tracks, the hint bar off) 6 tracks would be
+    // floor(929 / 6) − 1 = 153: 106 (96 before: floor(954 / 7) − 1 = 135 kept to the old cap).
+    // A height out of range reads back kept to the heights Alt+wheel has: 300 as 106 (was 96),
+    // 4 as 32.
+    #[test]
+    fn fitted_lanes_share_the_track_area_among_the_tracks() {
+        let table: [(usize, f32, f32); 12] = [
+            (6, 567.0, 89.0),
+            (5, 436.0, 81.0),
+            (6, 436.0, 67.0),
+            (7, 436.0, 57.0),
+            (8, 436.0, 50.0),
+            (13, 436.0, 32.0),
+            (30, 436.0, 32.0),
+            (2, 436.0, 106.0),
+            (1, 436.0, 106.0),
+            (0, 0.0, 32.0),
+            (6, 954.0, 106.0),
+            (8, 434.0, 50.0),
+        ];
+        for (tracks, area, lane) in table {
+            assert_eq!(
+                fitted_lane(tracks, area),
+                lane,
+                "{tracks} tracks in {area} px"
+            );
+        }
+        let fitted = Grid {
+            lane: fitted_lane(6, 567.0),
+            area: 567.0,
+            ..grid()
+        };
+        assert_eq!(fitted.rows(), 6, "6 · 90 − 1 = 539 px; 7 take 629");
+        assert_eq!(fitted.row_top(6), 540.0);
+        assert!(fitted.shows_add_track(6), "540 + 24 = 564, inside the 567");
+        assert_eq!(add_track_rect(&fitted, 6).y, 540.0);
+        assert_eq!(fitted.track_index_at(89.5), 0, "the gap under row 0");
+        // The "+ Track" words alone, a press taking them and 8 px either side: "+ Track" at the
+        // labels' 12 px is 43.758 px (Inter's advances, gen_u1_expected.py's rule: 12 × 7468 /
+        // 2048), so 59.758 px wide, centred in the 120 px column: x 30.121..89.879 (was the
+        // button's 6..114). Its row's band stays: y 540..564.
+        let add = add_track_rect(&fitted, 6);
+        assert!((add.x - 30.121).abs() < 1e-3, "{add:?}");
+        assert!((add.width - 59.758).abs() < 1e-3, "{add:?}");
+        assert_eq!((add.y, add.height), (540.0, 24.0));
+        assert_eq!(add.center().x, TRACK_HEADER_WIDTH / 2.0);
+        for (x, hit) in [(29.0, false), (31.0, true), (89.0, true), (91.0, false)] {
+            assert_eq!(
+                header_hit(&fitted, Point::new(x, 552.0), 6) == Some(HeaderHit::AddTrack),
+                hit,
+                "x {x}"
+            );
+        }
+        assert_eq!(fitted.track_index_at(90.0), 1);
+        let five = Grid {
+            lane: fitted_lane(5, 436.0),
+            area: 436.0,
+            ..grid()
+        };
+        assert!(
+            five.rows() == 5 && five.shows_add_track(5),
+            "410 + 24 = 434"
+        );
+        assert_eq!((kept_lane(300.0), kept_lane(4.0)), (106.0, 32.0));
+        assert_eq!((kept_lane(106.0), kept_lane(107.0)), (106.0, 106.0));
+    }
+
+    // By hand: at 64 px a bar a 1000 px tracks canvas shows 880 px of timeline, 13.75 bars
     // (5280 ticks); a song ending at bar 3 (tick 1152) reaches 4 bars further, 2688.
     #[test]
     fn the_time_span_reaches_four_bars_past_the_song() {
@@ -684,7 +939,38 @@ mod tests {
         assert_eq!(time_span(&scrolled, Ticks(1152), 1000.0).extent(), 8280.0);
     }
 
-    // Alt+wheel steps the lanes through 32, 48, 64 and 96 px, rows following.
+    // The scroll bar's rail spans the panel's whole width, under the track headers too, so the
+    // thumb's ends are the panel's at the scroll's ends. By hand, a 1000 px panel at 64 px a
+    // bar: the 880 px timeline shows 880 · 384 / 64 = 5280 ticks; a song ending with bar 40
+    // (tick 15360) reaches 4 bars further, 16896. The thumb is the view's share of the rail,
+    // 5280 / 16896 = 0.3125 of 1000 = 312.5 px, with 687.5 px of travel for the 16896 − 5280 =
+    // 11616 ticks the view moves: at scroll 0 it starts at the panel's left edge, x 0; at the
+    // middle, 5808, at 343.75; at the end, 11616, at 687.5, ending at the panel's right edge,
+    // 1000. (Before, the rail started at the timeline's x 120: 880 px, a 275 px thumb from
+    // x 120 at scroll 0.)
+    #[test]
+    fn the_scroll_bars_thumb_runs_the_panels_whole_width() {
+        let span_at = |scroll| {
+            let grid = Grid {
+                scroll: Ticks(scroll),
+                ..grid()
+            };
+            time_span(&grid, Ticks(15360), 1000.0)
+        };
+        let start = span_at(0);
+        assert_eq!((start.content, start.view), (16896.0, 5280.0));
+        assert_eq!(start.last_offset(), 11616.0);
+        assert_eq!(start.thumb(1000.0), (0.0, 312.5));
+        assert_eq!(span_at(5808).thumb(1000.0), (343.75, 312.5));
+        let (left, size) = span_at(11616).thumb(1000.0);
+        assert_eq!((left, left + size), (687.5, 1000.0));
+    }
+
+    // Alt+wheel steps the lanes through 32, 48, 64, 85 and 106 px, rows following: up from 32,
+    // four steps reach 106 and a fifth holds there; down from 106, 85, then 64 (pins moved: 96
+    // was the highest, and the step under it, while 96 was the cap). From a fitted height
+    // between two steps, the next above or below: from 42, 48 or 32; from 89 (six tracks
+    // fitted in 567 px), 106 or 85.
     #[test]
     fn lane_heights_step_and_rows_follow_them() {
         let mut grid = grid();
@@ -692,8 +978,16 @@ mod tests {
         grid.lane = grid.stepped_lane(true);
         assert_eq!(grid.lane, 48.0);
         assert_eq!((grid.row_top(1), grid.track_index_at(49.0)), (49.0, 1));
-        grid.lane = 96.0;
-        assert_eq!(grid.stepped_lane(true), 96.0, "already the highest");
+        let mut up = vec![grid.lane];
+        for _ in 0..4 {
+            grid.lane = grid.stepped_lane(true);
+            up.push(grid.lane);
+        }
+        assert_eq!(up, [48.0, 64.0, 85.0, 106.0, 106.0]);
+        assert_eq!(grid.stepped_lane(true), 106.0, "already the highest");
+        assert_eq!(grid.stepped_lane(false), 85.0);
+        assert_eq!((grid.row_top(1), grid.track_index_at(106.5)), (107.0, 0));
+        grid.lane = 85.0;
         assert_eq!(grid.stepped_lane(false), 64.0);
         // From a fitted height between two steps, the step above or below.
         grid.lane = 42.0;
@@ -701,6 +995,187 @@ mod tests {
             (grid.stepped_lane(true), grid.stepped_lane(false)),
             (48.0, 32.0)
         );
+        grid.lane = 89.0;
+        assert_eq!(
+            (grid.stepped_lane(true), grid.stepped_lane(false)),
+            (106.0, 85.0)
+        );
+    }
+
+    // The zoom's steps by hand: − and + halve and double, held to 16..256, so from 64 + gives
+    // 128, then 256, then 256 again, and − gives 32, 16, 16; from a zoom between stops, 100, +
+    // doubles to 200 and then holds at 256. A kept value out of range reads back held, one that
+    // is no number the default.
+    #[test]
+    fn the_zoom_buttons_double_and_halve_within_the_ends() {
+        let mut zoom = ZOOM.default;
+        let mut closer = Vec::new();
+        for _ in 0..3 {
+            zoom = ZOOM.stepped(zoom, true);
+            closer.push(zoom);
+        }
+        assert_eq!(closer, [128.0, 256.0, 256.0]);
+        let mut zoom = ZOOM.default;
+        let mut farther = Vec::new();
+        for _ in 0..3 {
+            zoom = ZOOM.stepped(zoom, false);
+            farther.push(zoom);
+        }
+        assert_eq!(farther, [32.0, 16.0, 16.0]);
+        assert_eq!(ZOOM.stepped(100.0, true), 200.0);
+        assert_eq!(ZOOM.stepped(200.0, true), 256.0);
+        assert_eq!(
+            (ZOOM.kept(900.0), ZOOM.kept(2.0), ZOOM.kept(f32::NAN)),
+            (256.0, 16.0, 64.0)
+        );
+    }
+
+    // A Ctrl+wheel notch is a quarter of a doubling, 2^(1/4) = 1.189207: one notch in from 64 is
+    // 76.10925, four are 128, four out 32. At either end a notch further holds. A zoom between
+    // the steps (100: 4·log2(100/16) = 10.57 quarter-doublings over 16, the nearest 11) moves
+    // from the nearest step: one in is 16·2^3 = 128.
+    #[test]
+    fn a_wheel_notch_zooms_a_quarter_of_a_doubling() {
+        assert!((ZOOM.wheeled(64.0, true) - 76.109_25).abs() < 1e-4);
+        let notches =
+            |from: f32, closer: bool| (0..4).fold(from, |zoom, _| ZOOM.wheeled(zoom, closer));
+        assert!((notches(64.0, true) - 128.0).abs() < 1e-5);
+        assert!((notches(64.0, false) - 32.0).abs() < 1e-5);
+        assert_eq!(ZOOM.wheeled(256.0, true), 256.0);
+        assert_eq!(ZOOM.wheeled(16.0, false), 16.0);
+        assert!((ZOOM.wheeled(100.0, true) - 128.0).abs() < 1e-5);
+    }
+
+    // The anchor law by hand: what shows at x shows there still. At 64 px a bar (6 ticks a
+    // pixel), unscrolled, x 248 shows tick (248 − 120)·6 = 768; at 128 px a bar (3 ticks a
+    // pixel) it is at 248 again from scroll 768 − 128·3 = 384. At 128 px a bar scrolled to 960,
+    // x 200 shows 960 + 80·3 = 1200; out to 32 px a bar (12 ticks a pixel) it stays at x 200 from
+    // scroll 1200 − 80·12 = 240. A tick the start cannot keep there (2880 at x 600 out to 16 px a
+    // bar would need scroll 2880 − 480·24 < 0) leaves the view at the start.
+    #[test]
+    fn a_zoom_keeps_the_tick_under_the_cursor_in_place() {
+        let zoomed = grid().zoomed_at(128.0, 248.0);
+        assert_eq!((zoomed.zoom, zoomed.scroll), (128.0, Ticks(384)));
+        assert_eq!(zoomed.x_of(Ticks(768)), 248.0);
+        let near = Grid {
+            zoom: 128.0,
+            scroll: Ticks(960),
+            ..grid()
+        };
+        assert_eq!(near.tick_at(200.0), Ticks(1200));
+        let out = near.zoomed_at(32.0, 200.0);
+        assert_eq!((out.zoom, out.scroll), (32.0, Ticks(240)));
+        assert_eq!(out.x_of(Ticks(1200)), 200.0);
+        assert_eq!(grid().zoomed_at(16.0, 600.0).scroll, Ticks(0));
+        assert_eq!(grid().zoomed_at(900.0, 600.0).zoom, 256.0, "kept");
+    }
+
+    // The fade law by hand, beat = px_per_bar / 4, alpha = (beat − 5)/14 kept to 0..1: 16 px a
+    // bar (4 px beats) and 20 (5 px) draw none; 32 is 3/14 = 0.2143, 48 is 7/14 = 0.5, 64 is
+    // 11/14 = 0.7857; 76 (19 px beats) and closer draw them whole.
+    #[test]
+    fn beat_lines_fade_in_as_the_beats_grow_apart() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert_eq!((beat_alpha(16.0), beat_alpha(20.0)), (0.0, 0.0));
+        assert!(close(beat_alpha(32.0), 3.0 / 14.0));
+        assert!(close(beat_alpha(48.0), 0.5));
+        assert!(close(beat_alpha(64.0), 11.0 / 14.0));
+        assert_eq!((beat_alpha(76.0), beat_alpha(256.0)), (1.0, 1.0));
+    }
+
+    // The shading rule by hand: at 64 px a bar every other bar from bar 1, so bars 1, 3, 5, 7
+    // of the first eight; at 24 px a bar (under 32) every other four bars from bar 1, so bars
+    // 1-4 and 9-12 of the first twelve; at 32 exactly, every other bar again. The strong lines:
+    // bars 1, 5, 9 and 13 of the first thirteen.
+    #[test]
+    fn every_other_bar_or_four_bars_is_shaded() {
+        let bars = |px: f32, count: i64| -> Vec<i64> {
+            (0..count)
+                .filter(|&index| shaded(index, px))
+                .map(|index| index + 1)
+                .collect()
+        };
+        assert_eq!(bars(64.0, 8), [1, 3, 5, 7]);
+        assert_eq!(bars(24.0, 12), [1, 2, 3, 4, 9, 10, 11, 12]);
+        assert_eq!(bars(32.0, 4), [1, 3]);
+        let strong_bars: Vec<i64> = (0..13).filter(|&i| strong(i)).map(|i| i + 1).collect();
+        assert_eq!(strong_bars, [1, 5, 9, 13]);
+        // On a 1000 px canvas unscrolled, 64 px a bar: bars 1, 3, ..., 13 at x 120 + 64·(bar − 1),
+        // 64 px each. At 24 px a bar (16 ticks a pixel, 96 px a four): fours 1, 3, 5, 7 and 9,
+        // from x 120 + 192k.
+        let spans: Vec<(f32, f32)> = shaded_spans(&grid(), 1000.0).collect();
+        let expected: Vec<(f32, f32)> = (0..7)
+            .map(|k| (120.0 + 128.0 * k as f32, 184.0 + 128.0 * k as f32))
+            .collect();
+        assert_eq!(spans, expected);
+        let far = Grid {
+            zoom: 24.0,
+            ..grid()
+        };
+        let spans: Vec<(f32, f32)> = shaded_spans(&far, 1000.0).collect();
+        let expected: Vec<(f32, f32)> = (0..5)
+            .map(|k| (120.0 + 192.0 * k as f32, 216.0 + 192.0 * k as f32))
+            .collect();
+        assert_eq!(spans, expected);
+        // Scrolled half a bar in at 64 px a bar: bar 1's shading is cut at the timeline's edge.
+        let scrolled = Grid {
+            scroll: Ticks(192),
+            ..grid()
+        };
+        assert_eq!(shaded_spans(&scrolled, 1000.0).next(), Some((120.0, 152.0)));
+    }
+
+    // Where a scroll comes to rest, by hand. At 256 px a bar beats are drawn, 96 ticks (64 px)
+    // each, 1.5 ticks a pixel: 52 px into the beat at 384 (tick 462) is 12 px short of the next
+    // beat, so it lands on that one, 480; 20 px in (tick 414) lands back on 384. At 16 px a bar
+    // (4 px beats, none drawn) the cell is the bar, 384 ticks, 24 ticks a pixel: 7 px in (tick
+    // 168) lands on bar 1, 9 px in (216) on bar 2. At 20 px a bar beats are 5 px and not drawn
+    // (bars); at 21 they are (beats).
+    #[test]
+    fn a_scroll_lands_on_the_nearest_beat_or_bar() {
+        let near = Grid {
+            zoom: 256.0,
+            ..grid()
+        };
+        assert_eq!(near.cell(), Ticks(96));
+        assert_eq!(near.landed(Ticks(462)), Ticks(480));
+        assert_eq!(near.landed(Ticks(414)), Ticks(384));
+        assert_eq!(near.landed(Ticks(432)), Ticks(480), "halfway goes on");
+        let far = Grid {
+            zoom: 16.0,
+            ..grid()
+        };
+        assert_eq!(far.cell(), Ticks(384));
+        assert_eq!(far.landed(Ticks(168)), Ticks(0));
+        assert_eq!(far.landed(Ticks(216)), Ticks(384));
+        assert_eq!(
+            Grid {
+                zoom: 20.0,
+                ..grid()
+            }
+            .cell(),
+            Ticks(384)
+        );
+        assert_eq!(
+            Grid {
+                zoom: 21.0,
+                ..grid()
+            }
+            .cell(),
+            Ticks(96)
+        );
+        assert_eq!(near.cell_start(Ticks(470)), Ticks(384));
+        // From the beat at 384, a move of 30 ticks either way (under half a beat) still moves a
+        // beat: to 480 on, 288 back; from 400 (mid-beat) back to the beat it is in, 384.
+        let at = |scroll| Grid {
+            scroll: Ticks(scroll),
+            ..near
+        };
+        assert_eq!(at(384).landed_towards(Ticks(414)), Ticks(480));
+        assert_eq!(at(384).landed_towards(Ticks(354)), Ticks(288));
+        assert_eq!(at(400).landed_towards(Ticks(390)), Ticks(384));
+        assert_eq!(at(384).landed_towards(Ticks(500)), Ticks(480), "nearest");
+        assert_eq!(at(0).landed_towards(Ticks(0)), Ticks(0));
     }
 
     // The value line: 1 at the body's top + 2, 0 at its bottom − 2, and back.

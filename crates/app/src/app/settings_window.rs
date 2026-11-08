@@ -6,15 +6,18 @@
 //! [`App::sync_settings_window`] opens and closes its window to match after every message, so
 //! every path (its keys, Esc in it, its X, the system closing it, the main window closing the
 //! app) needs no task of its own. It keeps the instrument window's level (above the main window
-//! while the app has the keyboard) and its size and place are kept in the settings
-//! (`settings_window`) when it closes and when the app closes with it open.
+//! while the app has the keyboard). It opens at a share of the main window's size, which the
+//! user cannot change (`settings_panel::window_size_for`; a scripted run's `--window-size` is
+//! its size instead), and its position is kept in the settings (`settings_window`) when it
+//! closes and when the app closes with it open.
 //!
 //! Its header (the page tabs) stays at its top while the page under it scrolls, and a line at
 //! its foot names the control under the cursor (while hints show) or says how to close it. Keys
 //! typed in it do what they do in the main window (the typing keyboard plays, the shortcuts
 //! run), as the instrument window's do; a row of the Keys page waiting for its chord takes it
-//! from this window alone. It has no text box: one would take its keys as every text box does,
-//! the toolkit holding back the presses it takes.
+//! from this window alone. Its one text box, the accent's hex box on its Theme page, takes them
+//! while it has the keys, as every text box does (the toolkit holds back the presses it takes;
+//! Esc still closes the window).
 
 use iced::widget::{column, container, scrollable, text};
 use iced::{window, Element, Fill, Task};
@@ -23,16 +26,15 @@ use super::instrument::pop_out_level;
 use super::{App, Message, WindowChange};
 use crate::desktop::{self, PopOut};
 use crate::keys::Action;
-use crate::settings::WindowPlace;
+use crate::settings::{WindowPlace, WindowPosition};
+use crate::ui::fonts::size;
 use crate::ui::hint;
 use crate::ui::layout::{HINT_BAR_HEIGHT, TOOLBAR_SIDE_PADDING};
 use crate::ui::panels::Panel;
 use crate::ui::settings_layout::SettingsPage;
+use crate::ui::settings_panel;
 use crate::ui::settings_panel::SettingsHeader;
 use crate::ui::style;
-
-/// The foot line's text size, the main window's hint bar's.
-const HINT_SIZE: f32 = 12.0;
 
 impl App {
     /// Opens the Settings window's own window while Settings is open and closes it once it is
@@ -42,12 +44,7 @@ impl App {
         let level = pop_out_level(self.windows_above);
         match (self.panels.settings, self.settings_window) {
             (true, None) => {
-                let settings = desktop::pop_out_settings(
-                    PopOut::Settings,
-                    self.settings_place.size(PopOut::Settings),
-                    self.settings_place.position(),
-                    level,
-                );
+                let settings = self.settings_window_opening(level);
                 let (id, opened) = window::open(settings);
                 self.settings_window = Some(id);
                 opened.discard()
@@ -55,10 +52,33 @@ impl App {
             (false, Some(id)) => {
                 self.settings_window = None;
                 self.remember_settings_place();
+                self.forget_hex_typed();
                 window::close(id)
             }
             (true, Some(id)) if restack => window::set_level(id, level),
             _ => Task::none(),
+        }
+    }
+
+    /// The Settings window about to open at `level`: a scripted run's `--window-size`, else the
+    /// main window's share of its last size ([`settings_panel::window_size_for`]), where it
+    /// last was; the user cannot resize it. Its place takes that size, which its page's columns
+    /// follow.
+    pub(super) fn settings_window_opening(&mut self, level: window::Level) -> window::Settings {
+        let size = self
+            .headless
+            .settings_size()
+            .unwrap_or_else(|| settings_panel::window_size_for(self.window_size));
+        self.settings_place = WindowPlace::of(size, self.settings_place.position());
+        window::Settings {
+            resizable: false,
+            ..desktop::pop_out_settings(
+                PopOut::Settings,
+                size,
+                self.settings_place.position(),
+                level,
+                self.zoom(),
+            )
         }
     }
 
@@ -77,9 +97,15 @@ impl App {
         }
     }
 
-    /// Keeps the Settings window's place in the settings for its next opening.
+    /// What the settings keep of the Settings window's place: its position, when the system
+    /// told it (its size is worked out each time it opens).
+    pub(super) fn settings_place_kept(&self) -> Option<WindowPosition> {
+        self.settings_place.position().map(WindowPosition::at)
+    }
+
+    /// Keeps the Settings window's position in the settings for its next opening.
     pub(super) fn remember_settings_place(&mut self) {
-        let place = Some(self.settings_place);
+        let place = self.settings_place_kept();
         if self.settings.settings_window != place {
             self.settings.settings_window = place;
             self.save_settings();
@@ -102,9 +128,9 @@ impl App {
             .map_or_else(Task::none, window::gain_focus)
     }
 
-    /// What the Settings window shows: the header with the page tabs, the page shown scrolling
-    /// under it (the Keys page across too, in a window narrower than its table), and the foot
-    /// line.
+    /// What the Settings window shows: the header with the page tabs (General, Keys, Theme), the
+    /// page shown scrolling under it (the Keys page across too, in a window narrower than its
+    /// table), and the foot line.
     pub(super) fn settings_window_view(&self) -> Element<'_, Message> {
         let header = SettingsHeader {
             page: self.settings_page,
@@ -128,17 +154,18 @@ impl App {
                     .height(Fill)
                     .into()
             }
+            SettingsPage::Theme => scrollable(self.theme_page().view()).height(Fill).into(),
         };
         let words = self.settings_hint();
         let foot = iced::widget::responsive(move |size| {
             let room = (size.width - 2.0 * TOOLBAR_SIDE_PADDING).max(0.0);
-            let shown = crate::ui::text_fit::fit_width(&words, room, HINT_SIZE)
+            let shown = crate::ui::text_fit::fit_width(&words, room, size::LABEL)
                 .map(std::borrow::Cow::into_owned)
                 .unwrap_or_default();
             container(
                 text(shown)
-                    .size(HINT_SIZE)
-                    .color(style::TEXT_DIM)
+                    .size(size::LABEL)
+                    .color(style::palette().text_secondary)
                     .wrapping(iced::widget::text::Wrapping::None),
             )
             .padding([0.0, TOOLBAR_SIDE_PADDING])
@@ -369,11 +396,14 @@ mod tests {
         assert!(app.exiting(), "the main window gone closes the app");
     }
 
-    // Its size and place are kept in the settings when it closes and when the app closes with
-    // it open, and it opens there again, in a later start too. A size under its least (420 x
-    // 240) opens at its first, 720 x 560.
+    // It opens at the main window's share of its last size, which the user cannot change, and
+    // keeps its position in the settings when it closes and when the app closes with it open,
+    // in a later start too; no size is kept. By hand: main 1920 x 1080 → 902 x 724 (0.47 and
+    // 0.67, rounded), main 2560 x 1440 → 1203 x 965. A settings file an earlier build wrote,
+    // its size beside the position, opens at the position and the share, and the next save
+    // drops the size. A scripted run's --window-size (720 x 900 here) is its size instead.
     #[test]
-    fn the_settings_windows_size_and_place_are_kept_in_the_settings() {
+    fn the_settings_window_opens_at_its_share_and_keeps_its_position() {
         use crate::settings::Settings;
         let dir =
             std::env::temp_dir().join(format!("dawsome-settings-place-{}", std::process::id()));
@@ -390,50 +420,90 @@ mod tests {
         let (mut app, _player) = app_hosted(project(), Path::new(F1), host.clone());
         let main = window::Id::unique();
         app.set_main_window(main);
-        assert_eq!(
-            app.settings_place.size(PopOut::Settings),
-            Size::new(720.0, 560.0)
-        );
+        let _ = app.update(Message::WindowResized(Size::new(1920.0, 1080.0)));
+        let opening = app.settings_window_opening(window::Level::Normal);
+        assert_eq!(opening.size, Size::new(902.0, 724.0));
+        assert!(!opening.resizable, "the user does not resize it");
+        assert!(matches!(opening.position, window::Position::Default));
         toggle(&mut app);
         let id = app.settings_window.expect("open");
-        let changed = |app: &mut App, change| {
-            let _ = app.update(Message::Windowed(id, change));
-        };
-        changed(&mut app, WindowChange::Resized(Size::new(600.0, 450.0)));
-        changed(&mut app, WindowChange::Moved(Point::new(30.0, 40.0)));
         assert_eq!(
-            app.window_size,
-            Size::new(1000.0, 560.0),
-            "the main window's own"
+            app.settings_place.size(PopOut::Settings),
+            Size::new(902.0, 724.0)
         );
-        let _ = app.update(Message::Escape(id));
-        let place = WindowPlace::of(Size::new(600.0, 450.0), Some(Point::new(30.0, 40.0)));
-        assert_eq!(Settings::load(Some(&file)).settings_window, Some(place));
-        toggle(&mut app);
-        assert_eq!(app.settings_place, place, "it opens there again");
-        let id = app.settings_window.expect("open again");
         let _ = app.update(Message::Windowed(
             id,
-            WindowChange::Resized(Size::new(700.0, 500.0)),
+            WindowChange::Moved(Point::new(30.0, 40.0)),
         ));
+        let _ = app.update(Message::Escape(id));
+        let kept = Some(WindowPosition::at(Point::new(30.0, 40.0)));
+        assert_eq!(Settings::load(Some(&file)).settings_window, kept);
+        let text = std::fs::read_to_string(&file).expect("reads");
+        assert!(
+            text.contains(
+                "\"settings_window\": {\n    \"position\": [\n      30.0,\n      40.0\n    ]\n  }"
+            ),
+            "its position alone: {text}"
+        );
+        let _ = app.update(Message::WindowResized(Size::new(2560.0, 1440.0)));
+        toggle(&mut app);
+        assert!(app.settings_window.is_some(), "open again");
+        assert_eq!(
+            app.settings_place,
+            WindowPlace::of(Size::new(1203.0, 965.0), Some(Point::new(30.0, 40.0))),
+            "the new share, where it was"
+        );
         let _ = app.update(Message::WindowCloseRequested(main));
         assert!(app.exiting());
-        let saved = Settings::load(Some(&file)).settings_window;
-        assert_eq!(
-            saved.map(|place| place.size(PopOut::Settings)),
-            Some(Size::new(700.0, 500.0))
-        );
-        let (later, _player) = app_hosted(project(), Path::new(F1), host);
+        assert_eq!(Settings::load(Some(&file)).settings_window, kept);
+
+        let earlier = r#"{"settings_window":{"width":600.0,"height":450.0,"position":[5.0,6.0]}}"#;
+        std::fs::write(&file, earlier).expect("writes");
+        let (mut later, _player) = app_hosted(project(), Path::new(F1), host.clone());
+        later.set_main_window(main);
+        assert_eq!(later.settings_place.position(), Some(Point::new(5.0, 6.0)));
+        let _ = later.update(Message::WindowResized(Size::new(1920.0, 1080.0)));
+        toggle(&mut later);
         assert_eq!(
             later.settings_place.size(PopOut::Settings),
-            Size::new(700.0, 500.0)
+            Size::new(902.0, 724.0),
+            "the size it kept passed over"
         );
-        assert_eq!(
-            later.settings_place.position(),
-            Some(Point::new(30.0, 40.0))
+        let id = later.settings_window.expect("open");
+        let _ = later.update(Message::Escape(id));
+        let text = std::fs::read_to_string(&file).expect("reads");
+        assert!(
+            text.contains("\"position\"") && !text.contains("\"width\": 600.0"),
+            "the size dropped on the save: {text}"
         );
-        let small = WindowPlace::of(Size::new(400.0, 200.0), None);
-        assert_eq!(small.size(PopOut::Settings), Size::new(720.0, 560.0));
+
+        let session = || {
+            crate::session::Session::open(
+                project(),
+                crate::project_file::samples_dir(Path::new(F1)),
+                false,
+            )
+            .expect("compiles")
+            .0
+        };
+        let (mut scripted, _) = App::boot(
+            session(),
+            Err(crate::audio::StartError::NoDevice),
+            crate::ui::panels::Panels::default(),
+            Size::new(1000.0, 560.0),
+            false,
+            crate::headless::Script {
+                settings_size: Some(Size::new(720.0, 900.0)),
+                ..crate::headless::Script::default()
+            },
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Host::offline(),
+            super::super::files::Start {
+                document: crate::document::Document::untitled(),
+            },
+        );
+        let opening = scripted.settings_window_opening(window::Level::Normal);
+        assert_eq!(opening.size, Size::new(720.0, 900.0), "its --window-size");
         std::fs::remove_dir_all(&dir).expect("removed");
     }
 
@@ -464,6 +534,7 @@ mod tests {
             problem: None,
             octave: "C5".to_owned(),
             hints: true,
+            zoom: crate::zoom::Zoom::DEFAULT,
             outputs: vec![default.clone(), named("Speakers"), named("USB Audio")],
             playing: "Playing through: Speakers, 48000 Hz, 512 frames".to_owned(),
             resampling: None,
@@ -474,33 +545,67 @@ mod tests {
             latency_devices: "Line in: System default input; output: System default".to_owned(),
             latency: None,
             measuring: false,
+            reset_armed: false,
+            width: crate::ui::settings_layout::FIRST_WIDTH,
         }
     }
 
-    // Its pages scroll under the header, which stays. By hand, from the layout's rows: with two
-    // ports the audio output's title is at y 226, its three devices' rows 246 to 312, the line
-    // saying what plays 312 to 334; the audio input's title 8 px under it at 342, its two rows
-    // 362 to 406; the input latency's title 8 px under that at 414, its two lines from 434 and
-    // its buttons' row 478 to 500: the General page ends 8 px under that, at 508, and its canvas
-    // under the 24 px header is 484 px tall (it was the panel's height, which cut the input rows
-    // off). The Keys
+    // Its pages scroll under the header, which stays. By hand, from the layout's rows (24 px,
+    // WCAG 2.2's target size; 22 before), the window's first 720 px one column (under 800), the
+    // sections 28 px apart: with two ports the MIDI input's title at 32, its three rows to 124;
+    // the typing keyboard's title 28 px under that at 152, its row to 196; the hints' at 224,
+    // to 268; the display's at 296, its zoom row to 340; the audio output's title at 368, its
+    // three devices' rows 388 to 460, the line saying what plays 460 to 484; the audio input's
+    // title at 512, its two rows 532 to 580; the input latency's title at 608, its two lines
+    // from 628 and its buttons' row 676 to 700; "Reset to defaults" in the row 28 px under that,
+    // 728 to 752, 18 px tall centred in it from the left margin, 12..144 by 731..749 (132 px:
+    // "Press again to reset" and 8 px either side): the General page ends 8 px under that, at
+    // 760, and its canvas under the 24 px header is 736 px tall (it was the panel's height,
+    // which cut the input rows off; 588 and 564 before the reset's row, 620 and 596 with the
+    // sections 8 px apart). The Theme page ends at
+    // 324 (its note line's foot, 316, and 8 px), its canvas 300 px tall. The Keys
     // page is its table's 680 px and a 12 px margin across, so a window narrower than that
     // scrolls it across, and as tall as its content. The tabs switch the page in the window,
-    // whose view builds on either. The least window keeps the tabs (General then Keys, to x 202)
-    // and the first group (the MIDI input's title, "All ports" and a port, or the line saying
-    // none was found, to y 96) above its 22 px foot line.
+    // whose view builds on each. The least window keeps the tabs (General, Keys, then Theme, to
+    // x 262) and the first group (the MIDI input's title, "All ports" and a port, or the line
+    // saying none was found, to y 100) above its 22 px foot line.
     #[test]
     fn the_settings_pages_scroll_under_their_header() {
         use iced::Length;
         let ports = ["Port A".to_owned(), "Port B".to_owned()];
         let inputs = crate::settings::MidiInputs::default();
         let page = general_page(&ports, &inputs);
-        assert_eq!(page.audio_layout().title().y, 226.0);
-        assert_eq!(page.input_layout().title().y, 342.0);
-        assert_eq!(page.latency_layout().title().y, 414.0);
-        assert_eq!(page.content_height(), 508.0);
+        // Pins moved 50 px: the Display section, its title's gap and height and the zoom's
+        // row (8 + 20 + 22), under the hints (were 226, 342, 414, 508 and 484); then 22 px by
+        // the theme's row under the zoom's (were 276, 392, 464, 558 and 534); then 146 px by the
+        // accent's row (124) and its note's line (22) under the theme's (were 298, 414, 486, 580
+        // and 556); then 22 px by the theme's second row of keys (were 444, 560, 632, 726 and
+        // 702); then 190 px up when the theme's keys and the accent went to the Theme page (were
+        // 466, 582, 654, 748 and 724), the first move's pins again; then down with the 24 px rows (were 276,
+        // 392, 464, 558 and 534); then down with the sections 28 px apart (were 288, 412, 488,
+        // 580 and 591).
+        assert_eq!(page.audio_layout().title().y, 368.0);
+        assert_eq!(page.input_layout().title().y, 512.0);
+        let latency = page.latency_layout();
+        assert_eq!(latency.title().y, 608.0);
+        assert_eq!(latency.line(2).y + 24.0, 700.0);
+        assert_eq!(
+            latency.reset(),
+            iced::Rectangle::new(iced::Point::new(12.0, 731.0), iced::Size::new(132.0, 18.0))
+        );
+        assert_eq!(
+            latency.hit(iced::Point::new(20.0, 740.0)),
+            Some(crate::ui::settings_layout::Hit::ResetDefaults)
+        );
+        let reset_words = ["Reset to defaults", "Press again to reset"]
+            .map(|words| crate::ui::text_fit::text_width(words, crate::ui::fonts::size::LABEL));
+        assert!(
+            reset_words.iter().all(|&width| width + 16.0 <= 132.0),
+            "{reset_words:?}"
+        );
+        assert_eq!(page.content_height(), 760.0);
         let element = page.view();
-        assert_eq!(element.as_widget().size().height, Length::Fixed(484.0));
+        assert_eq!(element.as_widget().size().height, Length::Fixed(736.0));
         let (mut app, _player, _main) = f1_app();
         let keys = crate::ui::keys_page::KeysPage {
             keys: &app.keys,
@@ -516,26 +621,73 @@ mod tests {
             Length::Fixed(crate::ui::keys_page::content_height())
         );
 
+        // The Theme page down to its colour's note and a gap, 324 (was 300 before the menu's row
+        // over the colour wheel, 24 px).
+        assert_eq!(crate::ui::theme_page::content_height(), 324.0);
+        let theme = app.theme_page().view();
+        assert_eq!(theme.as_widget().size().height, Length::Fixed(300.0));
+
         toggle(&mut app);
-        let _ = app.settings_window_view();
-        let keys_tab = tab(SettingsPage::Keys).center();
-        let _ = app.update(Message::Settings(SettingsMessage::Pressed(keys_tab)));
-        assert_eq!(app.settings_page, SettingsPage::Keys);
-        let _ = app.settings_window_view();
-        let general_tab = tab(SettingsPage::General).center();
-        let _ = app.update(Message::Settings(SettingsMessage::Pressed(general_tab)));
-        assert_eq!(app.settings_page, SettingsPage::General);
+        for page in [
+            SettingsPage::Keys,
+            SettingsPage::Theme,
+            SettingsPage::General,
+        ] {
+            let _ = app.settings_window_view();
+            let at = tab(page).center();
+            let _ = app.update(Message::Settings(SettingsMessage::Pressed(at)));
+            assert_eq!(app.settings_page, page);
+        }
 
         let least = crate::ui::settings_panel::WINDOW_MIN;
-        let tabs = tab(SettingsPage::Keys);
-        assert_eq!(tabs.x + tabs.width, 202.0);
+        let tabs = tab(SettingsPage::Theme);
+        assert_eq!(tabs.x + tabs.width, 262.0);
         assert!(tabs.x + tabs.width <= least.width);
         let room = least.height - HINT_BAR_HEIGHT;
-        for layout in [Layout { ports: 1, notes: 0 }, Layout { ports: 0, notes: 0 }] {
+        for ports in [1, 0] {
+            let layout = Layout {
+                ports,
+                width: least.width,
+                ..Layout::default()
+            };
             let first_group = layout.row(1);
-            assert_eq!(first_group.y + first_group.height, 96.0);
+            assert_eq!(first_group.y + first_group.height, 100.0);
             assert!(first_group.y + first_group.height <= room, "{layout:?}");
             assert!(layout.row(0).width <= least.width);
+        }
+        let keys = crate::ui::theme_page::keys_row();
+        assert_eq!(keys.y + keys.height, 76.0);
+        assert!(keys.y + keys.height <= room, "the Theme page's keys");
+    }
+
+    // The Theme page closes and comes back as the other pages do: its tab shows it, Esc in the
+    // window closes it from there, the digit 6 and F10 in the main window open it again on the
+    // Theme page (the page shown last is kept while the app runs), and each typed in the Settings
+    // window closes it.
+    #[test]
+    fn the_theme_page_closes_and_comes_back_as_the_others_do() {
+        let (mut app, _player, main) = f1_app();
+        toggle(&mut app);
+        let at = tab(SettingsPage::Theme).center();
+        let _ = app.update(Message::Settings(SettingsMessage::Pressed(at)));
+        assert_eq!(app.settings_page, SettingsPage::Theme);
+        let id = app.settings_window.expect("open");
+        press(&mut app, id, Key::Named(Named::Escape), Code::Escape);
+        assert_eq!(open(&app), (false, false), "Esc in it closes it");
+        for (key, code) in [
+            (Key::Character("6".into()), Code::Digit6),
+            (Key::Named(Named::F10), Code::F10),
+        ] {
+            press(&mut app, main, key.clone(), code);
+            assert_eq!(open(&app), (true, true), "{code:?} opens it");
+            assert_eq!(
+                app.settings_page,
+                SettingsPage::Theme,
+                "the page shown last"
+            );
+            let id = app.settings_window.expect("open");
+            press(&mut app, id, key, code);
+            assert_eq!(open(&app), (false, false), "{code:?} in it closes it");
         }
     }
 

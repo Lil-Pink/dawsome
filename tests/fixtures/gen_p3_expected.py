@@ -133,12 +133,13 @@ for length in (1, 96):
     print(f"(b) hold note length {length} tick(s) = {Fraction(length*60*SR*1000, MBPM*PPQ)} samples nominal;",
           f"frames 0..{max(i for i,v in nz(o))} = {sorted(set(v for i,v in nz(o)))}, first silent frame {len(nz(o))}, total {len(o)}")
 
-# (c) velocity lane (64 px tall, two steps a pixel): press A's stem (50,20) drag to (50,32);
-# value = round((64 - y) * 128 / 64)
-LANE = 64
+# (c) velocity lane (32 px tall, fixed, four steps a pixel): press A's stem (50,10) drag to
+# (50,16); value = round((32 - y) * 128 / 32). (It was 64 px and (50,20) to (50,32): the same
+# values.)
+LANE = 32
 def lane_value(y): return max(0, min(128, round((LANE - y) * 128 / LANE)))
-val = lane_value(32); c = roll([dict(A, velocity=val / 128), B]); written["p3_c_velocity.json"] = c
-print(f"(c) lane value at press {lane_value(20)}, at release {val} -> velocity {val/128}"); print("(c) doc:", J(c)); show("(c)", c, 1)
+val = lane_value(16); c = roll([dict(A, velocity=val / 128), B]); written["p3_c_velocity.json"] = c
+print(f"(c) lane value at press {lane_value(10)}, at release {val} -> velocity {val/128}"); print("(c) doc:", J(c)); show("(c)", c, 1)
 
 # (d) Ctrl+A, Ctrl+B at snap Step: offset = extent rounded up to the snap unit (the copy rule);
 # (d2) Ctrl+B again: the copies are the selection, so they are copied once more, and the
@@ -199,29 +200,45 @@ print("snap_near(12, 24) =", snap_near(12, 24), "| snap_near(11, 24) =", snap_ne
 print("tick_at at 6 px/step (4 ticks/px): x 48, 49, 50, 73 ->", [tick_at(x, 6) for x in (48, 49, 50, 73)],
       "| at 64 px/step (0.375 ticks/px): x 48, 50, 51, 56, 60 ->", [tick_at(x, 64) for x in (48, 50, 51, 56, 60)])
 
-# --- UI probe (window logical px, --panels piano-roll, 1000x560): grid canvas at (0, 64+28) ---
-# (the toolbar is 64 px; it was 56, then 72)
-GY = 64 + 28; LANE_TOP = 560 - LANE
+# --- UI probe (window logical px, --panels piano-roll, 1000x560): grid canvas at (0, 64+28+16) ---
+# (the toolbar is 64 px; it was 56, then 72; the 16 px ruler sits between the strip and the grid)
+GY = 64 + 28 + 16; LANE_TOP = 560 - LANE
 def hx(c): return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))
 def mix(c, bg, a): return tuple(int(a * x + (1 - a) * y + 0.5) for x, y in zip(c, bg))
+def lift(c): return tuple(min(255, x + 5) for x in c)   # a shaded bar: 5 lighter a channel
 WHITE_ROW, BLACK_ROW = hx("#34373D"), hx("#2D3035"); LEAD, KICKC = hx("#E5533D"), hx("#4DA3E0")
-LANE_BG = hx("#1F2125"); BAR_LINE = hx("#626873")
+LANE_BG = hx("#141619"); BAR_LINE = hx("#626873")   # the lane: the meters' ground (was the well's #1F2125)
+BEAT_LINE, RULER_BG = hx("#4A4F57"), hx("#1F2125")
+KEY_WHITE, KEY_BLACK = hx("#B4B9BF"), hx("#1A1C1F")   # the white a shade down (was #CFD3D8)
+BLACK_KEY = round(LEFT * 2 / 3)      # a black key covers two thirds of the 48 px key column: 32
+def dim(c): return mix((0, 0, 0), c, 0.4)   # past the pattern's end: rows and lines at 0.6
+RULER_TICK_Y = 64 + 28 + 16 - 4 // 2         # the middle of the ruler's 4 px ticks at its foot
 def row_y(k): return GY + (TOP - k) * ROW + 6
 def xt(t): return LEFT + t * PXSTEP // STEP
+# Bar 1 (x 48..304) is shaded, bar 2 is not. Half-step lines (every 12 ticks, 8 px) show faintly
+# at 16 px a step, so the empty rows and the row past the end are read halfway between two of
+# them (x 92: tick 66; x 316: tick 402); a bar line is 1 px, read on its pixel (x 304).
 probes = [
     ("note A center", (xt(24), row_y(60)), LEAD), ("note B center", (xt(144), row_y(64)), LEAD),
     ("ghost kick 192 center", (xt(192) + 8, row_y(60)), mix(KICKC, WHITE_ROW, 0.3)),
     ("ghost kick 288 center", (xt(288) + 8, row_y(60)), mix(KICKC, WHITE_ROW, 0.3)),
-    ("empty white row (key 60)", (88, row_y(60)), WHITE_ROW), ("empty black row (key 61)", (88, row_y(61)), BLACK_ROW),
-    ("bar line at pattern end", (xt(384) + 1, row_y(62)), BAR_LINE),
-    ("past end, white row key 60", (312, row_y(60)), mix((0, 0, 0), WHITE_ROW, 0.4)),
+    ("empty white row (key 60)", (92, row_y(60)), lift(WHITE_ROW)), ("empty black row (key 61)", (92, row_y(61)), lift(BLACK_ROW)),
+    ("bar line at pattern end", (xt(384) + 0.5, row_y(62)), BAR_LINE),
+    ("past end, white row key 60", (316, row_y(60)), dim(WHITE_ROW)),
+    # past the end the lines are dimmed as the rows are; the beat at tick 480 is whole at 16 px a step
+    ("beat line past the end", (xt(480) + 0.5, row_y(60)), dim(BEAT_LINE)),
+    ("black key (key 61)", (BLACK_KEY // 2, row_y(61)), KEY_BLACK),
+    ("white key beside it", ((BLACK_KEY + LEFT) // 2, row_y(61)), KEY_WHITE),
+    # the ruler's tick at each beat starting no bar, the beat line's color at its strength (whole here)
+    ("ruler beat tick (tick 96)", (xt(96) + 0.5, RULER_TICK_Y), BEAT_LINE),
+    ("ruler between ticks (tick 144)", (xt(144) + 0.5, RULER_TICK_Y), RULER_BG),
     # a stem is velocity * LANE / 128 tall from the lane's bottom: 50 px for A (100), 32 for B (64)
     ("lane stem A inside", (50, 560 - 100 * LANE // 128 + 4), LEAD), ("lane above stem A", (50, 560 - 100 * LANE // 128 - 4), LANE_BG),
     ("lane stem B inside", (114, 560 - 64 * LANE // 128 + 4), LEAD), ("lane above stem B", (114, 560 - 64 * LANE // 128 - 4), LANE_BG),
 ]
 for name, xy, col in probes: print(f"probe {name}: {xy} = #{''.join(f'{v:02X}' for v in col)}")
 print(f"probe label boxes x 20..46: C5 row (key 60) y {row_y(60)-4}..{row_y(60)+4} has >= 6 px near #25282D;",
-      f"D row (key 62) y {row_y(62)-4}..{row_y(62)+4} has 0; grid {GY}..{560-6-LANE}, lane {LANE_TOP}..560")
+      f"D row (key 62) y {row_y(62)-4}..{row_y(62)+4} has 0; grid {GY}..{560-10-LANE}, lane {LANE_TOP}..560")
 
 if "--write" in sys.argv:
     out = sys.argv[sys.argv.index("--write") + 1]; os.makedirs(out, exist_ok=True)

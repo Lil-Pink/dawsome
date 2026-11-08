@@ -163,7 +163,7 @@ fn exact(raw: &RawValue, path: &[&str]) -> f64 {
     at.get().parse().expect("a number")
 }
 
-// Known answers (gen_p32_expected.py restates the spec's tables): each effect's id, name, and
+// Known answers (gen_p32_expected.py's tables): each effect's id, name, and
 // every parameter's key, label, range, default, unit and whole flag; the names a choice's values
 // go by; and what a log control's 0, 0.5 and 1 stand for (exp2 alone, so exact).
 #[test]

@@ -58,6 +58,8 @@ impl App {
                 button: mouse::Button::Left,
                 double: false,
             } if !self.modifiers.command() && !self.roll.grid_held() => {
+                // The ground under the whole rows plays nothing, as it draws nothing.
+                view.key_in_rows(at.y, self.roll.grid_size().height)?;
                 let under = piano_layout::note_under(view, target.channel_notes(), at.x, at.y);
                 match under {
                     Some((note, _)) => Some((note.key, note.velocity)),

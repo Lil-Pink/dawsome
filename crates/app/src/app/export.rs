@@ -114,7 +114,7 @@ fn default_bars(project: &Project, mode: plan::PlayMode) -> u32 {
                 .unwrap_or(u32::MAX)
                 .max(1)
         }
-        plan::PlayMode::Pattern(id) => project
+        plan::PlayMode::Pattern(id) | plan::PlayMode::Channel { pattern: id, .. } => project
             .patterns
             .get(&id)
             .map_or(1, |pattern| pattern.length_bars.max(1)),
@@ -143,7 +143,7 @@ impl App {
     /// What the dialog chooses first: what the toolbar's mode plays.
     fn first_plays(&self) -> PlayMode {
         match self.export_mode(self.mode) {
-            plan::PlayMode::Pattern(_) => PlayMode::Pattern,
+            plan::PlayMode::Pattern(_) | plan::PlayMode::Channel { .. } => PlayMode::Pattern,
             plan::PlayMode::Song | plan::PlayMode::Nothing => PlayMode::Song,
         }
     }

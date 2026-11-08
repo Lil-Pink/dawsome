@@ -100,7 +100,7 @@ const PIANO_CONTROLS: [(Code, KeyControl); 6] = [
 /// left of 1 and the one left of Z. The digits 1 to 6 stay free: they show and hide the panels,
 /// one row above the black keys. So does Enter, right of the last white key: it adds the
 /// Library row pressed and opens the selected channel, which a finger overshooting ' may do by
-/// accident, a risk taken for those (6d review).
+/// accident, a risk taken for those.
 const PIANO_SWALLOWED: [Code; 20] = [
     Code::KeyQ,
     Code::KeyR,
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(Labels::default().label(Code::Semicolon), ";");
     }
 
-    // 6d K2: a key is named by what the user's keyboard typed on it (a French keyboard types q
+    // A key is named by what the user's keyboard typed on it (a French keyboard types q
     // on the US A), as a capital; nothing typed, a space, or more than one character leaves
     // the US name.
     #[test]

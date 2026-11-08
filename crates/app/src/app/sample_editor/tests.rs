@@ -87,7 +87,7 @@ fn view(app: &App) -> Vec<f32> {
 }
 
 /// What the channel the editor is on plays: its file at the project's rate through its list,
-/// as `dsp::edits::apply` makes it (its bits are gen_p30's, P1a's tests).
+/// as `dsp::edits::apply` makes it (its bits are gen_p30's, as the engine's sound-edit tests hold them).
 fn played(app: &App) -> SampleBuffer {
     let channel = app.sample_editor_on().expect("open");
     let shown = &app.session.project().channels[&channel];
@@ -866,7 +866,7 @@ fn long_frame(k: u64, period: u64) -> [f32; 2] {
     [left as f32, (-left / 2.0) as f32]
 }
 
-// The spec's 10x bound: the editor holds one buffer of the sound and its peaks. Ten minutes of
+// The ten-minute case's bound: the editor holds one buffer of the sound and its peaks. Ten minutes of
 // stereo at 48 kHz (gen_p30's "long", its two ops), opened in the window: what it holds is
 // 230,400,000 bytes of frames and 1,800,000 of peaks (the generator's figures), and what
 // opening it left on the heap is that and under 64 KiB more. One op more (Gain over the whole
@@ -955,8 +955,8 @@ fn the_editor_holds_one_buffer_and_its_peaks_of_ten_minutes() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// P1a's no-heap test through the window: the song playing p30_undo's clips, the editor open,
-// a crop of the audio channel's sound, a fade in of the sampler's, an undo and Play of a
+// The engine's no-heap test through the window: the song playing p30_undo's clips, the editor
+// open, a crop of the audio channel's sound, a fade in of the sampler's, an undo and Play of a
 // selection, each between two of the player's calls; the player's 300 calls touch the heap not
 // once, and every edit sent a plan.
 #[test]
@@ -1031,10 +1031,12 @@ fn find_hover(
 const TRACKS_TOP: f32 = TOOLBAR_HEIGHT + HEADER_HEIGHT + PLAYLIST_RULER;
 
 // The doors, through the widgets a press reaches. p30_undo with the playlist alone in a 1000 x
-// 560 window (as the drop tests lay it out: a bar 64 px from x 120, a row every 48 px, the
+// 560 window (as the drop tests lay it out: a bar 64 px from x 120, a row every 51 px in the
+// 50 px lanes its 8 tracks are fitted to, so clip 2 is read at 51 + 30 = 81; every 48 px in 47
+// px lanes before, read at 78, and every 65 in 64 px ones, at 95; the
 // clip's title the top 10 px of its lane): a double-click on clip 1's body (track 1, x 120..184)
-// opens the editor on its channel, Long, and the clip's properties strip beside it (the spec's
-// default: both). Its window, a bar at 120 BPM and 44.1 kHz (88200 frames) from frame 48000,
+// opens the editor on its channel, Long, and the clip's properties strip beside it (both, by
+// default). Its window, a bar at 120 BPM and 44.1 kHz (88200 frames) from frame 48000,
 // reaches past the 72000-frame sound: 48000..72000 is bracketed and shown across the window
 // (876 px). A wheel turn up over the waveform, through the editor's own widgets, scrolls it an
 // eighth earlier: 45000. The stretched clip 2 (track 2, its 108000 frames from 30000 over the
@@ -1061,7 +1063,7 @@ fn the_doors_open_the_editor_from_a_clip_the_rack_menu_and_the_instrument_window
         iced::mouse::Event::CursorLeft,
         iced::mouse::Cursor::Unavailable,
     );
-    assert_eq!(app.arranger.grid.lane, 47.0);
+    assert_eq!(app.arranger.grid.lane, 50.0);
     let clip_1 = Point::new(150.0, TRACKS_TOP + 30.0);
     let _ = window.click(&mut app, clip_1);
     assert_eq!(shown(&app), (false, false), "one click selects");
@@ -1091,7 +1093,7 @@ fn the_doors_open_the_editor_from_a_clip_the_rack_menu_and_the_instrument_window
         "{:?}",
         view_of(&app)
     );
-    let clip_2 = Point::new(150.0, TRACKS_TOP + 48.0 + 30.0);
+    let clip_2 = Point::new(150.0, TRACKS_TOP + 51.0 + 30.0);
     let _ = window.click(&mut app, clip_2);
     let _ = window.click(&mut app, clip_2);
     assert_eq!(app.editor.window, Some(editor), "the same window");

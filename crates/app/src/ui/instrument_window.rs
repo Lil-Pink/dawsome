@@ -7,10 +7,14 @@
 //! window (a pad per drum, or a keyboard with the zones' range shaded and their root keys
 //! dotted, where the height of a press sets its velocity); a thin footer with Store A, A/B, the
 //! roots, the zones' list, Edit sample… (a sampler's or an audio channel's file) and Close. A plugin channel shows its level and opens its own window.
+//! A synth channel shows its knobs in blocks under their headings, placed as a DJ's booth, its
+//! level under the left deck and its presets under the right ([`crate::ui::synth_panel`],
+//! [`synth_board`]), the whole window drawn as a console on one chassis ([`crate::ui::console`]).
 //! An input channel shows its level, then its input: the device and its channels (two pick
 //! lists, the devices listed again by Refresh), the input's meter and how far behind it is heard
 //! (or why its device did not open).
 
+use dawsome_engine::processor::ProcessorFactory;
 use dawsome_engine::project::{
     Channel, ChannelKind, Gate, InputChannels, InsertId, MidiOut, Sound, ATTACK_RANGE, BEND_RANGE,
     CENT_RANGE, LATENCY_RANGE, MIDI_OUT_CHANNELS, PAN_RANGE, PROGRAM_RANGE, RELEASE_RANGE,
@@ -30,6 +34,8 @@ use iced::{mouse, Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme
 
 use crate::app::Message;
 use crate::sets::ZoneInfo;
+use crate::ui::console::{self, Finish};
+use crate::ui::fonts::size;
 use crate::ui::hint::{hover_area, hover_change, Hover, SoundPart};
 use crate::ui::instrument_layout::{
     cap_rect, dragged, readout_at, Look, Part, Placed, Strip, HEADER_HEIGHT, KNOB_SIZE,
@@ -39,8 +45,8 @@ use crate::ui::key_names::key_name;
 use crate::ui::mixer::{centered, draw_tip, label};
 use crate::ui::mixer_layout::CAP_LINE;
 use crate::ui::mixer_state::{fader_text, pan_text, percent_text};
-use crate::ui::rack::draw_knob;
 use crate::ui::style;
+use crate::ui::synth_panel::{self, PresetMessage, SynthView};
 
 /// The instrument window's first size, and the least it can be made.
 pub const WINDOW_SIZE: Size = Size::new(560.0, 420.0);
@@ -106,6 +112,17 @@ pub enum InstrumentMessage {
     RefreshInputs,
     /// An input channel's MIDI out changed: one undo step (a latency drag: one on release).
     MidiOut(MidiOutChange),
+    /// A press on a synth channel's knob for parameter `index` (a choice's button too), at `at`
+    /// in the knobs' canvas: `right` for the right button, `double` when it repeats the last left
+    /// press quickly in place.
+    SynthKnob {
+        index: usize,
+        at: Point,
+        right: bool,
+        double: bool,
+    },
+    /// A synth channel's presets.
+    Preset(PresetMessage),
 }
 
 /// A change to an input channel's MIDI out from its window's MIDI OUT group.
@@ -284,11 +301,11 @@ impl Control {
         }
     }
 
-    /// Whether a channel of `kind` shows it: a plugin, audio or input channel its volume and
-    /// pan; an instrument set every control but the start.
+    /// Whether a channel of `kind` shows it: a plugin, synth, audio or input channel its volume
+    /// and pan; an instrument set every control but the start.
     pub fn shown_for(self, kind: ChannelKind) -> bool {
         match kind {
-            ChannelKind::Plugin | ChannelKind::Audio | ChannelKind::Input => {
+            ChannelKind::Plugin | ChannelKind::Audio | ChannelKind::Input | ChannelKind::Synth => {
                 matches!(self, Control::Volume | Control::Pan)
             }
             ChannelKind::Instrument => self != Control::Start,
@@ -562,6 +579,11 @@ struct SoundMap<'a> {
 pub struct Caches {
     pub strip: canvas::Cache,
     pub map: canvas::Cache,
+    /// A synth channel's knobs.
+    pub synth: canvas::Cache,
+    /// The console's chassis under a synth's window ([`console::chassis`]). Never cleared: it
+    /// shows nothing but its size, and a new size draws it again.
+    pub chassis: canvas::Cache,
 }
 
 impl Caches {
@@ -569,12 +591,16 @@ impl Caches {
         Self {
             strip: canvas::Cache::new(),
             map: canvas::Cache::new(),
+            synth: canvas::Cache::new(),
+            chassis: canvas::Cache::new(),
         }
     }
 
+    /// Every drawing but the chassis's, which only its size changes.
     pub fn clear(&self) {
         self.strip.clear();
         self.map.clear();
+        self.synth.clear();
     }
 }
 
@@ -667,7 +693,7 @@ impl canvas::Program<Message> for SoundMap<'_> {
 
 impl SoundMap<'_> {
     fn draw_map(&self, frame: &mut Frame, bounds: Rectangle) {
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::RACK_WELL);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().bg);
         let held = self.held.map(|(key, _)| key);
         let x = stretch(bounds.width, self.map);
         match self.map {
@@ -675,21 +701,32 @@ impl SoundMap<'_> {
                 for (index, pad) in pads.iter().enumerate() {
                     let rect = stretched(pad_rect(index), x);
                     let lit = held == Some(pad.key);
-                    let fill = if lit { style::ACCENT } else { style::BUTTON };
+                    let fill = if lit {
+                        style::accent()
+                    } else {
+                        style::palette().button
+                    };
                     frame.fill_rectangle(rect.position(), rect.size(), fill);
-                    let name = crate::ui::text_fit::fit_width(&pad.name, rect.width - 8.0, 11.0)
-                        .map(std::borrow::Cow::into_owned)
-                        .unwrap_or_default();
+                    let name =
+                        crate::ui::text_fit::fit_width(&pad.name, rect.width - 8.0, size::LABEL)
+                            .map(std::borrow::Cow::into_owned)
+                            .unwrap_or_default();
                     label(
                         frame,
                         &name,
                         Point::new(rect.x + 4.0, rect.y + 11.0),
-                        style::TEXT,
-                        11.0,
+                        style::palette().text,
+                        size::LABEL,
                     );
                     let key = key_name(pad.key);
                     let at = Point::new(rect.x + 4.0, rect.y + rect.height - 10.0);
-                    label(frame, &key, at, style::TEXT_DIM, 10.0);
+                    label(
+                        frame,
+                        &key,
+                        at,
+                        style::palette().text_secondary,
+                        size::DENSE,
+                    );
                 }
             }
             Map::Keys { low, zones, roots } => {
@@ -697,27 +734,33 @@ impl SoundMap<'_> {
                 for (key, rect) in key_rects(*low) {
                     let rect = stretched(rect, x);
                     let color = match (held == Some(key), is_black(key), inside(key)) {
-                        (true, _, _) => style::ACCENT,
-                        (false, true, true) => style::KEY_BLACK,
-                        (false, true, false) => style::KNOB_RING,
-                        (false, false, true) => style::KEY_WHITE,
-                        (false, false, false) => style::TEXT_DIM,
+                        (true, _, _) => style::accent(),
+                        (false, true, true) => style::palette().key_black,
+                        (false, true, false) => style::palette().knob_ring,
+                        (false, false, true) => style::palette().key_white,
+                        (false, false, false) => style::palette().text_disabled,
                     };
                     frame.fill_rectangle(rect.position(), rect.size(), color);
                     if !is_black(key) {
                         frame.fill_rectangle(
                             Point::new(rect.x + rect.width - 1.0, rect.y),
                             Size::new(1.0, rect.height),
-                            style::KEY_EDGE,
+                            style::palette().key_edge,
                         );
                     }
                     if roots.contains(&key) {
                         let center = Point::new(rect.center_x(), rect.y + rect.height - 8.0);
-                        frame.fill(&Path::circle(center, 3.0), style::ACCENT);
+                        frame.fill(&Path::circle(center, 3.0), style::accent());
                     }
                     if key % 12 == 0 && !is_black(key) {
                         let at = Point::new(rect.x + 2.0, rect.y + rect.height - 20.0);
-                        label(frame, &key_name(key), at, style::KEY_LABEL, 9.0);
+                        label(
+                            frame,
+                            &key_name(key),
+                            at,
+                            style::palette().key_label,
+                            size::TINY,
+                        );
                     }
                 }
             }
@@ -725,7 +768,7 @@ impl SoundMap<'_> {
         if let Some((key, velocity)) = self.held {
             let words = format!("{} \u{b7} velocity {velocity}", key_name(key));
             let at = Point::new(bounds.width - 110.0, 10.0);
-            label(frame, &words, at, style::ACCENT, 11.0);
+            label(frame, &words, at, style::accent(), size::LABEL);
         }
     }
 }
@@ -743,8 +786,9 @@ pub fn hover_of(part: Part) -> Hover {
 /// Two presses on one knob or fader this close together reset it, as the mixer's do.
 const DOUBLE_PRESS: Duration = Duration::from_millis(400);
 
-/// The text size of the strip's labels, readouts and group names.
-const LABEL_SIZE: f32 = 10.0;
+/// How far inside a console module's face the strip's well lies, either side and over its foot
+/// (a pixel more there): the output chooser reaches to two pixels of the face's edge.
+const WELL_RIM: f32 = 2.0;
 
 /// The strip of controls, like a mixer's: draws its groups, knobs, lights and faders, the
 /// value tip over the control under the cursor or held, and turns presses and drags into the
@@ -754,6 +798,8 @@ struct Controls<'a> {
     channel: &'a Channel,
     /// The strip's drawing without the tip, kept between frames.
     cache: &'a canvas::Cache,
+    /// Flat, or a console's module (a synth's).
+    finish: Finish,
     /// What a note's end does as the channel plays now: the gate switch's lit position.
     gate: Gate,
     strip: Strip,
@@ -826,12 +872,12 @@ impl Controls<'_> {
 
     fn draw_part(&self, frame: &mut Frame, placed: &Placed) {
         let label_color = match placed.part {
-            Part::Control(control) if !self.acts(control) => style::TEXT_DIM,
-            _ => style::TEXT,
+            Part::Control(control) if !self.acts(control) => style::palette().text_disabled,
+            _ => style::palette().text,
         };
         match (placed.look, placed.part) {
             (Look::Knob { center }, Part::Control(control)) => {
-                draw_knob(
+                self.finish.draw_knob(
                     frame,
                     center,
                     KNOB_SIZE,
@@ -842,44 +888,50 @@ impl Controls<'_> {
                     placed.label,
                     placed.label_at,
                     label_color,
-                    LABEL_SIZE,
+                    size::DENSE,
                 );
             }
             (Look::Fader { track, tall }, Part::Control(control)) => {
                 let value = self.value(control);
-                frame.fill_rectangle(track.position(), track.size(), style::FADER_TRACK);
+                self.finish.draw_slot(frame, track);
                 let cap = cap_rect(track, control.position(value), tall);
-                frame.fill_rectangle(cap.position(), cap.size(), style::FADER_CAP);
+                self.finish.draw_cap(frame, cap);
                 frame.fill_rectangle(
                     Point::new(cap.x, cap.center_y() - CAP_LINE / 2.0),
                     Size::new(cap.width, CAP_LINE),
-                    style::ACCENT,
+                    style::accent(),
                 );
                 if !tall {
                     let readout = control.text(value);
-                    centered(frame, &readout, readout_at(track), style::TEXT, LABEL_SIZE);
+                    centered(
+                        frame,
+                        &readout,
+                        readout_at(track),
+                        style::palette().text,
+                        size::DENSE,
+                    );
                 }
                 centered(
                     frame,
                     placed.label,
                     placed.label_at,
                     label_color,
-                    LABEL_SIZE,
+                    size::DENSE,
                 );
             }
             (Look::Light { center }, part) => {
                 let color = if self.lit(part) {
                     style::TRACK_LED_ON
                 } else {
-                    style::LED_OFF
+                    style::palette().led_off
                 };
                 frame.fill(&Path::circle(center, LIGHT_RADIUS), color);
                 label(
                     frame,
                     placed.label,
                     placed.label_at,
-                    style::TEXT,
-                    LABEL_SIZE,
+                    style::palette().text,
+                    size::DENSE,
                 );
             }
             (Look::Chooser, _) => {
@@ -887,15 +939,15 @@ impl Controls<'_> {
                     frame,
                     placed.label,
                     placed.label_at,
-                    style::TEXT,
-                    LABEL_SIZE,
+                    style::palette().text,
+                    size::DENSE,
                 );
             }
             // Its label and its value in one line on a well, which a drag moves as a knob's.
             (Look::Readout, Part::Control(control)) => {
-                frame.fill_rectangle(placed.hit.position(), placed.hit.size(), style::FADER_TRACK);
+                self.finish.draw_slot(frame, placed.hit);
                 let words = format!("{} {}", placed.label, control.text(self.value(control)));
-                centered(frame, &words, placed.label_at, label_color, LABEL_SIZE);
+                centered(frame, &words, placed.label_at, label_color, size::DENSE);
             }
             (Look::Knob { .. } | Look::Fader { .. } | Look::Readout, _) => {}
         }
@@ -1045,14 +1097,35 @@ impl Controls<'_> {
     fn draw_strip(&self, frame: &mut Frame) {
         for group in &self.strip.groups {
             let rect = group.rect;
-            frame.fill_rectangle(rect.position(), rect.size(), style::STRIP);
-            frame.fill_rectangle(
-                rect.position(),
-                Size::new(rect.width, HEADER_HEIGHT),
-                style::STRIP_SELECTED,
-            );
-            let title = Point::new(rect.center_x(), HEADER_HEIGHT / 2.0);
-            centered(frame, group.group.title(), title, style::TEXT, LABEL_SIZE);
+            let middle = match self.finish {
+                Finish::Flat => {
+                    frame.fill_rectangle(rect.position(), rect.size(), style::palette().strip);
+                    frame.fill_rectangle(
+                        rect.position(),
+                        Size::new(rect.width, HEADER_HEIGHT),
+                        style::palette().active,
+                    );
+                    rect.center_x()
+                }
+                // Its title on the module's face, its controls in a well under it.
+                Finish::Console => {
+                    let face = console::draw_module(frame, rect);
+                    let well = Rectangle::new(
+                        Point::new(face.x + WELL_RIM, face.y + HEADER_HEIGHT),
+                        Size::new(
+                            face.width - 2.0 * WELL_RIM,
+                            face.height - HEADER_HEIGHT - WELL_RIM - 1.0,
+                        ),
+                    );
+                    console::draw_well(frame, well);
+                    face.center_x()
+                }
+            };
+            let title = Point::new(middle, HEADER_HEIGHT / 2.0);
+            self.finish
+                .write_heading(title, style::palette().text, |at, color| {
+                    centered(frame, group.group.title(), at, color, size::DENSE);
+                });
             for placed in &group.parts {
                 self.draw_part(frame, placed);
             }
@@ -1173,6 +1246,8 @@ pub struct View<'a> {
     pub input: Option<InputView>,
     /// An input channel's MIDI out; `None` for every other kind.
     pub midi_out: Option<MidiOutView>,
+    /// A synth channel's knobs and presets; `None` for every other kind.
+    pub synth: Option<SynthView<'a>>,
     /// Who made its set, when it says.
     pub maker: &'a str,
     /// The inserts its output chooser offers, in the mixer's order, then "Mixer insert…".
@@ -1195,9 +1270,29 @@ pub struct View<'a> {
     pub caches: &'a Caches,
 }
 
-/// The size of the instrument window's foot line, and its height.
-pub const HINT_SIZE: f32 = 11.0;
+/// The instrument window's foot line's height.
 pub const HINT_HEIGHT: f32 = 22.0;
+
+/// The space between the window's rows, the height of its title row (text 15) and of a row of
+/// its buttons (text 12, padded 2 above and below): what a synth's first size is reckoned
+/// with.
+pub const ROW_GAP: f32 = 8.0;
+pub const TITLE_HEIGHT: f32 = 20.0;
+pub const BUTTON_ROW_HEIGHT: f32 = 20.0;
+
+/// The size a synth's window shows `factory`'s whole booth at ([`synth_panel::booth`]): its
+/// title, the booth (its level and presets under its decks) and its footer under one another,
+/// as wide as the booth, with the window's padding and foot line. Why: at the instrument
+/// window's first size most of the knobs were out of view.
+pub fn synth_window_size(factory: &dyn ProcessorFactory) -> Size {
+    let booth = synth_panel::booth(factory).size;
+    let rows = [TITLE_HEIGHT, booth.height, BUTTON_ROW_HEIGHT];
+    let body = rows.iter().sum::<f32>() + ROW_GAP * (rows.len() - 1) as f32;
+    Size::new(
+        booth.width + 2.0 * PADDING,
+        body + 2.0 * PADDING + HINT_HEIGHT,
+    )
+}
 
 /// How to play a channel of `kind` from its window, its foot line while no control is under the
 /// cursor.
@@ -1217,6 +1312,7 @@ pub fn help(kind: ChannelKind, keys: &crate::keys::Keys) -> String {
         ChannelKind::Sampler | ChannelKind::Instrument => format!(
             "Press a pad or key; lower is louder. The computer keyboard plays it too ({switch} switches it)."
         ),
+        ChannelKind::Synth => format!("The computer keyboard plays it ({switch} switches it)."),
     }
 }
 
@@ -1249,7 +1345,7 @@ pub fn kind_words(channel: &Channel) -> &'static str {
 /// (scrolled across when the window is narrower than the strip), the sound map across the
 /// window (a plugin channel: its own window's button), Store A, A/B and the zones in a thin
 /// footer, the zones' list when unfolded, and the foot line.
-pub fn view(shown: View<'_>) -> Element<'_, Message> {
+pub fn view(mut shown: View<'_>) -> Element<'_, Message> {
     let instrument = |message| Message::Instrument(message);
     let channel = shown.channel;
     let kind = channel.kind;
@@ -1260,24 +1356,38 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
         format!("{} \u{b7} by {}", kind_words(channel), shown.maker)
     };
     let title = row![
-        text(channel.name.clone()).size(15),
-        text(about).size(11).color(style::TEXT_DIM),
+        text(channel.name.clone()).size(size::TITLE),
+        text(about)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary),
     ]
     .spacing(10)
     .align_y(Center);
-    let mut body = column![title, strip_view(&shown, room)].spacing(8);
+    // A synth's window is a console, its strip a module on the chassis with its knobs'.
+    let finish = if shown.synth.is_some() {
+        synth_panel::FINISH
+    } else {
+        Finish::Flat
+    };
+    let mut body = column![title].spacing(ROW_GAP);
+    // A synth's strip lies under its booth's left deck ([`synth_board`]).
+    if shown.synth.is_none() {
+        body = body.push(strip_view(&shown, Strip::of(kind, room), room, finish));
+    }
     if let Some(input) = shown.input.clone() {
         body = body.push(input_section(input));
         if let Some(out) = shown.midi_out.clone() {
             body = body.push(midi_out_section(out));
         }
     } else if kind == ChannelKind::Plugin {
-        let open = button(text("Open plugin window").size(12))
+        let open = button(text("Open plugin window").size(size::LABEL))
             .padding([4, 10])
             .style(style::tool_button(false))
             .on_press(instrument(InstrumentMessage::OpenPlugin));
         body = body.push(hover_area(open, Hover::Sound(SoundPart::OpenPlugin)));
-    } else {
+    } else if shown.synth.is_some() {
+        body = body.push(synth_board(&mut shown, room));
+    } else if kind != ChannelKind::Synth {
         let map = canvas_widget(SoundMap {
             map: shown.map,
             held: shown.held,
@@ -1299,27 +1409,61 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
                 zone.velocities.1,
                 zone.sample
             ))
-            .size(11)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .into()
         });
         body = body.push(column(lines).spacing(2));
     }
     // Cut with an ellipsis to the window's width, as the main window's hint bar is.
-    let hint = crate::ui::text_fit::fit_width(&shown.hint, room, HINT_SIZE)
+    let hint = crate::ui::text_fit::fit_width(&shown.hint, room, size::LABEL)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_default();
-    panel(body, hint)
+    let chassis = (finish == Finish::Console).then_some(&shown.caches.chassis);
+    panel(body, hint, chassis)
 }
 
-/// The strip of controls over `room` across, the output chooser over its place.
-fn strip_view<'a>(shown: &View<'a>, room: f32) -> Element<'a, Message> {
-    let strip = Strip::of(shown.channel.kind, room);
+/// A synth's board: its booth ([`synth_panel::board`]), the strip as one LEVEL module under the
+/// left deck, centred in `room` across, or scrolled across when the room is narrower than the
+/// booth (never laid out again: the booth is a fixed placement).
+fn synth_board<'a>(shown: &mut View<'a>, room: f32) -> Element<'a, Message> {
+    let Some(factory) = shown.synth.as_ref().map(|synth| synth.factory) else {
+        return space().into();
+    };
+    let booth = synth_panel::booth(factory);
+    let width = booth.level.width;
+    let strip = Strip::centred(shown.channel.kind, width);
+    let level = strip_view(shown, strip, width, synth_panel::FINISH);
+    let Some(synth) = shown.synth.as_mut() else {
+        return space().into();
+    };
+    let board = synth_panel::board(synth, &booth, level);
+    if booth.size.width > room {
+        scrollable(board)
+            .direction(Direction::Horizontal(
+                Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .width(Fill)
+            .into()
+    } else {
+        container(board).width(Fill).align_x(Center).into()
+    }
+}
+
+/// The strip of controls `strip` (laid out for `room` across) in its `finish`, the output
+/// chooser over its place.
+fn strip_view<'a>(
+    shown: &View<'a>,
+    strip: Strip,
+    room: f32,
+    finish: Finish,
+) -> Element<'a, Message> {
     let width = strip.width;
     let chooser = strip.find(Part::Insert).map(|placed| placed.hit);
     let controls = canvas_widget(Controls {
         channel: shown.channel,
         cache: &shown.caches.strip,
+        finish,
         gate: shown.gate,
         strip,
         fine: shown.fine,
@@ -1339,7 +1483,7 @@ fn strip_view<'a>(shown: &View<'a>, room: f32) -> Element<'a, Message> {
                 None => InstrumentMessage::MixerInsert,
             })
         })
-        .text_size(LABEL_SIZE + 1.0)
+        .text_size(size::LABEL)
         .padding([2, 4])
         .width(rect.width)
         .style(style::chooser)
@@ -1366,13 +1510,16 @@ fn footer<'a>(shown: &View<'a>) -> Element<'a, Message> {
     let instrument = |message| Message::Instrument(message);
     let kind = shown.channel.kind;
     let mut footer = row![].spacing(4).align_y(Center);
-    // A plugin's and an input's sound has no settings of the window's to store.
-    if !matches!(kind, ChannelKind::Plugin | ChannelKind::Input) {
-        let store = button(text("Store A").size(12))
+    // A plugin's, a synth's and an input's sound has no settings of the window's to store.
+    if !matches!(
+        kind,
+        ChannelKind::Plugin | ChannelKind::Input | ChannelKind::Synth
+    ) {
+        let store = button(text("Store A").size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(false))
             .on_press(instrument(InstrumentMessage::Store));
-        let compare = button(text("A/B").size(12))
+        let compare = button(text("A/B").size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(shown.compared))
             .on_press_maybe(
@@ -1383,9 +1530,11 @@ fn footer<'a>(shown: &View<'a>) -> Element<'a, Message> {
         let compare = row![store, compare].spacing(2);
         footer = footer.push(hover_area(compare, Hover::Sound(SoundPart::Compare)));
         if let Some(roots) = roots_line(shown.map) {
-            footer = footer
-                .push(space().width(4))
-                .push(text(roots).size(11).color(style::TEXT_DIM));
+            footer = footer.push(space().width(4)).push(
+                text(roots)
+                    .size(size::LABEL)
+                    .color(style::palette().text_secondary),
+            );
         }
     }
     footer = footer.push(space().width(Fill));
@@ -1396,7 +1545,7 @@ fn footer<'a>(shown: &View<'a>) -> Element<'a, Message> {
             } else {
                 "Zones \u{25b8}"
             })
-            .size(12),
+            .size(size::LABEL),
         )
         .padding([2, 8])
         .style(style::tool_button(shown.more))
@@ -1404,13 +1553,13 @@ fn footer<'a>(shown: &View<'a>) -> Element<'a, Message> {
         footer = footer.push(hover_area(more, Hover::Sound(SoundPart::More)));
     }
     if edits_a_file(shown.channel) {
-        let edit = button(text("Edit sample\u{2026}").size(12))
+        let edit = button(text("Edit sample\u{2026}").size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(false))
             .on_press(instrument(InstrumentMessage::EditSample));
         footer = footer.push(hover_area(edit, Hover::Sound(SoundPart::EditSample)));
     }
-    let close = button(text("Close").size(12))
+    let close = button(text("Close").size(size::LABEL))
         .padding([2, 8])
         .style(style::tool_button(false))
         .on_press(instrument(InstrumentMessage::Close));
@@ -1421,7 +1570,6 @@ fn footer<'a>(shown: &View<'a>) -> Element<'a, Message> {
 
 /// The width of an input row's label, and the size of its words.
 pub const INPUT_LABEL: f32 = 64.0;
-const INPUT_SIZE: f32 = 12.0;
 /// The input meter's size.
 const INPUT_METER: Size = Size::new(220.0, 8.0);
 
@@ -1431,8 +1579,8 @@ fn input_section<'a>(input: InputView) -> Element<'a, Message> {
     let instrument = |message| Message::Instrument(message);
     let label = |words: &'static str| {
         text(words)
-            .size(INPUT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .width(INPUT_LABEL)
     };
     let devices = pick_list(
@@ -1440,12 +1588,12 @@ fn input_section<'a>(input: InputView) -> Element<'a, Message> {
         Some(input.device),
         move |choice: DeviceChoice| instrument(InstrumentMessage::InputDevice(choice.name)),
     )
-    .text_size(INPUT_SIZE)
+    .text_size(size::LABEL)
     .padding([2, 6])
     .width(Fill)
     .style(style::chooser)
     .menu_style(style::chooser_menu);
-    let refresh = button(text("Refresh").size(INPUT_SIZE))
+    let refresh = button(text("Refresh").size(size::LABEL))
         .padding([2, 8])
         .style(style::tool_button(false))
         .on_press(instrument(InstrumentMessage::RefreshInputs));
@@ -1461,7 +1609,7 @@ fn input_section<'a>(input: InputView) -> Element<'a, Message> {
         Some(input.picked),
         move |choice: ChannelsChoice| instrument(InstrumentMessage::InputChannels(choice.0)),
     )
-    .text_size(INPUT_SIZE)
+    .text_size(size::LABEL)
     .padding([2, 6])
     .width(160)
     .style(style::chooser)
@@ -1484,9 +1632,9 @@ fn input_section<'a>(input: InputView) -> Element<'a, Message> {
     let color = if input.refused {
         style::WARNING
     } else {
-        style::TEXT_DIM
+        style::palette().text_secondary
     };
-    let status = text(input.status).size(11).color(color);
+    let status = text(input.status).size(size::LABEL).color(color);
     column![device_row, channels_row, level_row, status]
         .spacing(6)
         .into()
@@ -1506,25 +1654,34 @@ fn midi_out_section<'a>(shown: MidiOutView) -> Element<'a, Message> {
     let instrument = |change| Message::Instrument(InstrumentMessage::MidiOut(change));
     let label = |words: &'static str| {
         text(words)
-            .size(INPUT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .width(INPUT_LABEL)
     };
-    let words = |words: &'static str| text(words).size(INPUT_SIZE).color(style::TEXT_DIM);
+    let words = |words: &'static str| {
+        text(words)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
+    };
     let rule = container(space())
         .width(Fill)
         .height(MIDI_OUT_RULE)
         .style(|_theme: &Theme| container::Style {
-            background: Some(iced::Background::Color(style::ACCENT)),
+            background: Some(iced::Background::Color(style::accent())),
             ..container::Style::default()
         });
-    let title = row![text("MIDI OUT").size(10).color(style::TEXT_DIM), rule]
-        .spacing(6)
-        .align_y(Center);
+    let title = row![
+        text("MIDI OUT")
+            .size(size::DENSE)
+            .color(style::palette().text_secondary),
+        rule
+    ]
+    .spacing(6)
+    .align_y(Center);
     let ports = pick_list(shown.ports, Some(shown.port), move |choice: PortChoice| {
         instrument(MidiOutChange::Port(choice.name))
     })
-    .text_size(INPUT_SIZE)
+    .text_size(size::LABEL)
     .padding([2, 6])
     .width(Fill)
     .style(style::chooser)
@@ -1541,7 +1698,7 @@ fn midi_out_section<'a>(shown: MidiOutView) -> Element<'a, Message> {
         let channel = pick_list(channels, Some(out.channel), move |channel| {
             instrument(MidiOutChange::Channel(channel))
         })
-        .text_size(INPUT_SIZE)
+        .text_size(size::LABEL)
         .padding([2, 6])
         .width(MIDI_CHANNEL_WIDTH)
         .style(style::chooser)
@@ -1551,7 +1708,7 @@ fn midi_out_section<'a>(shown: MidiOutView) -> Element<'a, Message> {
             Some(ProgramChoice(out.program)),
             move |choice: ProgramChoice| instrument(MidiOutChange::Program(choice.0)),
         )
-        .text_size(INPUT_SIZE)
+        .text_size(size::LABEL)
         .padding([2, 6])
         .width(PROGRAM_WIDTH)
         .style(style::chooser)
@@ -1570,7 +1727,7 @@ fn midi_out_section<'a>(shown: MidiOutView) -> Element<'a, Message> {
         })
         .on_release(Message::Instrument(InstrumentMessage::Released))
         .width(Fill);
-        let echo = button(text("Echo").size(INPUT_SIZE))
+        let echo = button(text("Echo").size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(out.echo))
             .on_press(instrument(MidiOutChange::Echo(!out.echo)));
@@ -1578,7 +1735,7 @@ fn midi_out_section<'a>(shown: MidiOutView) -> Element<'a, Message> {
             label("Latency"),
             hover_area(latency, Hover::Sound(SoundPart::MidiOutLatency)),
             text(format!("{} ms", out.latency_ms))
-                .size(INPUT_SIZE)
+                .size(size::LABEL)
                 .width(LATENCY_WORDS),
             hover_area(echo, Hover::Sound(SoundPart::MidiOutEcho)),
         ]
@@ -1590,9 +1747,9 @@ fn midi_out_section<'a>(shown: MidiOutView) -> Element<'a, Message> {
         let color = if warning {
             style::WARNING
         } else {
-            style::TEXT_DIM
+            style::palette().text_secondary
         };
-        group = group.push(text(counts).size(11).color(color));
+        group = group.push(text(counts).size(size::LABEL).color(color));
     }
     group.into()
 }
@@ -1627,7 +1784,7 @@ impl<Message> canvas::Program<Message> for InputMeter {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::METER_GROUND);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().meter_ground);
         let width = bounds.width * meter_position(self.level);
         let color = if self.level > 1.0 {
             style::METER_RED
@@ -1649,17 +1806,30 @@ pub fn kind_name(kind: ChannelKind) -> &'static str {
         ChannelKind::Plugin => "Plugin instrument",
         ChannelKind::Audio => "Audio",
         ChannelKind::Input => "External input",
+        ChannelKind::Synth => "Synth",
     }
 }
 
 /// The window's ground: `body`, scrolling when taller than the window, over the foot line
-/// holding `hint`.
-fn panel(body: iced::widget::Column<'_, Message>, hint: String) -> Element<'_, Message> {
+/// holding `hint`; with a `chassis`, the console's under the body and its padding, scrolling
+/// with them. Under, not round: the chassis's canvas takes the size the body lays out at, so
+/// the body's places are the flat window's to the pixel.
+fn panel<'a>(
+    body: iced::widget::Column<'a, Message>,
+    hint: String,
+    chassis: Option<&'a canvas::Cache>,
+) -> Element<'a, Message> {
     let content = container(body).padding(PADDING).width(Fill);
+    let content: Element<'a, Message> = match chassis {
+        Some(cache) => stack([Element::from(content)])
+            .push_under(console::chassis(cache))
+            .into(),
+        None => content.into(),
+    };
     let foot = container(
         text(hint)
-            .size(HINT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .wrapping(iced::widget::text::Wrapping::None),
     )
     .padding([0.0, PADDING])
@@ -1897,7 +2067,7 @@ mod tests {
         }
     }
 
-    // B5: the keys the sounds were made at, named the one way (key 60 = C5): a sampler's root
+    // The keys the sounds were made at, named the one way (key 60 = C5): a sampler's root
     // 60, a set's roots, a set of many roots by their count; pads name no root.
     #[test]
     fn the_roots_line_names_the_keys_with_60_as_c5() {
@@ -2066,6 +2236,7 @@ mod tests {
         Controls {
             channel,
             cache,
+            finish: Finish::Flat,
             gate: Gate::OneShot,
             strip: Strip::of(ChannelKind::Sampler, 536.0),
             fine: false,

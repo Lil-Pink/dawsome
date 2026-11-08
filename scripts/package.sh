@@ -7,8 +7,9 @@
 # project, the starter kit's sounds, the Help window's pictures in help/ beside the programs
 # (where the app looks for them), the README (short), the manual (docs/manual.md, as manual.md)
 # and LICENSE at the top (with docs/windows.md for Windows), and in licenses/ the rest of the
-# paperwork: NOTICE, THIRD_PARTY.md, SOUNDS.md, NOTICES.txt (the texts of every library built
-# in), LICENSE-SURGE and SOURCES.md (where the plugin comes from and its complete source; the
+# paperwork: NOTICE, THIRD_PARTY.md, SOUNDS.md, NOTICES.txt (the texts of every library and font
+# built in), LICENSE-Inter.txt (the built-in font's), LICENSE-SURGE and SOURCES.md (where the
+# plugin comes from and its complete source; the
 # release offers that source beside the zips). Build and fetch first (cargo build
 # --release --config "$(scripts/remap-paths.sh)" -p dawsome -p dawsome-app, or
 # scripts/xwin-build.sh for Windows from Linux; scripts/fetch-surge.sh <platform>). A program
@@ -76,6 +77,6 @@ cp -R -- "$surge" "$stage/plugins"
 scripts/python.sh -I scripts/surge.py sources "$platform" > "$stage/licenses/SOURCES.md"
 cp -- README.md LICENSE "${notes[@]}" "$stage/"
 cp -- docs/manual.md "$stage/manual.md"
-cp -- licenses/LICENSE-SURGE licenses/NOTICE licenses/NOTICES.txt licenses/THIRD_PARTY.md licenses/SOUNDS.md "$stage/licenses/"
+cp -- licenses/LICENSE-Inter.txt licenses/LICENSE-SURGE licenses/NOTICE licenses/NOTICES.txt licenses/THIRD_PARTY.md licenses/SOUNDS.md "$stage/licenses/"
 (cd -- "$dist" && "$OLDPWD/scripts/python.sh" -I -m zipfile -c "$name.zip" "$name")
 echo "$dist/$name.zip"

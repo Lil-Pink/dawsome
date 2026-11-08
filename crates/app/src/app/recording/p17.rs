@@ -574,7 +574,7 @@ fn the_channel_menu_opens_on_the_channels_row() {
     );
 }
 
-/// An edit during a song take with no track free: p17_song with tracks 2..=8 holding a clip over
+/// An edit during a song take with no track free: p17_song with tracks 2..=6 holding a clip over
 /// 384..768 (one step); a song take from 384 places no clip, so it adds no track either; `edit`
 /// committed after call 40, then Stop and Ctrl+Z down to nothing. As [`edit_during_a_song_take`].
 fn edit_during_a_song_take_with_no_track_free(
@@ -584,7 +584,7 @@ fn edit_during_a_song_take_with_no_track_free(
     use dawsome_engine::project::{Clip, TrackId};
     let (mut app, mut player, _dir) = open(test, "p17_song.json");
     let fixture_text = document(&app);
-    let clips = (2..=8)
+    let clips = (2..=6)
         .map(|track| Clip::of_pattern(PatternId(1), TrackId(track), Ticks(384), Ticks(384)))
         .collect();
     app.commit(dawsome_engine::edit::Edit::PlaceClips {
@@ -601,7 +601,7 @@ fn edit_during_a_song_take_with_no_track_free(
     assert!(app.recording.taking_notes());
     assert_eq!(
         app.session.project().playlist.tracks.len(),
-        8,
+        6,
         "the take adds no track, even with none free"
     );
     let mut went_through = false;
@@ -630,7 +630,7 @@ fn edit_during_a_song_take_with_no_track_free(
 }
 
 // A song take with no track free over its first bar adds no track (it places no clip): muting
-// track 8 while it runs goes through, every undo after Stop goes through, and the document comes
+// track 6 while it runs goes through, every undo after Stop goes through, and the document comes
 // back to the fixture.
 #[test]
 fn a_song_take_with_no_track_free_adds_none() {
@@ -639,7 +639,7 @@ fn a_song_take_with_no_track_free_adds_none() {
     let (went_through, refusals, back) = edit_during_a_song_take_with_no_track_free(
         "other_track_mute",
         Edit::SetTrackMute {
-            id: TrackId(8),
+            id: TrackId(6),
             mute: true,
         },
     );
@@ -659,7 +659,7 @@ fn a_song_take_with_no_track_free_adds_none() {
 fn the_roll_follows_a_song_take_from_its_start() {
     let (mut app, mut player, _dir) = open("roll_follows_take", "p17_song.json");
     let _ = app.update(Message::TogglePanel(crate::ui::panels::Panel::PianoRoll));
-    app.roll.view.zoom = 8;
+    app.roll.view.zoom = 64.0;
     record(&mut app, RecordMessage::ToggleCountIn);
     let _ = app.update(Message::ModeSelected(PlayMode::Song));
     app.move_song_marker(Ticks(384));

@@ -4,7 +4,8 @@
 //! - Instruments: the starter kit, the instrument sets shipped in the data folder (by kind:
 //!   drums, bass, keys, pads, strings, mallets, synths, then the rest, each kind under a label of
 //!   its own while more than one kind is listed and nothing is searched), the user's own sets
-//!   (the .sfz files in the Samples section's folders), then the catalogue's plugin instruments
+//!   (the .sfz files in the Samples section's folders), then under "Plugins" Dawsome Synth (the
+//!   instrument of Dawsome's own) and the catalogue's plugin instruments
 //!   of both formats grouped by maker (a VST3 one marked "VST3"; one installed as both listed
 //!   once, as CLAP), then Rescan; with no plugin instruments, a hint saying where they come
 //!   from. A group of sets shows only when it has one. Last, under "Audio input", "External
@@ -30,6 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use dawsome_engine::dsp::synth::NAME as SYNTH;
 use dawsome_engine::project::same_port;
 use dawsome_host_clap::catalogue::Offered;
 
@@ -174,6 +176,11 @@ fn maker_key(maker: &str) -> String {
 pub const AUDIO_INPUT: &str = "Audio input";
 pub const EXTERNAL_INPUT: &str = "External input";
 
+/// Whether the search `query` (lower case) finds Dawsome Synth: by its name.
+fn synth_matches(query: &str) -> bool {
+    SYNTH.to_lowercase().contains(query)
+}
+
 /// Whether the search `query` (lower case) finds "External input": its name, or its group's.
 fn external_input_matches(query: &str) -> bool {
     EXTERNAL_INPUT.to_lowercase().contains(query) || AUDIO_INPUT.to_lowercase().contains(query)
@@ -263,6 +270,8 @@ pub enum Item {
     Set(InstrumentSet),
     /// A plugin instrument of either format.
     Plugin(Offered),
+    /// Dawsome Synth, the instrument of Dawsome's own: adds a synth channel.
+    Synth,
     /// Rescan, under the plugins.
     Rescan,
     /// "External input": adds an input channel.
@@ -334,8 +343,10 @@ impl Library {
         } else {
             contents.folders
         };
+        let synth = synth_matches(&query);
         let mut items = Vec::new();
-        let instruments = sounds.len() + shipped.len() + mine.len() + plugins.len();
+        let instruments =
+            sounds.len() + shipped.len() + mine.len() + usize::from(synth) + plugins.len();
         // A search shows every match: folding is for browsing.
         let open = |key: &str| searching || !self.folded.contains(key);
         if self.header(Section::Instruments, instruments, &mut items) {
@@ -357,11 +368,16 @@ impl Library {
                     items.extend(mine.into_iter().map(Item::Set));
                 }
             }
-            if !searching || !plugins.is_empty() {
+            if !searching || synth || !plugins.is_empty() {
                 items.push(Item::Group(PLUGINS));
             }
-            // Folded, the plugins' label stands for its makers, its empty state and Rescan.
+            // Folded, the plugins' label stands for the synth, its makers, its empty state and
+            // Rescan.
             if open(PLUGINS) {
+                // First: an instrument of Dawsome's own, there whatever a scan found.
+                if synth {
+                    items.push(Item::Synth);
+                }
                 if !searching && contents.plugins.is_empty() {
                     items.extend(PLUGIN_HINT.iter().map(|line| Item::Hint(line)));
                 }
@@ -606,10 +622,10 @@ mod tests {
         }
     }
 
-    // By hand: 8 kit sounds and the catalogue's 3 instruments make 11 (the effect is not one,
-    // nor is the external input, last under its own group); makers sort Dawsome before
-    // Example; one folder above the tree's 3 rows; A and B listed and C, which "keys" links to,
-    // unplugged after them: 3 devices.
+    // By hand: 8 kit sounds, Dawsome Synth (first under Plugins) and the catalogue's 3
+    // instruments make 12 (the effect is not one, nor is the external input, last under its own
+    // group); makers sort Dawsome before Example; one folder above the tree's 3 rows; A and B
+    // listed and C, which "keys" links to, unplugged after them: 3 devices.
     #[test]
     fn the_sections_list_the_kit_the_plugins_by_maker_the_tree_and_the_ports() {
         let catalogue = catalogue();
@@ -622,12 +638,13 @@ mod tests {
             ..Contents::default()
         };
         let mut expected = vec![
-            header(Section::Instruments, 11, true),
+            header(Section::Instruments, 12, true),
             Item::Group("Starter kit"),
         ];
         expected.extend((0..8).map(Item::Sound));
         expected.extend([
             Item::Group("Plugins"),
+            Item::Synth,
             Item::Maker("Dawsome".to_owned()),
             plugin(&catalogue, "Dawsome Test Sine"),
             Item::Maker("Example".to_owned()),
@@ -723,9 +740,9 @@ mod tests {
         assert!(!kick.contains(&Item::ExternalInput));
     }
 
-    // No plugin instruments and no ports: their hints show, the Plugins group and Rescan stay
-    // (the external input after them); a closed section keeps its header and count and hides
-    // its rows.
+    // No plugin instruments and no ports: their hints show, the Plugins group with Dawsome
+    // Synth and Rescan stay (the external input after them); a closed section keeps its header
+    // and count and hides its rows.
     #[test]
     fn empty_sections_hint_and_closed_ones_keep_their_count() {
         let contents = Contents {
@@ -736,11 +753,11 @@ mod tests {
         };
         let mut library = Library::default();
         let mut expected = vec![
-            header(Section::Instruments, 8, true),
+            header(Section::Instruments, 9, true),
             Item::Group("Starter kit"),
         ];
         expected.extend((0..8).map(Item::Sound));
-        expected.push(Item::Group("Plugins"));
+        expected.extend([Item::Group("Plugins"), Item::Synth]);
         expected.extend(PLUGIN_HINT.iter().map(|line| Item::Hint(line)));
         expected.extend([
             Item::Rescan,
@@ -758,7 +775,7 @@ mod tests {
         assert_eq!(
             library.items(&contents),
             [
-                header(Section::Instruments, 8, false),
+                header(Section::Instruments, 9, false),
                 header(Section::Samples, 2, true),
                 Item::Tree(0),
                 Item::Tree(1),
@@ -873,7 +890,7 @@ mod tests {
         }
     }
 
-    // B6: the shipped sets by kind, drums first, each kind under its label in name order; the
+    // The shipped sets by kind, drums first, each kind under its label in name order; the
     // search lists them flat in name order; sets of one kind take no label, and the user's own
     // are never sorted by kind.
     #[test]
@@ -980,10 +997,10 @@ mod tests {
     // The groups inside Instruments fold on their labels. Folded,
     // "Starter kit" shows its label alone; "Keys" under the shipped sets hides its two sets and
     // leaves the other kinds; "Instrument sets" hides every kind and set under it; a folded
-    // maker hides its plugins, the other maker keeps them; "Plugins" folded hides its makers,
-    // plugins and Rescan; "Audio input" hides External input. The section's count is the
-    // same folded or not, and a search shows every match whatever is folded. Folding twice is
-    // opening again.
+    // maker hides its plugins, the other maker keeps them; "Plugins" folded hides the synth,
+    // its makers, plugins and Rescan; "Audio input" hides External input. The section's count
+    // is the same folded or not, and a search shows every match whatever is folded. Folding
+    // twice is opening again.
     #[test]
     fn the_instruments_groups_fold_and_a_search_ignores_it() {
         let catalogue = catalogue();
@@ -1017,7 +1034,7 @@ mod tests {
         };
         let set_item = |name: &str| Item::Set(set(name, maker_of(&shipped, name)));
         let unfolded = library.items(&contents);
-        assert_eq!(unfolded[0], header(Section::Instruments, 8, true));
+        assert_eq!(unfolded[0], header(Section::Instruments, 9, true));
         for key in [
             STARTER_KIT,
             "Instrument sets/Keys",
@@ -1030,13 +1047,14 @@ mod tests {
         assert_eq!(
             folded,
             [
-                header(Section::Instruments, 8, true),
+                header(Section::Instruments, 9, true),
                 Item::Group(STARTER_KIT),
                 Item::Group(SHIPPED_SETS),
                 Item::Kind(Kind::Bass),
                 set_item("Electric Bass"),
                 Item::Kind(Kind::Keys),
                 Item::Group(PLUGINS),
+                Item::Synth,
                 Item::Maker("Dawsome".to_owned()),
                 plugin(&catalogue, "Dawsome Test Sine"),
                 Item::Maker("Example".to_owned()),
@@ -1054,7 +1072,7 @@ mod tests {
         assert_eq!(
             groups[..6],
             [
-                header(Section::Instruments, 8, true),
+                header(Section::Instruments, 9, true),
                 Item::Group(STARTER_KIT),
                 Item::Group(SHIPPED_SETS),
                 Item::Group(PLUGINS),
@@ -1071,6 +1089,7 @@ mod tests {
             set_item("Electric Piano"),
             set_item("Upright Piano"),
             plugin(&catalogue, "Bell Keys"),
+            Item::Synth,
             Item::ExternalInput,
         ] {
             assert!(shown(&searched, &wanted), "a search shows {wanted:?}");
@@ -1105,7 +1124,8 @@ mod tests {
     }
 
     // The sets sit under the kit, shipped then the user's own, each group only when it has a
-    // set, and count among the instruments; the search finds them by name or maker.
+    // set, and count among the instruments; the search finds them by name or maker (and
+    // "dawsome" Dawsome Synth by its name, under Plugins after them).
     #[test]
     fn instrument_sets_list_under_the_kit_and_are_searched_by_name_or_maker() {
         let library = Library {
@@ -1123,7 +1143,7 @@ mod tests {
         assert_eq!(
             items[..7],
             [
-                header(Section::Instruments, 4, true),
+                header(Section::Instruments, 5, true),
                 Item::Group("Starter kit"),
                 Item::Sound(0),
                 Item::Group(SHIPPED_SETS),
@@ -1134,17 +1154,20 @@ mod tests {
         );
         assert_eq!(items[7], Item::Set(set("My pad", "")));
         assert_eq!(items[8], Item::Group("Plugins"));
+        assert_eq!(items[9], Item::Synth);
         let searched = library.items(&Contents {
             search: "dawsome",
             ..contents.clone()
         });
         assert_eq!(
-            searched[..4],
+            searched[..6],
             [
-                header(Section::Instruments, 2, true),
+                header(Section::Instruments, 3, true),
                 Item::Group(SHIPPED_SETS),
                 Item::Set(set("Piano", "Dawsome")),
                 Item::Set(set("Strings", "Dawsome")),
+                Item::Group(PLUGINS),
+                Item::Synth,
             ]
         );
         let only_mine = Library {
@@ -1158,7 +1181,7 @@ mod tests {
         assert_eq!(
             items[..3],
             [
-                header(Section::Instruments, 1, true),
+                header(Section::Instruments, 2, true),
                 Item::Group(MY_SETS),
                 Item::Set(set("My pad", "")),
             ]

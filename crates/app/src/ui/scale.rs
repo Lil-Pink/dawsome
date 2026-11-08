@@ -47,6 +47,18 @@ impl ScaleMode {
         ScaleMode::Blues,
     ];
 
+    /// The choice named `name` as a scripted run gives it (`--roll-scale`): its name in the
+    /// strip, any case, a hyphen for each space ("minor-pentatonic"), "off" for none.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = name.to_ascii_lowercase();
+        if name == "off" {
+            return Some(ScaleMode::Off);
+        }
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.to_string().to_ascii_lowercase().replace(' ', "-") == name)
+    }
+
     /// The semitones above the root it holds; none for no scale.
     pub fn steps(self) -> &'static [u8] {
         match self {

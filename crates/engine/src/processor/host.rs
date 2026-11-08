@@ -134,8 +134,16 @@ pub trait ProcessorHost {
         None
     }
 
-    /// Shows `owner`'s plugin window, titled `title`.
-    fn open_editor(&self, owner: ProcessorOwner, title: &str) -> Result<Editor, HostError>;
+    /// Shows `owner`'s plugin window, titled `title`, telling the plugin as it opens that the
+    /// window is drawn at `scale` (device pixels per logical pixel: the desktop's scale, which
+    /// the app's own windows get, never the app's zoom); a plugin that does not take a scale is
+    /// left at its own.
+    fn open_editor(
+        &self,
+        owner: ProcessorOwner,
+        title: &str,
+        scale: f64,
+    ) -> Result<Editor, HostError>;
 
     /// Keeps the plugin windows of the host's own (those a plugin's interface is embedded in)
     /// above every other window (`true`), or stacked as any window, now and as they open. A

@@ -9,6 +9,7 @@ use iced::{Point, Size};
 use thiserror::Error;
 
 use crate::ui::panels::Panel;
+use crate::zoom::Zoom;
 
 /// The window's application id, and its class on X11: the name of the desktop entry
 /// (`assets/dawsome.desktop`), so a Linux desktop shows the entry's name and icon for the window.
@@ -71,8 +72,19 @@ pub enum PopOut {
 pub const PANEL_WINDOW_SIZE: Size = Size::new(1000.0, 480.0);
 
 /// The least width of a popped panel's window: the rack's knobs and a few steps, the playlist's
-/// and the piano roll's tools, the mixer's header.
+/// tools, the mixer's header. The piano roll's is wider ([`ROLL_WINDOW_MIN_WIDTH`]).
 pub const PANEL_WINDOW_MIN_WIDTH: f32 = 480.0;
+
+/// The least width of the piano roll's own window: its strip folded all the way
+/// ([`crate::ui::piano_roll::StripFold`]) with a scale and its root chosen and the channel's
+/// name cut to its least, for "Bass 808 low": the controls 570.71 px (no grip in its own
+/// window; the player's box among them) and "Bas…" 36.51, 607.22, up to a whole pixel. Why not
+/// the 600 asked (598.70 for "lead"): a name's least, its first three characters and "…", is
+/// wider than the 29.29 that left it ("Bas…" ran 7.22 past); 604 held it until the player's
+/// box took 4 px more. Why wider than the panels' 480: there the folded strip ran past the
+/// window, Play and Loop cut off. A name whose least is wider than 37.29 px
+/// ("Wob…", 42.86), the velocity readout or the Rec light still take more than it holds.
+pub const ROLL_WINDOW_MIN_WIDTH: f32 = 608.0;
 
 impl PopOut {
     /// Its size at its first opening.
@@ -96,10 +108,14 @@ impl PopOut {
             PopOut::Help => crate::ui::help_window::WINDOW_MIN,
             PopOut::Params => crate::ui::param_window::WINDOW_MIN,
             PopOut::SampleEditor => crate::ui::sample_editor::WINDOW_MIN,
-            PopOut::Panel(panel) => Size::new(
-                PANEL_WINDOW_MIN_WIDTH,
-                crate::ui::panels::min_height(panel, f32::INFINITY),
-            ),
+            PopOut::Panel(panel) => {
+                let width = if panel == Panel::PianoRoll {
+                    ROLL_WINDOW_MIN_WIDTH
+                } else {
+                    PANEL_WINDOW_MIN_WIDTH
+                };
+                Size::new(width, crate::ui::panels::min_height(panel, f32::INFINITY))
+            }
         }
     }
 }
@@ -107,15 +123,17 @@ impl PopOut {
 /// A pop-out window's settings: as the main window's (the application id, the icon), at
 /// `size` and `position` (none: where the system puts it), at `level`, never smaller than its
 /// least. Its close button asks the app, which closes it (the instrument window hands the
-/// selection back).
+/// selection back). The least size at `zoom`: the toolkit opens a window at `size` times the
+/// zoom but takes its least size in the system's pixels as given.
 pub fn pop_out_settings(
     window: PopOut,
     size: Size,
     position: Option<Point>,
     level: window::Level,
+    zoom: Zoom,
 ) -> window::Settings {
     window::Settings {
-        min_size: Some(window.least_size()),
+        min_size: Some(window.least_size() * zoom.factor()),
         position: position.map_or(window::Position::Default, window::Position::Specific),
         exit_on_close_request: false,
         level,
@@ -233,6 +251,21 @@ pub fn open_windows_on_chosen_system(scripted: bool) {
     }
 }
 
+/// Whether the app's windows open on Wayland: a Wayland display is still in the environment
+/// once [`open_windows_on_chosen_system`] has run (choosing X11 takes it out).
+#[cfg(target_os = "linux")]
+pub fn on_wayland() -> bool {
+    ["WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
+/// Windows has no Wayland.
+#[cfg(not(target_os = "linux"))]
+pub fn on_wayland() -> bool {
+    false
+}
+
 /// Windows finds a window's taskbar entry by its program, not by an id.
 #[cfg(not(target_os = "linux"))]
 fn platform_specific() -> window::settings::PlatformSpecific {
@@ -262,6 +295,28 @@ fn decode(png: &[u8]) -> Result<(Vec<u8>, u32, u32), IconError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A popped panel's window is at least 480 px wide, the piano roll's 608 (its strip folded
+    // all the way with a scale, "Bass 808 low" cut to "Bas…", needs 607.22 there,
+    // crate::ui::piano_roll's `the_strip_folds_by_its_width`); each as tall as the panel's
+    // least height in the stack.
+    #[test]
+    fn the_piano_rolls_own_window_is_wider_at_its_least() {
+        for panel in Panel::STACKED {
+            let least = PopOut::Panel(panel).least_size();
+            let width = if panel == Panel::PianoRoll {
+                608.0
+            } else {
+                480.0
+            };
+            assert_eq!(least.width, width, "{panel:?}");
+            assert_eq!(
+                least.height,
+                crate::ui::panels::min_height(panel, f32::INFINITY),
+                "{panel:?}"
+            );
+        }
+    }
 
     // Where the windows open, the table worked out from the rule:
     // a desktop run under a Wayland session with XWayland opens on X11, a scripted one as the
@@ -316,7 +371,9 @@ mod tests {
     // The instrument window is the app's too: the same icon and (on Linux) application id as
     // the main window, at the size and place given, never smaller than 420 x 300, and its close
     // button left to the app. With no place given the system places it. The
-    // Settings window too, never smaller than 420 x 240.
+    // Settings window too, never smaller than 420 x 240. At a zoom of 150 % the least size goes
+    // to the toolkit in the system's pixels, 1.5 times (630 x 450), while the size it opens at
+    // stays the window's own (the toolkit multiplies that itself).
     #[test]
     fn the_instrument_window_is_the_apps_at_its_place_and_least_size() {
         let main = window_settings(Size::new(800.0, 600.0));
@@ -325,6 +382,7 @@ mod tests {
             Size::new(560.0, 420.0),
             Some(Point::new(40.0, 30.0)),
             window::Level::AlwaysOnTop,
+            Zoom::DEFAULT,
         );
         assert_eq!(placed.size, Size::new(560.0, 420.0));
         assert_eq!(placed.min_size, Some(Size::new(420.0, 300.0)));
@@ -341,6 +399,7 @@ mod tests {
             Size::new(600.0, 500.0),
             None,
             window::Level::Normal,
+            Zoom::DEFAULT,
         );
         assert!(matches!(unplaced.position, window::Position::Default));
         assert_eq!(unplaced.level, window::Level::Normal);
@@ -349,9 +408,19 @@ mod tests {
             PopOut::Settings.first_size(),
             None,
             window::Level::AlwaysOnTop,
+            Zoom::DEFAULT,
         );
         assert_eq!(settings.size, Size::new(720.0, 560.0));
         assert_eq!(settings.min_size, Some(Size::new(420.0, 240.0)));
+        let zoomed = pop_out_settings(
+            PopOut::Instrument,
+            Size::new(560.0, 420.0),
+            None,
+            window::Level::Normal,
+            Zoom::exact(150).expect("a stop"),
+        );
+        assert_eq!(zoomed.size, Size::new(560.0, 420.0));
+        assert_eq!(zoomed.min_size, Some(Size::new(630.0, 450.0)));
         assert!(!settings.exit_on_close_request);
         assert_eq!(settings.platform_specific, main.platform_specific);
     }

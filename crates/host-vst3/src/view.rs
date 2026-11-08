@@ -1,13 +1,14 @@
 //! A plugin's own editor (`IPlugView`) in a window of ours: opened as the format's call sequence
 //! has it (the view, whether it takes our window type, its size, whether it resizes; our window;
-//! its frame; attached), and closed in reverse on every way out. The window is host-common's
-//! ([`Display::open_embedder`]: on Linux an XEmbed embedder, so an editor that is an XEmbed client
-//! is mapped and given our focus; on Windows a window whose child the editor's window becomes);
-//! the frame, through which the editor asks for another size and finds its run loop, is
-//! [`PlugFrame`].
+//! its frame; attached; the scale our window is drawn at), and closed in reverse on every way
+//! out. The window is host-common's ([`Display::open_embedder`]: on Linux an XEmbed embedder, so
+//! an editor that is an XEmbed client is mapped and given our focus; on Windows a window whose
+//! child the editor's window becomes); the frame, through which the editor asks for another size
+//! and finds its run loop, is [`PlugFrame`].
 //!
 //! Nothing here holds a borrow of the host's table or of the instance's editor across a call into
-//! the plugin: editors ask to be resized inside `attached`, and that call reaches the frame alone.
+//! the plugin: editors ask to be resized inside `attached` and `setContentScaleFactor`, and that
+//! call reaches the frame alone.
 
 use std::cell::Ref;
 use std::ffi::c_void;
@@ -19,7 +20,10 @@ use vst3::Steinberg::kPlatformTypeHWND;
 #[cfg(not(windows))]
 use vst3::Steinberg::kPlatformTypeX11EmbedWindowID;
 use vst3::Steinberg::Vst::{IEditController, IEditControllerTrait, ViewType};
-use vst3::Steinberg::{kResultOk, kResultTrue, FIDString, IPlugView, IPlugViewTrait, ViewRect};
+use vst3::Steinberg::{
+    kResultOk, kResultTrue, FIDString, IPlugView, IPlugViewContentScaleSupport,
+    IPlugViewContentScaleSupportTrait, IPlugViewTrait, ViewRect,
+};
 use vst3::{ComPtr, ComWrapper};
 
 use crate::com::frame::{self, PlugFrame};
@@ -79,6 +83,26 @@ impl Drop for OpenView {
     }
 }
 
+/// Tells `view` the scale our window is drawn at, once it is attached: the SDK's
+/// IPlugViewContentScaleSupport (pluginterfaces/gui/iplugviewcontentscalesupport.h: "The host
+/// calls setContentScaleFactor directly before or after the plug-in view is attached"). An
+/// editor that takes it scales its size and asks the frame for it (`resizeView`, answered as
+/// any), or gives it when asked next. One without the interface, or that refuses, keeps its
+/// own: a line says so.
+fn tell_scale(view: &ComPtr<IPlugView>, title: &str, scale: f64) {
+    let taken = view
+        .cast::<IPlugViewContentScaleSupport>()
+        .is_some_and(|scaled| {
+            // SAFETY: the view is live and attached; called on the main thread. The editor may
+            // call its frame inside the call, and the frame needs nothing borrowed here.
+            let result = unsafe { scaled.setContentScaleFactor(scale as f32) };
+            result == kResultOk
+        });
+    if !taken {
+        eprintln!("plugin window {title:?}: keeps its own scale, not {scale}");
+    }
+}
+
 /// The view's size as it says it, or [`DEFAULT_SIZE`].
 fn size_of(view: &ComPtr<IPlugView>) -> Option<(u32, u32)> {
     let mut rect = ViewRect {
@@ -91,13 +115,15 @@ fn size_of(view: &ComPtr<IPlugView>) -> Option<(u32, u32)> {
     (unsafe { view.getSize(&mut rect) } == kResultOk).then(|| frame::size_of(&rect))
 }
 
-/// Opens `controller`'s editor in a window of ours titled `title`. `None`: it has none here (no
-/// editor, not our window type, our window would not open, or the editor would not attach to
-/// it); the plugin's parameter window stands in. A missing window system is the error, with the
-/// reason to show, asked only once the plugin has an editor that takes our window type.
+/// Opens `controller`'s editor in a window of ours titled `title`, drawn at `scale`. `None`: it
+/// has none here (no editor, not our window type, our window would not open, or the editor would
+/// not attach to it); the plugin's parameter window stands in. A missing window system is the
+/// error, with the reason to show, asked only once the plugin has an editor that takes our
+/// window type.
 pub(crate) fn open<'a>(
     controller: &ComPtr<IEditController>,
     title: &str,
+    scale: f64,
     display: impl Fn() -> Result<Ref<'a, Display>, HostError>,
 ) -> Result<Option<OpenView>, HostError> {
     // SAFETY: the controller is live; called on the main thread; the name is the SDK's constant.
@@ -143,7 +169,11 @@ pub(crate) fn open<'a>(
         return Ok(None);
     }
     opened.attached = true;
-    // The size it settled on as it attached: our window takes it, no onSize (it chose it).
+    if let Some(view) = &opened.view {
+        tell_scale(view, title, scale);
+    }
+    // The size it settled on as it attached (and took the scale): our window takes it, no
+    // onSize (it chose it).
     let settled = opened.view.as_ref().and_then(size_of);
     if let Some(settled) = settled.filter(|&settled| settled != opened.frame.size()) {
         opened.frame.size_window(settled);

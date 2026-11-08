@@ -91,8 +91,40 @@ scripts/python.sh -I tests/fixtures/gen_p30_expected.py --check tests/fixtures
 # window on the swung ticks), as their generator writes them.
 scripts/python.sh -I tests/fixtures/gen_p31_expected.py --check tests/fixtures
 # The native effects (filter, distortion, gate, stereo width, chorus, flanger, phaser): the input
-# sounds and projects, each effect's parameters, and the renders the spec's formulas give.
+# sounds and projects, each effect's parameters, and the renders their formulas give.
 scripts/python.sh -I tests/fixtures/gen_p32_expected.py --check tests/fixtures
+# Dawsome Synth: its projects and MIDI messages, its 37 parameters, and the renders its
+# formulas give (the voice pool, oscillator 1's sine, the amp envelope, the pedal and the bend).
+scripts/python.sh -I tests/fixtures/gen_p33_expected.py --check tests/fixtures
+# The piano roll's player: the sounds, projects and their references (every other channel muted)
+# a channel's render alone must equal byte for byte, the frames worked out by hand, and the
+# lengths of a pass played once and of two passes looped.
+scripts/python.sh -I tests/fixtures/gen_roll_player.py --check tests/fixtures
+# The UI's bundled font (crates/app/assets/fonts): each file against fonts.lock's size, SHA-256
+# and version string, and the widths the app's tests hold it to ("Notes" at 12 px, the readouts')
+# as worked out from the font's own tables.
+scripts/python.sh -I tests/fixtures/gen_u1_expected.py --check tests/fixtures
+# The type scale: every text size comes from crates/app/src/ui/fonts.rs's `size` (TINY, DENSE,
+# LABEL, BODY, PANEL_TITLE, TITLE, and OCTAVE_NAME, the typing keyboard's octave alone). A literal size (`.size(12)`, `.text_size(12)`, a canvas text's
+# `size: 12.0.into()`) or a text-size constant of a file's own (`const NAME_SIZE: f32 = ...`)
+# anywhere else fails; the *_SIZE constants named here size a control, not text. Why: about ten
+# sizes a pixel apart read as noise, and a size of a file's own drifts off the scale unseen.
+type_scale="$(grep -rnE '\.(text_)?size\([0-9]|size: *\(?[0-9.]+\)?\.into\(\)|const [A-Z_]*_SIZE: f32 = ' \
+    crates/app/src --include='*.rs' |
+    grep -v '^crates/app/src/ui/fonts\.rs:' |
+    grep -vE 'const (CONTROL|KNOB|PAN|SEND|REMOVE|TICK)_SIZE: f32 = ' || true)"
+if [ -n "$type_scale" ]; then
+    echo "check: text sizes outside the type scale (crates/app/src/ui/fonts.rs's size):" >&2
+    echo "$type_scale" >&2
+    exit 1
+fi
+# The colour themes: each theme's contrast, rule by rule, from the design's colours and the WCAG
+# formula; the app's palettes are held to its colours and ratios.
+scripts/python.sh -I tests/fixtures/gen_ui_contrast.py --check tests/fixtures
+# The accent of the user's own: HSV and RGB, the colour wheel's geometry, the contrast note's
+# threshold and the slider fill's law, from their formulas; the app's wheel and palette are held
+# to them.
+scripts/python.sh -I tests/fixtures/gen_accent_expected.py --check tests/fixtures
 # The Help window's pictures against what they are made from (scripts/help-shots.sh remakes them).
 scripts/python.sh -I scripts/help_shots.py check
 # The DAWproject schema checker finds the faults planted in its own documents, and the known
@@ -105,6 +137,9 @@ if command -v xmllint >/dev/null; then
 else
     echo "xmllint not installed: second schema validation skipped"
 fi
+# The layout bounds check (scripts/ui-check.sh runs it on the app's dumps at four zooms) finds the
+# overlap and the cut label planted in a dump of its own, each named, and passes the clean one.
+scripts/python.sh -I -B tests/scripts/layout_bounds.py --self-test
 # The fetch of the instrument sets lands the kit at its commit, and fetches a kit folder whose .git
 # is no repository again without touching the repository around it (repositories of its own).
 scripts/python.sh -I -B tests/scripts/fetch_kit_test.py

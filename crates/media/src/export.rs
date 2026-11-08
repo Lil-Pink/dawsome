@@ -86,7 +86,10 @@ fn midi_lines(project: &Project, file: &SongFile) -> Vec<String> {
             ChannelKind::Input => lines.push(format!(
                 "{name}: a live input is not in a MIDI file; its track is empty"
             )),
-            ChannelKind::Sampler | ChannelKind::Plugin | ChannelKind::Instrument => {
+            ChannelKind::Sampler
+            | ChannelKind::Plugin
+            | ChannelKind::Instrument
+            | ChannelKind::Synth => {
                 if channel.mute {
                     lines.push(format!("{name} is muted here; its notes are in the file"));
                 }

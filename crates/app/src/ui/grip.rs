@@ -1,14 +1,15 @@
 //! A drag handle that resizes the panel part beside it: a strip a few pixels tall with a grip
 //! drawn in its middle and the vertical resize cursor, reporting the press, each move while
 //! held and the release at window points (the strip itself moves while the part resizes), and
-//! a double press when it resets something. The piano roll's velocity lane and the dividers
-//! between the stacked panels use it (the mixer's top edge is one of those); a divider dragged
-//! sideways is armed to pop its panel out, and its whole strip lights.
+//! a double press when it resets something. The dividers between the stacked panels use it
+//! (the mixer's top edge is one of those); a divider dragged
+//! sideways is armed to pop its panel out, and its whole strip lights. The Library's right edge
+//! is the family's deeper line, a groove with a lit lip that drags nothing ([`Seam`]).
 
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Event, Frame, Geometry};
-use iced::{mouse, Point, Rectangle, Renderer, Size, Theme};
+use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::Message;
 use crate::ui::hint::{hover_change, Hover};
@@ -17,6 +18,23 @@ use crate::ui::style;
 /// The grip drawn in the handle's middle: its width and the two lines' gap.
 const GRIP_WIDTH: f32 = 24.0;
 const GRIP_GAP: f32 = 2.0;
+
+/// A grip's two lines, `width` wide and centred on `middle`: each 1 px tall, one ending a pixel
+/// above `middle`'s row and one starting a pixel under it, so 2 px of ground part them. The
+/// dividers' grip is so, and the pop-out button's mini grip ([`crate::ui::pop_out`]), the same
+/// motif: grab here to move the panel.
+pub fn lines(middle: Point, width: f32) -> [Rectangle; 2] {
+    let left = middle.x - width / 2.0;
+    [middle.y - GRIP_GAP, middle.y + GRIP_GAP - 1.0]
+        .map(|y| Rectangle::new(Point::new(left, y), Size::new(width, 1.0)))
+}
+
+/// A grip's [`lines`] in `frame`, in `color`.
+pub fn draw_lines(frame: &mut Frame, middle: Point, width: f32, color: Color) {
+    for line in lines(middle, width) {
+        frame.fill_rectangle(line.position(), line.size(), color);
+    }
+}
 
 /// Two presses at most this far apart in time and space are a double press, as on the mixer.
 /// Why the distance too: a line dragged and grabbed again at once has moved.
@@ -98,23 +116,20 @@ impl<P: Fn(Point) -> Message> canvas::Program<Message> for Grip<P> {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let ground = if self.armed {
-            style::ACCENT
+            style::accent()
         } else {
-            style::STRIP
+            style::palette().strip
         };
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), ground);
         let grip = if self.armed {
-            style::TEXT
+            style::palette().text
         } else if self.held {
-            style::ACCENT
+            style::accent()
         } else {
-            style::TEXT_DIM
+            style::palette().text_secondary
         };
-        let left = (bounds.width - GRIP_WIDTH) / 2.0;
-        let middle = bounds.height / 2.0;
-        for y in [middle - GRIP_GAP, middle + GRIP_GAP - 1.0] {
-            frame.fill_rectangle(Point::new(left, y), Size::new(GRIP_WIDTH, 1.0), grip);
-        }
+        let middle = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+        draw_lines(&mut frame, middle, GRIP_WIDTH, grip);
         vec![frame.into_geometry()]
     }
 
@@ -129,6 +144,39 @@ impl<P: Fn(Point) -> Message> canvas::Program<Message> for Grip<P> {
         } else {
             mouse::Interaction::default()
         }
+    }
+}
+
+/// The seam down the Library's right edge, between it and the stacked panels: a groove half
+/// as wide as a divider's band is tall, in the shaded edge's colour (darker than every panel's
+/// ground), its far wall lit as the synth console lights a sunken well's lips, so it reads cut
+/// into the window. Why deeper than the dividers: they part the panels of one stack, while the
+/// seam parts the Library from all four, which read as one with it across a plain edge.
+pub struct Seam;
+
+/// The seam's width: half a divider's band ([`crate::ui::panels::DIVIDER_BAND`]), chosen on
+/// sight over the full band.
+pub const SEAM_WIDTH: f32 = crate::ui::panels::DIVIDER_BAND / 2.0;
+
+impl canvas::Program<Message> for Seam {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().seam);
+        frame.fill_rectangle(
+            Point::new(bounds.width - 1.0, 0.0),
+            Size::new(1.0, bounds.height),
+            style::palette().line_strong,
+        );
+        vec![frame.into_geometry()]
     }
 }
 
@@ -149,7 +197,7 @@ impl canvas::Program<Message> for Edge {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::STRIP);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().strip);
         vec![frame.into_geometry()]
     }
 }

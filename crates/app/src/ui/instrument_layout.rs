@@ -43,10 +43,11 @@ const LIGHT_WIDTH: f32 = 68.0;
 pub const FINE: f32 = 0.1;
 /// Pixels a detented knob holds its center over.
 pub const DETENT: f32 = 8.0;
-/// The output chooser: its label's width and its row's top and height.
+/// The output chooser: its label's width and its row's top and height, 24 px (was 20), which
+/// the strip holds with 2 px to spare.
 pub const CHOOSER_LABEL: f32 = 24.0;
 const CHOOSER_TOP: f32 = 150.0;
-pub const CHOOSER_HEIGHT: f32 = 20.0;
+pub const CHOOSER_HEIGHT: f32 = 24.0;
 /// The PITCH group's width, and its bend range readout's row: the output chooser's.
 const PITCH_WIDTH: f32 = 70.0;
 const READOUT_INSET: f32 = 3.0;
@@ -189,21 +190,28 @@ impl Strip {
             many => ((width - (least - LEAST_GAP * (many - 1) as f32)) / (many - 1) as f32)
                 .clamp(LEAST_GAP, MOST_GAP),
         };
-        let mut placed = Vec::with_capacity(groups.len());
-        let mut x = 0.0;
-        for group in groups {
-            let (group_width, parts) = contents(group, kind, x);
-            placed.push(Placement {
-                group,
-                rect: Rectangle::new(Point::new(x, 0.0), Size::new(group_width, STRIP_HEIGHT)),
-                parts,
-            });
-            x += group_width + gap;
-        }
         Self {
-            groups: placed,
+            groups: placed(kind, 0.0, gap),
             width: width.max(least),
         }
+    }
+
+    /// The strip of a channel of `kind` as one piece `width` across (never narrower than its
+    /// least): its groups at the least gap in its middle, the first group's place reaching its
+    /// left edge and the last's its right one. A synth's LEVEL under its booth's left deck: one
+    /// module as wide as the deck over it, its controls in its middle.
+    pub fn centred(kind: ChannelKind, width: f32) -> Self {
+        let least = least_width(kind);
+        let width = width.max(least);
+        let mut groups = placed(kind, ((width - least) / 2.0).floor(), LEAST_GAP);
+        if let Some(first) = groups.first_mut() {
+            first.rect.width += first.rect.x;
+            first.rect.x = 0.0;
+        }
+        if let Some(last) = groups.last_mut() {
+            last.rect.width = width - last.rect.x;
+        }
+        Self { groups, width }
     }
 
     /// Every control, group by group, left to right.
@@ -225,8 +233,8 @@ impl Strip {
     }
 }
 
-/// The groups a channel of `kind` has, left to right: a plugin's, an audio channel's or an
-/// input channel's sound is its own, so it has its level alone.
+/// The groups a channel of `kind` has, left to right: a plugin's, a synth's, an audio
+/// channel's or an input channel's sound is its own, so it has its level alone.
 pub fn groups_of(kind: ChannelKind) -> Vec<Group> {
     match kind {
         ChannelKind::Sampler | ChannelKind::Instrument => vec![
@@ -236,8 +244,23 @@ pub fn groups_of(kind: ChannelKind) -> Vec<Group> {
             Group::Filter,
             Group::Level,
         ],
-        ChannelKind::Plugin | ChannelKind::Audio | ChannelKind::Input => vec![Group::Level],
+        ChannelKind::Plugin | ChannelKind::Audio | ChannelKind::Input | ChannelKind::Synth => {
+            vec![Group::Level]
+        }
     }
+}
+
+/// The groups of a channel of `kind` in their places, left to right from `x`, `gap` apart.
+fn placed(kind: ChannelKind, mut x: f32, gap: f32) -> Vec<Placement> {
+    groups_of(kind)
+        .into_iter()
+        .map(|group| {
+            let (group_width, parts) = contents(group, kind, x);
+            let rect = Rectangle::new(Point::new(x, 0.0), Size::new(group_width, STRIP_HEIGHT));
+            x += group_width + gap;
+            Placement { group, rect, parts }
+        })
+        .collect()
 }
 
 /// The least width the strip of a channel of `kind` takes: its groups at the least gap.
@@ -425,6 +448,8 @@ pub fn dragged(start: f32, rise: f32, pixels: f32, fine: bool, detent: bool) -> 
 
 #[cfg(test)]
 mod tests {
+    use iced::Vector;
+
     use super::*;
 
     fn parts(kind: ChannelKind, group: Group) -> Vec<Part> {
@@ -437,8 +462,8 @@ mod tests {
             .unwrap_or_default()
     }
 
-    // v2 spec: SOUND One-shot/Hold, Reverse and Start (samplers); PITCH Tune and Fine, and the
-    // bend range (pedal, bend and wheel spec); ENVELOPE Attack and Release; FILTER On, Cutoff,
+    // Each kind's groups: SOUND One-shot/Hold, Reverse and Start (samplers); PITCH Tune and Fine,
+    // and the bend range; ENVELOPE Attack and Release; FILTER On, Cutoff,
     // Resonance; LEVEL Velocity, Pan, Volume and the output insert, left to right. A set has no
     // Reverse or Start; a plugin channel its level alone, without the velocity.
     #[test]
@@ -682,6 +707,50 @@ mod tests {
         assert_eq!(narrow.width, least, "it scrolls");
         assert_eq!(lefts(396.0), lefts(least));
         assert_eq!(least_width(ChannelKind::Plugin), 112.0);
+    }
+
+    // A synth's LEVEL as one module under its booth's left deck, 312 px across: the group's
+    // place the whole width, its controls (112 px of them) in its middle, (312 − 112) / 2 = 100
+    // right of where the strip of its least width has them: the pan's knob centred at
+    // 100 + 30 = 130, the tall fader's track at 100 + 86 = 186, the output chooser from
+    // 100 + 4 + 24 = 128, 80 across, at the row 150; nothing else moves. Narrower than its
+    // least it keeps its least, as the strip does.
+    #[test]
+    fn a_strip_centred_in_one_wider_module_keeps_its_controls_in_the_middle() {
+        let kind = ChannelKind::Synth;
+        let wide = Strip::centred(kind, 312.0);
+        assert_eq!(wide.width, 312.0);
+        let rects: Vec<Rectangle> = wide.groups.iter().map(|group| group.rect).collect();
+        assert_eq!(
+            rects,
+            [Rectangle::new(
+                Point::ORIGIN,
+                Size::new(312.0, STRIP_HEIGHT)
+            )]
+        );
+        let center = |strip: &Strip, control| match strip.find(Part::Control(control)) {
+            Some(Placed {
+                look: Look::Knob { center },
+                ..
+            }) => center.x,
+            Some(Placed {
+                look: Look::Fader { track, .. },
+                ..
+            }) => track.center_x(),
+            other => panic!("{control:?}: {other:?}"),
+        };
+        assert_eq!(center(&wide, Control::Pan), 130.0);
+        assert_eq!(center(&wide, Control::Volume), 186.0);
+        let chooser = wide.find(Part::Insert).expect("the output chooser").hit;
+        assert_eq!((chooser.x, chooser.y, chooser.width), (128.0, 150.0, 80.0));
+        let least = Strip::of(kind, least_width(kind));
+        let moved: Vec<Rectangle> = least
+            .parts()
+            .map(|placed| placed.hit + Vector::new(100.0, 0.0))
+            .collect();
+        let hits: Vec<Rectangle> = wide.parts().map(|placed| placed.hit).collect();
+        assert_eq!(hits, moved, "every control 100 px right, none else moved");
+        assert_eq!(Strip::centred(kind, 80.0), least, "never under its least");
     }
 
     // Known answers, by hand (python3 -I): a knob sweeps its range over 200 px, so the pan

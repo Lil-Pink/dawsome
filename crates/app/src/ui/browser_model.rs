@@ -264,6 +264,8 @@ pub enum Playing {
     Set(PathBuf),
     /// A plugin instrument, by its processor id (`"<format>:<id>"`).
     Plugin(String),
+    /// Dawsome Synth.
+    Synth,
 }
 
 impl Browser {

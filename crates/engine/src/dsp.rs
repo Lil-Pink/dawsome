@@ -20,6 +20,7 @@ pub(crate) mod pitch;
 pub mod reverb;
 pub mod sampler;
 pub(crate) mod shape;
+pub mod synth;
 pub mod width;
 
 use crate::processor::Registry;
@@ -27,7 +28,8 @@ use crate::processor::Registry;
 impl Registry {
     /// The effects this build has: the three-band EQ, the delay, the reverb, the limiter, the
     /// compressor and saturator ported from Airwindows, the filter, the distortion, the chorus,
-    /// the flanger, the phaser, the gate and the stereo width.
+    /// the flanger, the phaser, the gate and the stereo width; and its one instrument, Dawsome
+    /// Synth, which a synth channel plays (its factory says so: `is_instrument`).
     pub fn native() -> Self {
         let mut registry = Self::empty();
         registry.register(eq::Factory);
@@ -43,6 +45,7 @@ impl Registry {
         registry.register(phaser::Factory);
         registry.register(gate::Factory);
         registry.register(width::Factory);
+        registry.register(synth::Factory);
         registry
     }
 }
@@ -71,6 +74,11 @@ pub(crate) fn exp2(x: f64) -> f64 {
     }
     // A power of two is exact, so this only moves the exponent.
     total * 2f64.powi(whole as i32)
+}
+
+/// 10^(dB/20), by [`exp2`]: (dB / 20)·log2 10, kept in f64.
+pub(crate) fn lin(db: f64) -> f64 {
+    exp2(db / 20.0 * std::f64::consts::LOG2_10)
 }
 
 fn snap(value: f32) -> f32 {
@@ -247,6 +255,7 @@ mod tests {
                 "dawsome.phaser",
                 "dawsome.pressure4",
                 "dawsome.reverb",
+                "dawsome.synth",
                 "dawsome.width"
             ]
         );

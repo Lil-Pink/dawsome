@@ -1058,16 +1058,17 @@ impl App {
         let step = dawsome_engine::time::step_to_ticks(1, project.ppq);
         self.pattern = project.patterns.keys().next().copied();
         self.selected_channel = project.channels.keys().next().copied();
-        // The lane's height is the user's, not the document's: it stays.
-        self.roll =
-            Roll::new(step, self.roll.grid_size()).with_lane_height(self.roll.lane_height());
-        // The playlist's lanes and the mixer's height are the user's, not the document's: they
-        // stay.
+        // The roll's zoom is the user's, not the document's: it stays.
+        self.roll = Roll::new(step, self.roll.grid_size()).with_zoom(self.roll.view.zoom);
+        // The playlist's lanes and zoom and the mixer's height are the user's, not the
+        // document's: they stay.
         let lanes = self.arranger.lanes();
-        self.arranger = Arranger::new(project.ppq, self.arranger.tracks_size(), lanes);
+        self.arranger = Arranger::new(project.ppq, self.arranger.tracks_size(), lanes)
+            .with_zoom(self.arranger.grid.zoom);
         self.arranger.refresh(project);
         self.mixer = MixerState::new(self.mixer.size().width, self.mixer_panel_height());
         self.transport_on = false;
+        self.roll_plays = false;
         self.playing = false;
         self.playhead = None;
         self.drag = None;
@@ -1268,7 +1269,7 @@ mod tests {
             })
             .collect();
         assert_eq!(channels, [("Sampler", ChannelKind::Sampler, Path::new(""))]);
-        assert_eq!(project.playlist.tracks.len(), 8);
+        assert_eq!(project.playlist.tracks.len(), 6);
         assert_eq!(project.mixer.ids().count(), 17, "the master and 16 inserts");
         assert_eq!(
             (app.pattern, app.selected_channel),
@@ -2028,7 +2029,7 @@ mod tests {
         (left.len(), onsets)
     }
 
-    // B3: the dialog chooses what plays, the toolbar's mode by default. p4_two_clips in pattern
+    // The dialog chooses what plays, the toolbar's mode by default. p4_two_clips in pattern
     // mode (chosen after it opens): Pattern 1, 1 bar; Song chosen, the bars untouched follow it to the song's 3 bars,
     // and the file is the song's, as tests/fixtures/gen_p4_expected.py prints it for --song
     // --bars 3: 264600 frames, onsets 0, 22050, 44100, 66150, 176400, 198450, 220500, 242550;

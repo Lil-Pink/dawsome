@@ -138,6 +138,7 @@ const MIN_CUTOFF_HZ: f64 = 20.0;
 /// At its cutoff a sine comes out of the low- and high-pass Q times as loud, out of the
 /// band-pass as loud, out of the notch not at all; elsewhere each output follows the analog
 /// prototype at the prewarped frequency.
+#[derive(Debug, Clone, Copy)]
 pub struct Svf {
     k: f64,
     a1: f64,

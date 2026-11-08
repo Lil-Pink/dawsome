@@ -335,6 +335,12 @@ pub fn instruments_dir() -> Option<PathBuf> {
     data_dir().map(|dir| dir.join("dawsome/instruments"))
 }
 
+/// `dawsome/synth-presets` in the data folder: where the presets the user saves of Dawsome
+/// Synth's sounds go, a file each.
+pub fn synth_presets_dir() -> Option<PathBuf> {
+    data_dir().map(|dir| dir.join("dawsome/synth-presets"))
+}
+
 /// `dawsome/autosave/untitled.autosave.json` in the state folder: where documents with no file
 /// of their own (new ones) autosave.
 pub fn untitled_autosave() -> Option<PathBuf> {

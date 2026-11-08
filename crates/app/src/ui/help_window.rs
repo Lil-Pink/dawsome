@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 
-use iced::font::Weight;
 use iced::widget::text::{Span, Wrapping};
 use iced::widget::{
     button, column, container, image, rich_text, row, scrollable, space, text, Column, Id,
@@ -14,6 +13,8 @@ use iced::{Background, Border, Color, ContentFit, Element, Fill, Font, Size, The
 
 use crate::app::Message;
 use crate::help::{Block, Guide, Text};
+use crate::ui::fonts;
+use crate::ui::fonts::size;
 use crate::ui::layout::{HINT_BAR_HEIGHT, TOOLBAR_SIDE_PADDING};
 use crate::ui::style;
 
@@ -32,12 +33,6 @@ pub const CONTENTS_WIDTH: f32 = 236.0;
 /// The page's text at its widest: lines longer than this are hard to follow.
 const PAGE_MOST: f32 = 760.0;
 
-const TITLE_SIZE: f32 = 22.0;
-const HEADING_SIZE: f32 = 16.0;
-const BODY_SIZE: f32 = 14.0;
-const CAPTION_SIZE: f32 = 12.0;
-const ENTRY_SIZE: f32 = 13.0;
-const FOOT_SIZE: f32 = 12.0;
 const PAGE_PADDING: f32 = 20.0;
 
 /// Something the Help window reported.
@@ -64,8 +59,8 @@ impl<'a> HelpPage<'a> {
         let page = self.page();
         let foot = container(
             text(self.foot)
-                .size(FOOT_SIZE)
-                .color(style::TEXT_DIM)
+                .size(size::LABEL)
+                .color(style::palette().text_secondary)
                 .wrapping(Wrapping::None),
         )
         .padding([0.0, TOOLBAR_SIDE_PADDING])
@@ -84,11 +79,16 @@ impl<'a> HelpPage<'a> {
     fn contents(&self) -> Element<'a, Message> {
         let mut entries = Column::new().spacing(2).padding([12.0, 8.0]);
         entries = entries.push(
-            container(text("Contents").size(ENTRY_SIZE).color(style::TEXT_DIM)).padding([4.0, 8.0]),
+            container(
+                text("Contents")
+                    .size(size::BODY)
+                    .color(style::palette().text_secondary),
+            )
+            .padding([4.0, 8.0]),
         );
         for (index, section) in self.guide.sections.iter().enumerate() {
             let label = text(entry_label(index, &section.title))
-                .size(ENTRY_SIZE)
+                .size(size::BODY)
                 .width(Fill);
             entries = entries.push(
                 button(label)
@@ -111,9 +111,9 @@ impl<'a> HelpPage<'a> {
         if let Some(section) = self.guide.sections.get(self.section) {
             page = page.push(
                 text(section.title.clone())
-                    .size(TITLE_SIZE)
-                    .color(style::TEXT)
-                    .font(bold()),
+                    .size(size::TITLE)
+                    .color(style::palette().text)
+                    .font(fonts::UI_STRONG),
             );
             for block in &section.blocks {
                 page = page.push(self.block(block));
@@ -129,21 +129,21 @@ impl<'a> HelpPage<'a> {
 
     fn block(&self, block: &Block) -> Element<'a, Message> {
         match block {
-            Block::Heading(words) => container(words_of(words, HEADING_SIZE, true))
+            Block::Heading(words) => container(words_of(words, size::TITLE, true))
                 .padding(iced::Padding::ZERO.top(6.0))
                 .into(),
-            Block::Paragraph(words) => words_of(words, BODY_SIZE, false),
+            Block::Paragraph(words) => words_of(words, size::BODY, false),
             Block::Point(words) => row![
-                text("\u{2022}").size(BODY_SIZE).color(style::ACCENT),
-                words_of(words, BODY_SIZE, false),
+                text("\u{2022}").size(size::BODY).color(style::accent()),
+                words_of(words, size::BODY, false),
             ]
             .spacing(8)
             .padding(iced::Padding::ZERO.left(6.0))
             .into(),
             Block::Picture { file, caption } => {
                 let caption = text(caption.plain())
-                    .size(CAPTION_SIZE)
-                    .color(style::TEXT_DIM);
+                    .size(size::LABEL)
+                    .color(style::palette().text_secondary);
                 // A picture missing or unreadable leaves its caption alone.
                 match self.pictures.get(file).and_then(Option::as_ref) {
                     Some(handle) => column![
@@ -191,14 +191,14 @@ pub fn entry_label(index: usize, title: &str) -> String {
 }
 
 fn way_button<'a>(label: String, section: usize) -> Element<'a, Message> {
-    button(text(label).size(ENTRY_SIZE))
+    button(text(label).size(size::BODY))
         .padding([6.0, 10.0])
         .style(style::tool_button(false))
         .on_press(Message::Help(HelpMessage::Show(section)))
         .into()
 }
 
-/// `words` at `size`, their bold runs bold (all of them when `bold`).
+/// `words` at `size`, their bold runs in the strong face (all of them when `bold_all`).
 fn words_of<'a>(words: &Text, size: f32, bold_all: bool) -> Element<'a, Message> {
     let spans: Vec<Span<'a, (), Font>> = words
         .0
@@ -206,7 +206,7 @@ fn words_of<'a>(words: &Text, size: f32, bold_all: bool) -> Element<'a, Message>
         .map(|run| {
             let span = Span::new(run.words.clone());
             if run.bold || bold_all {
-                span.font(bold())
+                span.font(fonts::UI_STRONG)
             } else {
                 span
             }
@@ -214,31 +214,28 @@ fn words_of<'a>(words: &Text, size: f32, bold_all: bool) -> Element<'a, Message>
         .collect();
     rich_text(spans)
         .size(size)
-        .color(style::TEXT)
+        .color(style::palette().text)
         .width(Fill)
         .into()
-}
-
-fn bold() -> Font {
-    Font {
-        weight: Weight::Bold,
-        ..Font::DEFAULT
-    }
 }
 
 /// A contents entry: flat on the contents' ground, lit in the accent while its section shows.
 fn entry_style(shown: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_theme, status| {
         let background = match (shown, status) {
-            (true, _) => Some(Background::Color(style::BUTTON)),
+            (true, _) => Some(Background::Color(style::palette().button)),
             (false, button::Status::Hovered | button::Status::Pressed) => {
-                Some(Background::Color(style::BUTTON_HOVER))
+                Some(Background::Color(style::palette().hover))
             }
             (false, _) => None,
         };
         button::Style {
             background,
-            text_color: if shown { style::ACCENT } else { style::TEXT },
+            text_color: if shown {
+                style::accent()
+            } else {
+                style::palette().text
+            },
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
@@ -253,7 +250,7 @@ fn entry_style(shown: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
 fn frame(_theme: &Theme) -> container::Style {
     container::Style {
         border: Border {
-            color: style::TOOLBAR_LINE,
+            color: style::palette().line_strong,
             width: 1.0,
             radius: 0.0.into(),
         },

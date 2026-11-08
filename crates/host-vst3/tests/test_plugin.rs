@@ -323,7 +323,7 @@ fn the_component_and_its_controller_talk_through_the_host() {
     let linked = host.params(SINE).into_iter().find(|p| p.id == id);
     assert!(linked.expect("Linked").read_only);
     assert_eq!(host.value_text(SINE, 0, 0.5).as_deref(), Some("0.50"));
-    assert_eq!(host.open_editor(SINE, "Sine"), Ok(Editor::Generic));
+    assert_eq!(host.open_editor(SINE, "Sine", 1.0), Ok(Editor::Generic));
 }
 
 // 11. The Tick class registers a 100 ms timer with its host context's run loop as it starts:

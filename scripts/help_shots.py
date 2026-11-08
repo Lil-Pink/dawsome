@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Help window's pictures (help guide H4): screenshots of the real app, cut to the part a
+"""The Help window's pictures: screenshots of the real app, cut to the part a
 section talks about, with a ring or an arrow in the record red around the thing it names.
 
 usage: python3 -I scripts/help_shots.py make --app <dawsome-app> --work <dir> --instruments <dir>
@@ -23,7 +23,13 @@ is cut from its shot (a shot taken at a scale factor other than 1 is first scale
 logical pixels), scaled to its width, its rings and arrows drawn over it (Pillow; drawn four
 times larger and scaled down, so their edges are smooth), and written to assets/help/<file>.
 Last it writes assets/help/source/shots.lock: the SHA-256 of every source (shots.json, the
-projects it names, this script) and of every picture.
+projects it names, this script, and the parts of the app every picture shows: the font's lock,
+crates/app/assets/fonts/fonts.lock, the type scale in crates/app/src/ui/fonts.rs, and the
+colours, the themes' sets in
+crates/app/src/ui/palette.rs, Graphite's in every picture, and the content colours in
+crates/app/src/ui/style.rs) and of every picture. Why those: a font or colour change alters
+every picture, and the app's code is no source otherwise, so the check would stay green over
+stale pictures.
 
 `check` (standard library only) fails when a source or a picture differs from the lock (a
 source changed without a rerun, or a picture changed by hand), when a picture the lock names
@@ -48,6 +54,13 @@ SHOTS = SOURCE / "shots.json"
 LOCK = SOURCE / "shots.lock"
 GUIDE = HELP / "guide.md"
 SCRIPT = Path("scripts/help_shots.py")
+# The parts of the app every picture shows (see the module's documentation).
+APP_LOOK = [
+    Path("crates/app/assets/fonts/fonts.lock"),
+    Path("crates/app/src/ui/fonts.rs"),
+    Path("crates/app/src/ui/palette.rs"),
+    Path("crates/app/src/ui/style.rs"),
+]
 
 # The toolbar's Record when armed (crates/app/src/ui/style.rs RECORD_ARMED): the colour the
 # highlights were asked for in.
@@ -72,7 +85,7 @@ def load_list():
 
 def sources(shots):
     """Every file the pictures are made from, in a fixed order."""
-    files = [SHOTS, SCRIPT]
+    files = [SHOTS, SCRIPT, *APP_LOOK]
     projects = sorted({shot["project"] for shot in shots["shots"].values()})
     files += [SOURCE / project for project in projects]
     return files

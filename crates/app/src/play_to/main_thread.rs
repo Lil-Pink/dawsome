@@ -273,7 +273,12 @@ impl ProcessorHost for Forwarded {
         self.call(move |host| host.latency(owner)).flatten()
     }
 
-    fn open_editor(&self, _owner: ProcessorOwner, _title: &str) -> Result<Editor, HostError> {
+    fn open_editor(
+        &self,
+        _owner: ProcessorOwner,
+        _title: &str,
+        _scale: f64,
+    ) -> Result<Editor, HostError> {
         Err(HostError::Failed("a render opens no plugin window".into()))
     }
 

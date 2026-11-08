@@ -1,4 +1,4 @@
-//! The Help window's screenshot probe (help guide H2, H4). Positions come from the window's own
+//! The Help window's screenshot probe. Positions come from the window's own
 //! layout constants (`ui/help_window.rs`), colors from [`crate::ui::style`].
 
 use iced::Point;
@@ -9,7 +9,7 @@ use crate::ui::help_window::{CONTENTS_WIDTH, WINDOW_SIZE};
 use crate::ui::layout::HINT_BAR_HEIGHT;
 use crate::ui::style;
 
-// H2, H4: the Help window opened at start (--show help), shot alone (--screenshot-window help)
+// The Help window opened at start (--show help), shot alone (--screenshot-window help)
 // at its first size: the contents down its left on the panels' ground with the first entry lit
 // (the button's ground behind "1. What Dawsome does", 12 px under the "Contents" line), the page
 // right of it on the well's ground, the foot line on the panels' ground, and the first section's
@@ -28,9 +28,9 @@ fn h1_the_help_window_shows_its_contents_its_page_and_a_picture() {
         "the Help window at its first size"
     );
     let (panel, well, lit) = (
-        rgb8(style::PANEL),
-        rgb8(style::RACK_WELL),
-        rgb8(style::BUTTON),
+        rgb8(style::palette().panel),
+        rgb8(style::palette().bg),
+        rgb8(style::palette().button),
     );
     let contents = shot.pixel(Point::new(CONTENTS_WIDTH / 2.0, WINDOW_SIZE.height - 60.0));
     let entry = shot.pixel(Point::new(CONTENTS_WIDTH - 16.0, 51.0));

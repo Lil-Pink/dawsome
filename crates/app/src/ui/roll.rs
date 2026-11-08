@@ -21,9 +21,10 @@ use dawsome_engine::time::{Ticks, STRAIGHT_SWING};
 use iced::keyboard::Modifiers;
 use iced::{mouse, Point, Size};
 
+use crate::ui::grid_rules::PIXELS_PER_NOTCH;
 use crate::ui::note_gesture::{self, key_of, Change, NoteKey, Snap, Target};
 use crate::ui::note_ops::{self, Clip, Quantize};
-use crate::ui::piano_layout::{self, drawn_length, NotePart, Rows, View, ZOOM_LEVELS};
+use crate::ui::piano_layout::{self, drawn_length, NotePart, Rows, View, ZOOM};
 use crate::ui::scale::{Root, Scale, ScaleMode};
 use crate::ui::scroll::{self, BarMessage, Span};
 
@@ -207,15 +208,15 @@ pub enum RollMessage {
         at: Point,
         delta: mouse::ScrollDelta,
     },
+    /// The wheel over the ruler, which does what it does over the grid (Ctrl zooms around the
+    /// tick under it).
+    RulerScrolled {
+        at: Point,
+        delta: mouse::ScrollDelta,
+    },
     /// The grid canvas was laid out at a new size.
     GridResized(Size),
     SnapSelected(Snap),
-    /// The lane's drag handle pressed, at this window y.
-    HandlePressed(f32),
-    /// The cursor at this window y while the handle is held.
-    HandleDragged(f32),
-    /// The handle let go of.
-    HandleReleased,
     /// The grid's scroll bar asks for another view.
     Bar(BarMessage),
     /// The strip's Notes button: the notes' menu opens under it, or closes.
@@ -276,16 +277,13 @@ enum Gesture {
 pub struct Roll {
     pub view: View,
     pub snap: Snap,
-    /// The length of the next drawn note: that of the last note clicked or resized.
-    pub draw_length: Ticks,
+    /// The length the user set for the next drawn note: that of the last note clicked or
+    /// resized; none until one is, when a drawn note is one snap unit ([`Roll::draw_length`]).
+    set_length: Option<Ticks>,
     pub selection: BTreeSet<NoteKey>,
     gesture: Option<Gesture>,
     /// The grid canvas's size, as it last reported it.
     grid_size: Size,
-    /// The velocity lane's height, which its handle drags ([`piano_layout::kept_lane`]).
-    lane_height: f32,
-    /// The handle held: the window y it was pressed at and the lane's height then.
-    handle: Option<(f32, f32)>,
     /// The scroll bar's thumb is held: the playhead does not move the view meanwhile.
     bar_held: bool,
     /// The tick last clicked in each pattern's grid (snapped down), moved on past each paste:
@@ -330,17 +328,15 @@ impl Roll {
             view: View {
                 top: piano_layout::clamp_top(EMPTY_TOP_KEY, grid_size.height),
                 scroll: Ticks(0),
-                zoom: piano_layout::DEFAULT_ZOOM,
+                zoom: ZOOM.default,
                 step,
                 rows: crate::ui::piano_layout::Rows::ALL,
             },
             snap: Snap::default(),
-            draw_length: step,
+            set_length: None,
             selection: BTreeSet::new(),
             gesture: None,
             grid_size,
-            lane_height: piano_layout::LANE_HEIGHT,
-            handle: None,
             bar_held: false,
             paste_at: BTreeMap::new(),
             just_drawn: None,
@@ -405,26 +401,29 @@ impl Roll {
         }
     }
 
-    /// The same roll with its velocity lane `height` tall, as [`piano_layout::kept_lane`] keeps
-    /// it: the height the settings keep.
-    pub fn with_lane_height(mut self, height: f32) -> Self {
-        self.lane_height = piano_layout::kept_lane(height);
+    /// The length of the next drawn note, the strip's "Len": the one the user set (the last
+    /// note clicked or resized), else one snap unit at the zoom now, so the smallest note a
+    /// click draws covers the smallest cell drawn: at Line, the finest line drawn
+    /// ([`View::line_unit`]), which follows the zoom; at None (single ticks) the Line's unit too,
+    /// as a note one tick long is too short to see. Why a snap unit (it was a step whatever the
+    /// zoom): at 64 px a step the grid draws half steps, and a step-long note covered two cells,
+    /// which read as wrong. The snap itself is Line by default ([`Snap`]).
+    pub fn draw_length(&self) -> Ticks {
+        self.set_length.unwrap_or_else(|| match self.snap {
+            Snap::None => Snap::Line.unit(&self.view),
+            snap => snap.unit(&self.view),
+        })
+    }
+
+    /// The same roll at `px` pixels per step (kept to the zoom's ends): the zoom the settings
+    /// keep.
+    pub fn with_zoom(mut self, px: f32) -> Self {
+        self.view.zoom = ZOOM.kept(px);
         self
     }
 
     pub fn grid_size(&self) -> Size {
         self.grid_size
-    }
-
-    /// The velocity lane's height.
-    pub fn lane_height(&self) -> f32 {
-        self.lane_height
-    }
-
-    /// Whether the lane's handle is held, so its drags and its release are reported wherever
-    /// the cursor is.
-    pub fn handle_held(&self) -> bool {
-        self.handle.is_some()
     }
 
     /// Shows `target`'s channel from the top again, as when the roll opens or the channel
@@ -533,8 +532,9 @@ impl Roll {
     }
 
     /// While playing, the view jumps a page when the playhead `at` (the song's tick, drawn
-    /// where it falls in the pattern) leaves it, starting at the bar that holds it; not while the
-    /// scroll bar's thumb is held. Returns whether the view moved.
+    /// where it falls in the pattern) leaves it, starting at the bar that holds it (at the cell
+    /// that holds it when a bar is wider than the view, so the playhead stays in view); not
+    /// while the scroll bar's thumb is held. Returns whether the view moved.
     pub fn follow(&mut self, target: Option<&Target>, at: Ticks) -> bool {
         let Some(target) = target.filter(|_| !self.bar_held) else {
             return false;
@@ -546,7 +546,7 @@ impl Roll {
             return false;
         };
         let before = self.view.scroll;
-        self.view.scroll = Ticks(offset as i64);
+        self.view.scroll = self.view.cell_start(Ticks(offset as i64));
         self.clamp_scroll(notes_end(target));
         self.view.scroll != before
     }
@@ -656,7 +656,7 @@ impl Roll {
                 self.snap = snap;
                 None
             }
-            RollMessage::GridScrolled { at, delta } => {
+            RollMessage::GridScrolled { at, delta } | RollMessage::RulerScrolled { at, delta } => {
                 self.scroll(target, at, delta, modifiers);
                 None
             }
@@ -683,29 +683,23 @@ impl Roll {
                 self.drag_to(at);
                 self.release(target?, modifiers)
             }
-            RollMessage::HandlePressed(y) => {
-                self.handle = Some((y, self.lane_height));
-                None
-            }
-            RollMessage::HandleDragged(y) => {
-                if let Some((from, start)) = self.handle {
-                    self.lane_height = piano_layout::dragged_lane(start, from, y);
-                }
-                None
-            }
-            RollMessage::HandleReleased => {
-                self.handle = None;
-                None
-            }
+            // The thumb dragged moves the view smoothly while held and lands it on a whole
+            // cell when let go of; a page or a wheel notch over the bar lands at once.
             RollMessage::Bar(BarMessage::To { offset, held }) => {
                 self.bar_held = held;
-                self.view.scroll = Ticks(offset.round() as i64);
-                let end = target.map_or(self.view.bar(), notes_end);
-                self.clamp_scroll(end);
+                let to = Ticks(offset.round() as i64);
+                self.view.scroll = if held {
+                    to
+                } else {
+                    self.view.landed_towards(to)
+                };
+                self.clamp_scroll(target.map_or(self.view.bar(), notes_end));
                 None
             }
             RollMessage::Bar(BarMessage::LetGo) => {
                 self.bar_held = false;
+                self.view.scroll = self.view.landed(self.view.scroll);
+                self.clamp_scroll(target.map_or(self.view.bar(), notes_end));
                 None
             }
             RollMessage::ScaleSelected(mode) => {
@@ -950,7 +944,8 @@ impl Roll {
         modifiers: Modifiers,
         double: bool,
     ) -> Option<Commit> {
-        if self.gesture.is_some() {
+        // The ground under the whole rows is no key's: a press there does nothing.
+        if self.gesture.is_some() || at.y >= piano_layout::rows_bottom(self.grid_size.height) {
             return None;
         }
         let hit = piano_layout::note_under(&self.view, target.channel_notes(), at.x, at.y);
@@ -992,7 +987,7 @@ impl Roll {
                 None
             }
             (mouse::Button::Left, Some((note, part))) => {
-                self.draw_length = drawn_length(note, self.view.step);
+                self.set_length = Some(drawn_length(note, self.view.step));
                 let key = key_of(note);
                 if !self.selection.contains(&key) {
                     self.selection = BTreeSet::from([key]);
@@ -1039,11 +1034,9 @@ impl Roll {
         if at.x < piano_layout::KEY_COLUMN_WIDTH {
             return None;
         }
-        let key = u8::try_from(self.view.key_at(at.y))
-            .ok()
-            .filter(|&key| key <= MAX_KEY)?;
+        let key = self.view.key_in_rows(at.y, self.grid_size.height)?;
         let tick = note_gesture::snap_down(self.view.tick_at(at.x), self.unit(modifiers));
-        let change = note_gesture::draw(target, tick, key, self.draw_length);
+        let change = note_gesture::draw(target, tick, key, self.draw_length());
         self.just_drawn = change.added_keys().into_iter().next();
         let edit = change.into_edit(target)?;
         Some(Commit {
@@ -1062,7 +1055,7 @@ impl Roll {
             self.gesture = Some(Gesture::Ramp { from: at, to: at });
             return;
         }
-        let steps = piano_layout::lane_steps(at.y, self.lane_height);
+        let steps = piano_layout::lane_steps(at.y);
         let picked = piano_layout::stem_under(&self.view, target.channel_notes(), at.x);
         if picked.is_some_and(|note| self.selection.contains(&key_of(note))) {
             self.gesture = Some(Gesture::Velocity {
@@ -1084,7 +1077,7 @@ impl Roll {
     /// last seen and `at` (or within the pick distance of either) takes the height the line
     /// between them has there.
     fn paint_to(&mut self, at: Point) {
-        let (view, lane) = (self.view, self.lane_height);
+        let view = self.view;
         let Some(Gesture::Paint {
             notes,
             painted,
@@ -1098,7 +1091,9 @@ impl Roll {
         let (left, right) = (from.x.min(to.x), from.x.max(to.x));
         let reach = piano_layout::STEM_PICK_DISTANCE;
         for note in notes.iter() {
-            let middle = view.x_of(note.start) + piano_layout::STEM_WIDTH / 2.0;
+            let Some(middle) = piano_layout::stem_middle(&view, note) else {
+                continue;
+            };
             if middle < left - reach || middle > right + reach {
                 continue;
             }
@@ -1107,11 +1102,11 @@ impl Roll {
             } else {
                 ((middle - from.x) / (to.x - from.x)).clamp(0.0, 1.0)
             };
-            let height = piano_layout::lane_steps(from.y + (to.y - from.y) * along, lane);
+            let height = piano_layout::lane_steps(from.y + (to.y - from.y) * along);
             painted.insert(key_of(note), (note.clone(), height));
         }
         *last = at;
-        *steps = piano_layout::lane_steps(at.y, lane);
+        *steps = piano_layout::lane_steps(at.y);
     }
 
     fn drag_to(&mut self, at: Point) {
@@ -1132,7 +1127,7 @@ impl Roll {
                 Gesture::Move { to, .. } | Gesture::Resize { to, .. } | Gesture::Box { to, .. },
             ) => *to = at,
             Some(Gesture::Velocity { steps, .. }) => {
-                *steps = piano_layout::lane_steps(at.y, self.lane_height);
+                *steps = piano_layout::lane_steps(at.y);
             }
             None => {}
         }
@@ -1173,7 +1168,7 @@ impl Roll {
         if let Gesture::Resize { grabbed, .. } = &gesture {
             let resized = change.add.iter().find(|n| key_of(n) == key_of(grabbed));
             if let Some(note) = resized {
-                self.draw_length = note.length;
+                self.set_length = Some(note.length);
             }
         }
         let edit = change.into_edit(target)?;
@@ -1227,19 +1222,27 @@ impl Roll {
                 return Some((change, selection));
             }
             Gesture::Ramp { from, to } => {
-                let lane = self.lane_height;
                 // A stem is drawn from its note's start: an end on a stem's middle is that
                 // note's tick.
                 // Rounded, not floored: the x of a tick read back in single precision may lie a
                 // hair left of it, a tick short.
                 let end = |at: &Point| {
                     let x = at.x - piano_layout::STEM_WIDTH / 2.0;
-                    (
-                        self.view.tick_nearest(x),
-                        piano_layout::lane_steps(at.y, lane),
-                    )
+                    (self.view.tick_nearest(x), piano_layout::lane_steps(at.y))
                 };
-                note_ops::ramped(target, &self.acted_on(target), end(from), end(to))
+                // Each note at the tick its stem stands for: a note scrolled half out has its
+                // stem pinned at the lane's left edge, right of its start.
+                let stem_tick = |note: &Note| {
+                    let x = self.view.stem_x(note)?;
+                    Some(self.view.tick_nearest(x))
+                };
+                note_ops::ramped(
+                    target,
+                    &self.acted_on(target),
+                    end(from),
+                    end(to),
+                    stem_tick,
+                )
             }
             Gesture::Box { .. } | Gesture::Pending { .. } => return None,
         };
@@ -1247,8 +1250,11 @@ impl Roll {
         Some((change, self.selection.clone()))
     }
 
-    /// The wheel over the grid: keys, Shift (or a wheel across, a trackpad's) for time, Ctrl
-    /// to zoom around the cursor. One step per wheel event, whatever its size.
+    /// The wheel over the grid (or the ruler): keys, Shift (or a wheel across, a trackpad's) for
+    /// time, [`PIXELS_PER_NOTCH`] a notch landing on a whole cell, Ctrl to zoom a quarter of a
+    /// doubling around the cursor, as the playlist does. One step per wheel event, whatever its
+    /// size. Why the zoom does not land: the tick under the cursor stays under it, which a
+    /// landed view could not keep.
     fn scroll(
         &mut self,
         target: Option<&Target>,
@@ -1264,24 +1270,13 @@ impl Roll {
         let up = notch > 0.0;
         let end = target.map_or(self.view.bar(), notes_end);
         if modifiers.command() && !across {
-            let zoom = if up {
-                (self.view.zoom + 1).min(ZOOM_LEVELS.len() - 1)
-            } else {
-                self.view.zoom.saturating_sub(1)
-            };
-            // Keep the tick under the cursor where it is: the new scroll puts it back under x.
-            let under = self.view.tick_at(at.x);
-            let unscrolled = View {
-                zoom,
-                scroll: Ticks(0),
-                ..self.view
-            };
-            self.view.zoom = zoom;
-            self.view.scroll = Ticks((under.0 - unscrolled.tick_at(at.x).0).max(0));
+            let zoom = ZOOM.wheeled(self.view.zoom, up);
+            self.view = self.view.zoomed_at(zoom, at.x);
         } else if modifiers.shift() || across {
-            let beat = self.view.beat().0;
-            let moved = self.view.scroll.0 + if up { -beat } else { beat };
-            self.view.scroll = Ticks(moved.max(0));
+            let ticks = (f64::from(PIXELS_PER_NOTCH) * self.view.step.0 as f64
+                / f64::from(self.view.px_per_step())) as i64;
+            let moved = self.view.scroll.0 + if up { -ticks } else { ticks };
+            self.view.scroll = self.view.landed_towards(Ticks(moved.max(0)));
         } else {
             let rows = if up { KEYS_PER_NOTCH } else { -KEYS_PER_NOTCH };
             self.view.top = self.view.top_moved(rows, self.grid_size.height);
@@ -1377,6 +1372,44 @@ mod tests {
         assert_eq!(roll.view.top, 71);
     }
 
+    // The opened roll's 340 px grid holds 28 whole rows, keys 69 down to 42 (key 42's row y
+    // 324..336), and 4 px of ground under them, where key 41's row would be cut. A click at
+    // y 330 draws a note on key 42; one at y 338, in the ground, starts nothing and draws
+    // nothing, and a right press there opens no menu.
+    #[test]
+    fn the_ground_under_the_whole_rows_takes_no_press() {
+        let notes = p3_notes();
+        let target = target(&notes);
+        let mut roll = opened(&notes);
+        assert_eq!(roll.view.top, 69);
+        assert_eq!(
+            roll.update(press((200.0, 338.0)), Some(&target), NONE),
+            None
+        );
+        assert!(!roll.grid_held(), "nothing held");
+        assert_eq!(
+            roll.update(release((200.0, 338.0)), Some(&target), NONE),
+            None
+        );
+        let right = RollMessage::GridPressed {
+            at: Point::new(200.0, 338.0),
+            button: mouse::Button::Right,
+            double: false,
+        };
+        assert_eq!(roll.update(right, Some(&target), NONE), None);
+        assert_eq!(roll.menu, None, "no menu in the ground");
+        let _ = roll.update(press((200.0, 330.0)), Some(&target), NONE);
+        let drawn = roll.update(release((200.0, 330.0)), Some(&target), NONE);
+        let Some(Commit {
+            edit: Edit::ReplaceNotes { add, .. },
+            ..
+        }) = drawn
+        else {
+            panic!("a note drawn on the last whole row: {drawn:?}");
+        };
+        assert_eq!(add.iter().map(|note| note.key).collect::<Vec<_>>(), [42]);
+    }
+
     #[test]
     fn pressing_a_note_selects_it_and_clicking_it_adopts_its_length() {
         let notes = p3_notes();
@@ -1391,7 +1424,7 @@ mod tests {
             None
         );
         assert_eq!(roll.selection, BTreeSet::from([key_of(&notes[1])]));
-        assert_eq!(roll.draw_length, Ticks(96));
+        assert_eq!(roll.draw_length(), Ticks(96));
         // Ctrl+press toggles membership and starts no drag.
         roll.update(press((56.0, 114.0)), Some(&target(&notes)), Modifiers::CTRL);
         assert!(!roll.grid_held());
@@ -1528,7 +1561,7 @@ mod tests {
 
     #[test]
     fn a_ramp_ending_on_an_unquantized_stem_reaches_its_note() {
-        for zoom in [2, 4, 6] {
+        for zoom in [8.0, 16.0, 32.0] {
             for off in 1..=40 {
                 let notes = vec![note(1, off, 10, 0.5, 60), note(1, off + 97, 10, 0.5, 62)];
                 let mut roll = opened(&notes);
@@ -1536,9 +1569,10 @@ mod tests {
                 let middle =
                     |tick: i64| roll.view.x_of(Ticks(tick)) + piano_layout::STEM_WIDTH / 2.0;
                 let (from, to) = (middle(off), middle(off + 97));
-                let lane = roll.lane_height();
+                let lane = piano_layout::LANE_HEIGHT;
+                // 0.1 px over the lane's foot is 0.4 of a step, rounded to 0.
                 roll.update(
-                    RollMessage::LanePressed(Point::new(from, lane - 0.2)),
+                    RollMessage::LanePressed(Point::new(from, lane - 0.1)),
                     Some(&target(&notes)),
                     Modifiers::ALT,
                 );
@@ -1556,6 +1590,40 @@ mod tests {
                 assert_eq!(set, [(off, 0.0), (off + 97, 1.0)], "zoom {zoom}, off {off}");
             }
         }
+    }
+
+    // A ramp reaches the stem pinned at the lane's left edge: a note scrolled half out of view
+    // ramps at the tick its stem stands on, not its start. By hand, at 16 px a step (24 ticks)
+    // with the view scrolled to tick 48, x = 48 + (tick − 48) · 16 / 24: A (0..96) is half out,
+    // its stem pinned at x 48 (its start's x, 16, is left of the timeline), B (144) at
+    // 48 + 96 · 16 / 24 = 112. Alt pressed on A's stem's middle (50) at lane y 24, (32 − 24) ·
+    // 128 / 32 = 32 steps, and let go at x 162 at y 0, 128 steps: the ends stand for ticks
+    // round((50 − 2 − 48) · 24 / 16) + 48 = 48 and round((162 − 2 − 48) · 24 / 16) + 48 = 216.
+    // A's stem at x 48 stands for tick 48, the ramp's start: 32 steps, 32 / 128 = 0.25. B's at
+    // x 112 for tick 144: 32 + round(96 · (144 − 48) / (216 − 48)) = 32 + round(54.857) = 87
+    // steps, 87 / 128 = 0.6796875. (Before, A was passed over: its start, 0, is left of 48.)
+    #[test]
+    fn a_ramp_reaches_the_stem_pinned_at_the_lanes_left_edge() {
+        let notes = vec![note(1, 0, 96, 0.5, 60), note(1, 144, 24, 0.5, 62)];
+        let mut roll = opened(&notes);
+        roll.view.scroll = Ticks(48);
+        roll.update(
+            RollMessage::LanePressed(Point::new(50.0, 24.0)),
+            Some(&target(&notes)),
+            Modifiers::ALT,
+        );
+        let commit = roll
+            .update(
+                RollMessage::LaneReleased(Point::new(162.0, 0.0)),
+                Some(&target(&notes)),
+                Modifiers::ALT,
+            )
+            .expect("a ramp");
+        let Edit::ReplaceNotes { add, .. } = commit.edit else {
+            panic!("{:?}", commit.edit);
+        };
+        let set: Vec<(i64, f32)> = add.iter().map(|n| (n.start.0, n.velocity)).collect();
+        assert_eq!(set, [(0, 0.25), (144, 0.6796875)]);
     }
 
     // Chop cuts at the snap: at a beat (96) B (96..192) is one beat and stays, A (0..48) too;
@@ -1605,7 +1673,7 @@ mod tests {
         };
         roll.update(press((334.0, 150.0)), Some(&grown), NONE);
         roll.update(release((366.0, 150.0)), Some(&grown), NONE);
-        assert_eq!(roll.draw_length, Ticks(72));
+        assert_eq!(roll.draw_length(), Ticks(72));
         let next = roll
             .update(press((450.0, 150.0)), Some(&grown), NONE)
             .or_else(|| roll.update(release((450.0, 150.0)), Some(&grown), NONE))
@@ -1614,6 +1682,65 @@ mod tests {
             panic!("{:?}", next.edit);
         };
         assert_eq!(add[0].length, Ticks(72));
+    }
+
+    // The smallest note a click draws is the smallest cell drawn. By hand from the grid's
+    // rules (ppq 96, a step 24 ticks): the lines between the bars are half steps (12 ticks),
+    // steps (24) and beats (96), each px/2, px and 4·px apart at px pixels a step, drawn
+    // (apart − 5)/14 strong kept to 0..1, and the snap Line is the finest at least half strong
+    // (apart ≥ 12 px). At 64 px a step the half steps are 32 px apart, whole: Line 12 ticks; at
+    // 16 they are 8 px apart, 3/14, and the steps 16 px, 11/14: Line 24; at 4 the half steps
+    // (2 px) and the steps (4 px) are none and the beats 16 px, 11/14: Line 96. The snap is
+    // Line by default, and with no length set a click draws one Line long: at x 100 on key 64's
+    // row (y 66, the top row 69), tick floor((100 − 48) · 24 / px): 19 at 64 px (down to 12),
+    // 78 at 16 (down to 72), 312 at 4 (down to 288), so 12..24, 72..96 and 288..384; the strip's
+    // Len reads 0:00:12, 0:01:00 and 0:04:00. A note clicked sets the length, 96 ticks for the
+    // one on 64 (96..192), which then holds at any zoom. (Pin moved: the snap was Step and the
+    // length a step at every zoom, 24 ticks.)
+    #[test]
+    fn a_click_draws_one_snap_unit_until_a_length_is_set() {
+        assert_eq!(Snap::default(), Snap::Line);
+        let notes = p3_notes();
+        for (zoom, unit, start, len) in [
+            (64.0, 12, 12, "0:00:12"),
+            (16.0, 24, 72, "0:01:00"),
+            (4.0, 96, 288, "0:04:00"),
+        ] {
+            let mut roll = opened(&notes);
+            assert_eq!(roll.snap, Snap::Line);
+            roll.view.zoom = zoom;
+            assert_eq!(roll.draw_length(), Ticks(unit), "{zoom} px a step");
+            assert_eq!(
+                crate::ui::toolbar::format_length(roll.draw_length(), 96),
+                len
+            );
+            roll.update(press((100.0, 66.0)), Some(&target(&notes)), NONE);
+            let commit = roll
+                .update(release((100.0, 66.0)), Some(&target(&notes)), NONE)
+                .expect("draws");
+            let Edit::ReplaceNotes { add, .. } = commit.edit else {
+                panic!("{zoom}: {:?}", commit.edit);
+            };
+            let drawn = (add[0].start, add[0].length, add[0].key);
+            assert_eq!(drawn, (Ticks(start), Ticks(unit), 64), "{zoom} px a step");
+        }
+        let mut roll = opened(&notes);
+        roll.view.zoom = 64.0;
+        // The note on 64 at 96..192 lies at x 48 + 96 · 64 / 24 = 304 to 560 at 64 px a step.
+        roll.update(press((400.0, 66.0)), Some(&target(&notes)), NONE);
+        roll.update(release((400.0, 66.0)), Some(&target(&notes)), NONE);
+        assert_eq!(roll.draw_length(), Ticks(96), "the note clicked sets it");
+        roll.view.zoom = 4.0;
+        assert_eq!(roll.draw_length(), Ticks(96), "and it holds at any zoom");
+        let mut ticks = opened(&notes);
+        ticks.snap = Snap::None;
+        assert_eq!(
+            ticks.draw_length(),
+            Ticks(24),
+            "None draws a Line's unit, not a tick"
+        );
+        ticks.snap = Snap::Beat;
+        assert_eq!(ticks.draw_length(), Ticks(96));
     }
 
     // A3, by hand: a press on empty grid at x 330 (tick 423, down to 408) that moves 3 px and
@@ -1726,14 +1853,44 @@ mod tests {
         assert_eq!(roll.view.scroll, Ticks(96), "one beat later");
         roll.update(wheel(1.0), Some(&target(&notes)), Modifiers::SHIFT);
         assert_eq!(roll.view.scroll, Ticks(0));
-        // x 304 is tick 384 at 16 px per step; zoomed in to 24 px it must stay under x 304.
+        // x 304 is tick 256·24/16 = 384 at 16 px per step. A Ctrl notch in is a quarter of a
+        // doubling, 4·2^(9/4) = 19.0273 px a step, from scroll round(384 − 256·24/19.0273) =
+        // round(61.096) = 61, so tick 384 stays at x 48 + 323·19.0273/24 = 304.08, under the
+        // cursor. Two notches out, 16 then 4·2^(7/4) = 13.4543, would scroll to −0.1 and −72.7:
+        // the view stays at the start. (Pins moved from the zoom levels' 24 and 12 px.)
         roll.update(wheel(1.0), Some(&target(&notes)), Modifiers::CTRL);
-        assert_eq!(roll.view.px_per_step(), 24.0);
-        assert_eq!(roll.view.tick_at(304.0), Ticks(384));
+        assert!((roll.view.px_per_step() - 19.027_313).abs() < 1e-4);
+        assert_eq!(roll.view.scroll, Ticks(61));
+        assert!((roll.view.x_of(Ticks(384)) - 304.08).abs() < 0.01);
         roll.update(wheel(-1.0), Some(&target(&notes)), Modifiers::CTRL);
+        assert_eq!(
+            (roll.view.px_per_step(), roll.view.scroll),
+            (16.0, Ticks(0))
+        );
         roll.update(wheel(-1.0), Some(&target(&notes)), Modifiers::CTRL);
-        assert_eq!(roll.view.px_per_step(), 12.0);
+        assert!((roll.view.px_per_step() - 13.454_343).abs() < 1e-4);
         assert_eq!(roll.view.scroll, Ticks(0), "never before tick 0");
+    }
+
+    // The wheel over the ruler does what it does over the grid: four Ctrl notches at x 304 from
+    // 16 px a step double the zoom, 32, each keeping what is under x 304 there to a whole tick:
+    // the scroll goes round(384 − 6144/19.0273) = 61, round(61 + 6144/19.0273 − 6144/22.6274) =
+    // 112, then 155 and 191 (6144 = 256 px·24 ticks), so tick 384 ends at x 48 + 193·32/24 =
+    // 305.33, a pixel and a third from where it was.
+    #[test]
+    fn the_wheel_over_the_ruler_zooms_as_over_the_grid() {
+        let notes = p3_notes();
+        let mut roll = opened(&notes);
+        let notch = RollMessage::RulerScrolled {
+            at: Point::new(304.0, 6.0),
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        };
+        for _ in 0..4 {
+            roll.update(notch.clone(), Some(&target(&notes)), Modifiers::CTRL);
+        }
+        assert!((roll.view.px_per_step() - 32.0).abs() < 1e-5);
+        assert_eq!(roll.view.scroll, Ticks(191));
+        assert!((roll.view.x_of(Ticks(384)) - 305.333).abs() < 1e-3);
     }
 
     #[test]
@@ -1747,57 +1904,20 @@ mod tests {
         assert_eq!(roll.selection, BTreeSet::from([key_of(&notes[1])]));
     }
 
-    // The handle drags the lane taller by what it went up, stops at the
-    // tallest lane, and a stem press reads velocity on the lane's own height: y 20 of the default
-    // 64 px lane is 88, y 20 of a 94 px lane (64 dragged up 30) is round(74·128/94) = 101.
-    #[test]
-    fn the_handle_resizes_the_lane_and_the_lane_keeps_its_scale() {
-        let notes = p3_notes();
-        let mut roll = opened(&notes);
-        assert_eq!(roll.lane_height(), piano_layout::LANE_HEIGHT);
-        roll.update(
-            RollMessage::LanePressed(Point::new(50.0, 20.0)),
-            Some(&target(&notes)),
-            NONE,
-        );
-        assert_eq!(roll.dragged_velocity(), Some(88));
-        roll.update(
-            RollMessage::LaneReleased(Point::new(50.0, 20.0)),
-            Some(&target(&notes)),
-            NONE,
-        );
-        roll.update(RollMessage::HandlePressed(400.0), None, NONE);
-        assert!(roll.handle_held());
-        roll.update(RollMessage::HandleDragged(370.0), None, NONE);
-        assert_eq!(roll.lane_height(), 94.0);
-        roll.update(RollMessage::HandleReleased, None, NONE);
-        assert!(!roll.handle_held());
-        roll.update(
-            RollMessage::LanePressed(Point::new(50.0, 20.0)),
-            Some(&target(&notes)),
-            NONE,
-        );
-        assert_eq!(roll.dragged_velocity(), Some(101));
-        roll.update(RollMessage::HandleDragged(0.0), None, NONE);
-        assert_eq!(
-            roll.lane_height(),
-            94.0,
-            "a move with the handle let go of changes nothing"
-        );
-        let tall = opened(&notes).with_lane_height(1000.0);
-        assert_eq!(tall.lane_height(), piano_layout::LANE_MAX_HEIGHT);
-    }
-
-    // P2, by hand on p3_roll at 16 px a step in a 1000 px grid (1428 ticks in view): the bar
-    // reaches 4 bars past the one-bar pattern, 1920; dragged to the end it shows 492..1920. A
-    // note moved past a pattern made shorter keeps the reach past it. A wheel across (a
-    // trackpad's) scrolls time a beat, as Shift+wheel does.
+    // By hand on p3_roll at 16 px a step in a 1000 px grid (1428 ticks in view): the bar
+    // reaches 4 bars past the one-bar pattern, 1920, and on to where the last view, landed on
+    // the beat 576, ends: 2004. Dragged to the end it shows 576..2004; to 100.4, it lands on the
+    // nearest beat, 96. A note moved past a pattern made shorter keeps the reach past it: it
+    // ends at 2496, 4 bars past is 4032, whose last view starts at 4032 − 1428 = 2604, landed
+    // up to 2688, and ends at 4116. A wheel across (a trackpad's) scrolls time 64 px, a beat at
+    // this zoom, as Shift+wheel does. (Pins moved from 1920, 492, 100 and 4032, before the
+    // scroll landed on beats.)
     #[test]
     fn the_bar_scrolls_the_grid_within_its_reach() {
         let notes = p3_notes();
         let mut roll = opened(&notes);
         let span = roll.span(Some(&target(&notes)));
-        assert_eq!((span.content, span.view), (1920.0, 1428.0));
+        assert_eq!((span.content, span.view), (2004.0, 1428.0));
         let to = |offset| {
             RollMessage::Bar(BarMessage::To {
                 offset,
@@ -1805,13 +1925,13 @@ mod tests {
             })
         };
         roll.update(to(5000.0), Some(&target(&notes)), NONE);
-        assert_eq!(roll.view.scroll, Ticks(492), "kept to the reach");
+        assert_eq!(roll.view.scroll, Ticks(576), "kept to the reach");
         roll.update(to(100.4), Some(&target(&notes)), NONE);
-        assert_eq!(roll.view.scroll, Ticks(100));
+        assert_eq!(roll.view.scroll, Ticks(96));
         let mut late = notes.clone();
         late.push(note(1, 2400, 96, 0.5, 62));
         let span = roll.span(Some(&target(&late)));
-        assert_eq!(span.content, (2496 + 4 * 384) as f64);
+        assert_eq!(span.content, 4116.0);
         roll.update(to(0.0), Some(&target(&notes)), NONE);
         let across = RollMessage::GridScrolled {
             at: Point::new(304.0, 100.0),
@@ -1820,6 +1940,24 @@ mod tests {
         roll.update(across, Some(&target(&notes)), NONE);
         assert_eq!(roll.view.scroll, Ticks(96), "a beat later");
         assert_eq!(roll.view.top, 69, "the keys stay");
+    }
+
+    // The thumb dragged moves the view tick by tick while held, 100, and lands it on the
+    // nearest beat when let go of, 96; held at 150, past half a beat, it lands on the next,
+    // (150 + 48) floored to beats, 192.
+    #[test]
+    fn a_held_thumb_scrolls_smoothly_and_lands_when_let_go_of() {
+        let notes = p3_notes();
+        let mut roll = opened(&notes);
+        let held = |offset| RollMessage::Bar(BarMessage::To { offset, held: true });
+        let let_go = RollMessage::Bar(BarMessage::LetGo);
+        roll.update(held(100.0), Some(&target(&notes)), NONE);
+        assert_eq!(roll.view.scroll, Ticks(100));
+        roll.update(let_go.clone(), Some(&target(&notes)), NONE);
+        assert_eq!(roll.view.scroll, Ticks(96));
+        roll.update(held(150.0), Some(&target(&notes)), NONE);
+        roll.update(let_go, Some(&target(&notes)), NONE);
+        assert_eq!(roll.view.scroll, Ticks(192));
     }
 
     // A trackpad's swipe across with a little down
@@ -1840,7 +1978,7 @@ mod tests {
         assert_ne!(roll.view.top, 69, "the keys move");
     }
 
-    // P2: the playhead jumps the view a page, by hand. Zoomed to 48 px a step (two pixels a tick,
+    // The playhead jumps the view a page, by hand. Zoomed to 48 px a step (two pixels a tick,
     // 476 ticks in view) on a 4-bar pattern: at tick 400 the view stays at 0; at 476 it jumps
     // to bar 2's start, 384; the pattern's wrap back to 0 jumps it back. A held thumb stops
     // the jumps until it is let go of.
@@ -1852,7 +1990,7 @@ mod tests {
             ..target(&notes)
         };
         let mut roll = opened(&notes);
-        roll.view.zoom = 7;
+        roll.view.zoom = 48.0;
         assert_eq!(roll.span(Some(&long)).view, 476.0);
         assert!(!roll.follow(Some(&long), Ticks(400)));
         assert!(roll.follow(Some(&long), Ticks(476)));

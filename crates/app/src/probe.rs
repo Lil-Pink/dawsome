@@ -14,21 +14,36 @@ use iced::Point;
 
 use crate::headless::SCALE_FACTOR_KEYWORD;
 use crate::ui::layout;
-use crate::ui::piano_layout::{LANE_HEIGHT, STRIP_HEIGHT};
+use crate::ui::piano_layout::GRID_TOP;
 use crate::ui::playlist_layout::{HEADER_HEIGHT, RULER_HEIGHT};
 
+mod accent;
 mod ease;
 mod fixes;
 mod help;
 mod keys;
 mod midi_out;
 mod params;
+mod roll_strip;
 mod sample_editor;
+mod synth;
+mod theme;
 
-/// The first channel's lit color and the two unlit tones. Unlit steps alternate tone by beat:
-/// steps 1-4 and 9-12 of a bar use the first tone, steps 5-8 and 13-16 the second.
-const LIT_FIRST_CHANNEL: [u8; 3] = [0xE5, 0x53, 0x3D];
-const UNLIT: [[u8; 3]; 2] = [[0x4A, 0x4F, 0x57], [0x3A, 0x3E, 0x45]];
+/// The first channel's lit color, the color the rack draws it with.
+fn lit_first_channel() -> [u8; 3] {
+    rgb(crate::ui::style::CHANNEL_COLORS[0])
+}
+
+/// The two unlit tones the rack draws with (Graphite's, the shots' theme). Unlit steps alternate
+/// tone by beat: steps 1-4 and 9-12 of a bar use the first tone, steps 5-8 and 13-16 the second.
+fn unlit() -> [[u8; 3]; 2] {
+    crate::ui::palette::GRAPHITE.step_unlit.map(rgb)
+}
+
+fn rgb(color: iced::Color) -> [u8; 3] {
+    let [r, g, b, _] = color.into_rgba8();
+    [r, g, b]
+}
 /// Largest per-channel difference still counted as a match: a color-space round trip on the
 /// GPU can move a value by one.
 const TOLERANCE: u8 = 2;
@@ -37,7 +52,7 @@ const TOLERANCE: u8 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tone {
     Lit,
-    /// Unlit, in the tone with this index into [`UNLIT`].
+    /// Unlit, in the tone with this index into [`unlit`].
     Unlit(usize),
     Other([u8; 3]),
 }
@@ -108,15 +123,9 @@ fn near(pixel: [u8; 3], expected: [u8; 3], tolerance: u8) -> bool {
 }
 
 /// Where grid point `point` is in the window when the piano roll is the only panel: under the
-/// toolbar and the strip.
+/// toolbar, the strip and the ruler.
 pub(crate) fn roll_grid_in_window(point: Point) -> Point {
-    Point::new(point.x, point.y + layout::TOOLBAR_HEIGHT + STRIP_HEIGHT)
-}
-
-/// Where lane point `point` is in a window `height` tall when the piano roll is the only
-/// panel: the lane sits at the bottom.
-pub(crate) fn roll_lane_in_window(point: Point, height: f32) -> Point {
-    Point::new(point.x, point.y + height - LANE_HEIGHT)
+    Point::new(point.x, point.y + layout::TOOLBAR_HEIGHT + GRID_TOP)
 }
 
 /// Where ruler point `point` is in the window when the playlist is the only panel: under the
@@ -240,10 +249,10 @@ pub(crate) fn probe_row(shot: &Screenshot, row: usize, steps: u32) -> Vec<Tone> 
 
 fn tone(pixel: [u8; 3]) -> Tone {
     let near = |reference: [u8; 3]| near(pixel, reference, TOLERANCE);
-    if near(LIT_FIRST_CHANNEL) {
+    if near(lit_first_channel()) {
         return Tone::Lit;
     }
-    match UNLIT.into_iter().position(near) {
+    match unlit().into_iter().position(near) {
         Some(index) => Tone::Unlit(index),
         None => Tone::Other(pixel),
     }
@@ -265,13 +274,20 @@ mod tests {
             .collect()
     }
 
+    // The tones as gen_ui_contrast.py gives them (the first channel #E5533D, Graphite's unlit
+    // steps a shade down, #34383E and #2A2E34), each matched within a GPU's ±1 or ±2 a channel; a
+    // pixel half way between the two unlit tones (#2F3339, 5 off each), the red 4 off in blue,
+    // and the red with its channels swapped are other colors.
     #[test]
     fn classification_tolerates_rounding_but_not_other_colors() {
+        assert_eq!(lit_first_channel(), [0xE5, 0x53, 0x3D]);
+        assert_eq!(unlit(), [[0x34, 0x38, 0x3E], [0x2A, 0x2E, 0x34]]);
         assert_eq!(tone([0xE5, 0x53, 0x3D]), Tone::Lit);
         assert_eq!(tone([0xE4, 0x54, 0x3F]), Tone::Lit);
-        assert_eq!(tone([0x4A, 0x4F, 0x57]), Tone::Unlit(0));
-        assert_eq!(tone([0x3B, 0x3E, 0x44]), Tone::Unlit(1));
-        assert_eq!(tone([0x42, 0x46, 0x4E]), Tone::Other([0x42, 0x46, 0x4E]));
+        assert_eq!(tone([0x34, 0x38, 0x3E]), Tone::Unlit(0));
+        assert_eq!(tone([0x35, 0x37, 0x3F]), Tone::Unlit(0));
+        assert_eq!(tone([0x2B, 0x2E, 0x33]), Tone::Unlit(1));
+        assert_eq!(tone([0x2F, 0x33, 0x39]), Tone::Other([0x2F, 0x33, 0x39]));
         assert_eq!(tone([0xE5, 0x53, 0x41]), Tone::Other([0xE5, 0x53, 0x41]));
         assert_eq!(tone([0x3D, 0x53, 0xE5]), Tone::Other([0x3D, 0x53, 0xE5]));
     }
@@ -308,8 +324,8 @@ mod tests {
         for step in 0..16_u32 {
             let color = match step {
                 6 => [0, 0, 0xFF],
-                s if s % 4 == 0 => LIT_FIRST_CHANNEL,
-                s => UNLIT[(s / 4 % 2) as usize],
+                s if s % 4 == 0 => lit_first_channel(),
+                s => unlit()[(s / 4 % 2) as usize],
             };
             // Step i's box: left edge 222 + 30i + 6⌊i/4⌋ (an extra gap after every four
             // steps), top 96 (under the 64 px toolbar, the 24 px rack header and 8 px of
@@ -356,9 +372,15 @@ mod tests {
 
     // The new document with the rack alone (positions from crate::ui::layout, colors from
     // crate::ui::style): its one row, "Sampler", lights no step, so its 16 steps show the two
-    // unlit tones by beat; under it, the "+ Plugin instrument…" button. In the header above the
-    // rows, "−", "+" and "+ Sampler…" are buttons, and the bar count's dark display holds bright
-    // text (its "1").
+    // unlit tones by beat; under it the add row (rack y 46..70): "+ Instrument…" its words
+    // alone at the name boxes' x, where a press takes them 28..126.395 (12 · 14062 / 2048 =
+    // 82.395 px of words, layout's test, and 8 px either side) by the row's 46..70, in the
+    // secondary text's tone with no text-toned pixel (nothing points at them), no face (its
+    // corner 2 px in, rack (30, 48), the rack's ground bg), and right of them the rack's well,
+    // bg too (rack (140, 58)). In the header above the rows, "−" and "+" are buttons, and the
+    // bar count's dark display holds bright text (its "1"). (Pins moved: "+ Instrument…" stood
+    // in the header, and the well under the row at rack (30, 48), until it came down into the
+    // add row, a button 28..128 by 48..68 for a day, its face at rack (30, 50).)
     #[test]
     #[ignore = "needs a screenshot of the new document: scripts/ui-check.sh takes one and runs this"]
     fn new_document_screenshot_shows_the_rack_header_and_an_unlit_sampler_row() {
@@ -372,23 +394,45 @@ mod tests {
         );
         let header = |at: Point| Point::new(at.x, at.y + layout::TOOLBAR_HEIGHT);
         let corner = |rect: iced::Rectangle| Point::new(rect.x + 2.0, rect.y + 2.0);
-        let button = rgb8(style::BUTTON);
-        for rect in [
-            layout::bars_down_rect(),
-            layout::bars_up_rect(),
-            layout::add_sampler_rect(),
-        ] {
+        let button = rgb8(style::palette().button);
+        for rect in [layout::bars_down_rect(), layout::bars_up_rect()] {
             let pixel = shot.pixel(header(corner(rect)));
             assert!(near(pixel, button, TOLERANCE), "{rect:?}: {pixel:?}");
         }
-        let plugin = shot.pixel(layout::rack_in_window(corner(layout::add_plugin_rect(1))));
+        let add = layout::add_instrument_rect(1);
+        assert_eq!((add.x, add.y, add.height), (28.0, 46.0, 24.0));
+        assert!((add.width - 98.395).abs() < 1e-3, "{add:?}");
+        let ground = rgb8(style::palette().bg);
+        let face = shot.pixel(layout::rack_in_window(corner(add)));
         assert!(
-            near(plugin, button, TOLERANCE),
-            "+ Plugin instrument: {plugin:?}"
+            near(face, ground, TOLERANCE),
+            "+ Instrument…, no face: {face:?}"
+        );
+        let top = layout::rack_in_window(add.position());
+        let words = |color: iced::Color| {
+            shot.count_matching(
+                top.x..top.x + add.width,
+                top.y..top.y + add.height,
+                |pixel| near(pixel, rgb8(color), TOLERANCE),
+            )
+        };
+        let (resting, lit) = (
+            words(style::palette().text_secondary),
+            words(style::palette().text),
+        );
+        println!("+ Instrument…: {resting} secondary-toned pixels, {lit} text-toned");
+        assert!(resting > 5 && lit == 0, "the words at rest");
+        let under = shot.pixel(layout::rack_in_window(Point::new(140.0, 58.0)));
+        assert!(
+            near(under, ground, TOLERANCE),
+            "the well right of the words: {under:?}"
         );
         let count = layout::bars_count_rect();
         let ground = shot.pixel(header(corner(count)));
-        assert!(near(ground, rgb8(style::LCD), TOLERANCE), "{ground:?}");
+        assert!(
+            near(ground, rgb8(style::palette().lcd), TOLERANCE),
+            "{ground:?}"
+        );
         let top = count.y + layout::TOOLBAR_HEIGHT;
         let lit = shot.count_matching(
             count.x..count.x + count.width,
@@ -408,16 +452,28 @@ mod tests {
         let name = spread.pattern_name_x();
         let y = crate::ui::toolbar::group_rows().start + 4.0;
         let inside = shot.pixel(Point::new(name + 3.0, y));
-        assert!(near(inside, rgb8(style::LCD), TOLERANCE), "{inside:?}");
+        assert!(
+            near(inside, rgb8(style::palette().lcd), TOLERANCE),
+            "{inside:?}"
+        );
         let arrow = shot.pixel(Point::new(name - 4.0, y));
-        assert!(near(arrow, rgb8(style::BUTTON), TOLERANCE), "{arrow:?}");
+        assert!(
+            near(arrow, rgb8(style::palette().button), TOLERANCE),
+            "{arrow:?}"
+        );
         let piece = spread
             .left(crate::ui::toolbar::Group::Pattern)
             .expect("the pattern shows");
         let edge = shot.pixel(Point::new(piece + 0.5, y));
-        assert!(near(edge, rgb8(style::BUTTON_EDGE), TOLERANCE), "{edge:?}");
+        assert!(
+            near(edge, rgb8(style::palette().button_edge), TOLERANCE),
+            "{edge:?}"
+        );
         let before = shot.pixel(Point::new(piece - 1.0, y));
-        assert!(near(before, rgb8(style::PANEL), TOLERANCE), "{before:?}");
+        assert!(
+            near(before, rgb8(style::palette().panel), TOLERANCE),
+            "{before:?}"
+        );
     }
 
     /// p3_roll as the piano roll opens on it (top key 69, 16 px per step), its notes A and B,
@@ -432,7 +488,7 @@ mod tests {
             View {
                 top: 69,
                 scroll: Ticks(0),
-                zoom: piano_layout::DEFAULT_ZOOM,
+                zoom: piano_layout::ZOOM.default,
                 step: Ticks(24),
                 rows: crate::ui::piano_layout::Rows::ALL,
             }
@@ -449,13 +505,30 @@ mod tests {
         }
     }
 
+    /// Where lane point `point` is in a window `height` tall when the piano roll is the only
+    /// panel: the lane sits at the bottom.
+    fn roll_lane_in_window(point: Point, height: f32) -> Point {
+        use crate::ui::piano_layout::LANE_HEIGHT;
+        Point::new(point.x, point.y + height - LANE_HEIGHT)
+    }
+
     // The piano roll on p3_roll. Expected colors, as tests/fixtures/gen_p3_expected.py prints
     // them: the lead's red #E5533D, the kick's blue at 0.3 over the white row #3C576E, rows #34373D
-    // and #2D3035, the bar line #626873, the dimmed row past the end #1F2125, the lane #1F2125, the
-    // key label #25282D.
+    // and #2D3035 shaded in bar 1, 5 lighter a channel (#393C42 and #32353A), the bar line
+    // #626873, the dimmed row past the end #1F2125, the lane's ground #141619 (the meters'; it
+    // was the well's #1F2125 before its lit edges, which lie on its first and last rows, clear of
+    // the stem probes), the key label #25282D; past the end the beat line (tick 480, x 368)
+    // dimmed as the rows are, #4A4F57 at 0.6, #2C2F34; in the key column C#'s (key 61's) black
+    // key #1A1C1F over its first 32 px and the white key #B4B9BF beside it (a shade down from
+    // #CFD3D8); on the ruler (y 92
+    // under the strip) the beat tick at bar 1's second beat (x 112, its 4 px foot y 104..108)
+    // #4A4F57, the beat line's at full strength at 16 px a step, and the ruler's ground #1F2125
+    // between ticks (x 144).
     #[test]
     #[ignore = "needs a screenshot of p3_roll with --panels piano-roll: scripts/ui-check.sh takes one and runs this"]
     fn p3_screenshot_shows_the_piano_roll() {
+        use crate::ui::grid_rules::{NUMBER_BAND_HEIGHT, NUMBER_TICK_HEIGHT};
+        use crate::ui::piano_layout::STRIP_HEIGHT;
         let path = std::env::var_os("DAWSOME_UI_SHOT")
             .expect("DAWSOME_UI_SHOT names the screenshot to probe");
         let shot = Screenshot::read(Path::new(&path));
@@ -472,12 +545,15 @@ mod tests {
         );
         let kick = |tick| p3::note(2, tick, 0, 1.0, 60);
         let stem = |note, steps: u8, offset: f32| {
-            let rect = view.stem_rect(note, steps, LANE_HEIGHT);
+            let rect = view.stem_rect(note, steps).expect("in view");
             roll_lane_in_window(Point::new(rect.center_x(), rect.y + offset), height)
         };
         let end = view.x_of(dawsome_engine::time::Ticks(384));
+        let beat_past_end = view.x_of(dawsome_engine::time::Ticks(480));
         let grid = roll_grid_in_window;
-        let probes: [(&str, Point, [u8; 3]); 12] = [
+        let tick_middle = NUMBER_BAND_HEIGHT - NUMBER_TICK_HEIGHT / 2.0;
+        let ruler = |x| Point::new(x, layout::TOOLBAR_HEIGHT + STRIP_HEIGHT + tick_middle);
+        let probes: [(&str, Point, [u8; 3]); 17] = [
             ("note A center", grid(note_center(&a)), [0xE5, 0x53, 0x3D]),
             ("note B center", grid(note_center(&b)), [0xE5, 0x53, 0x3D]),
             (
@@ -492,48 +568,76 @@ mod tests {
             ),
             (
                 "empty white row",
-                grid(Point::new(88.0, row_center(60))),
-                [0x34, 0x37, 0x3D],
+                grid(Point::new(92.0, row_center(60))),
+                [0x39, 0x3C, 0x42],
             ),
             (
                 "empty black row",
-                grid(Point::new(88.0, row_center(61))),
-                [0x2D, 0x30, 0x35],
+                grid(Point::new(92.0, row_center(61))),
+                [0x32, 0x35, 0x3A],
             ),
             (
                 "bar line at the end",
-                grid(Point::new(end + 1.0, row_center(62))),
+                grid(Point::new(end + 0.5, row_center(62))),
                 [0x62, 0x68, 0x73],
             ),
             (
                 "past the end",
-                grid(Point::new(312.0, row_center(60))),
+                grid(Point::new(316.0, row_center(60))),
                 [0x1F, 0x21, 0x25],
             ),
+            (
+                "beat line past the end",
+                grid(Point::new(beat_past_end + 0.5, row_center(60))),
+                [0x2C, 0x2F, 0x34],
+            ),
+            (
+                "black key",
+                grid(Point::new(16.0, row_center(61))),
+                [0x1A, 0x1C, 0x1F],
+            ),
+            (
+                "white key beside the black",
+                grid(Point::new(40.0, row_center(61))),
+                [0xB4, 0xB9, 0xBF],
+            ),
+            ("ruler's beat tick", ruler(112.5), [0x4A, 0x4F, 0x57]),
+            ("ruler between ticks", ruler(144.5), [0x1F, 0x21, 0x25]),
             ("stem A inside", stem(&a, 100, 4.0), [0xE5, 0x53, 0x3D]),
-            ("above stem A", stem(&a, 100, -4.0), [0x1F, 0x21, 0x25]),
+            ("above stem A", stem(&a, 100, -4.0), [0x14, 0x16, 0x19]),
             ("stem B inside", stem(&b, 64, 4.0), [0xE5, 0x53, 0x3D]),
-            ("above stem B", stem(&b, 64, -4.0), [0x1F, 0x21, 0x25]),
+            ("above stem B", stem(&b, 64, -4.0), [0x14, 0x16, 0x19]),
         ];
         // The design's window points, written out: the layout must put them there. (The
         // four stem points moved: the lane is 64 px from y 496, a stem half as
         // tall, where they were at y 464, 456, 500 and 492 in the 128 px lane from y 432.
         // The grid's eight points 16 px lower under the 72 px toolbar, then 8 px higher under
         // the 64 px one, as gen_p3_expected.py prints them; the lane's stay, measured from the
-        // window's foot.)
+        // window's foot. Then the grid's 16 px lower under the ruler, the empty rows and the row
+        // past the end read halfway between the faint half-step lines (x 92, 316; were 88, 312),
+        // the 1 px bar line on its pixel (304.5, was 305 on the 2 px line), and the stems in the
+        // fixed 32 px lane from y 528, a quarter of the 128 px lane's height: y 539, 531, 548 and
+        // 540, were 514, 506, 532 and 524 in the 64 px lane. The beat past the end on its pixel,
+        // x 48 + 480·16/24 = 368; the keys at x 16 and 40, either side of the black key's edge
+        // at 32; the ruler's points in its tick's foot, y 64 + 28 + 14.)
         let spec_points = [
-            (64.0, 206.0),
-            (144.0, 158.0),
-            (184.0, 206.0),
-            (248.0, 206.0),
-            (88.0, 206.0),
-            (88.0, 194.0),
-            (305.0, 182.0),
-            (312.0, 206.0),
-            (50.0, 514.0),
-            (50.0, 506.0),
-            (114.0, 532.0),
-            (114.0, 524.0),
+            (64.0, 222.0),
+            (144.0, 174.0),
+            (184.0, 222.0),
+            (248.0, 222.0),
+            (92.0, 222.0),
+            (92.0, 210.0),
+            (304.5, 198.0),
+            (316.0, 222.0),
+            (368.5, 222.0),
+            (16.0, 210.0),
+            (40.0, 210.0),
+            (112.5, 106.0),
+            (144.5, 106.0),
+            (50.0, 539.0),
+            (50.0, 531.0),
+            (114.0, 548.0),
+            (114.0, 540.0),
         ];
         let mut wrong = Vec::new();
         for ((name, at, expected), (x, y)) in probes.into_iter().zip(spec_points) {
@@ -592,25 +696,35 @@ mod tests {
     }
 
     /// The playlist as it opens alone in a 1000 x 560 window (64 px per bar, no scroll, track
-    /// 1 at the top), its lanes fitting the 8 tracks of the p4 fixtures: 46 px over the scroll
-    /// bar at the panel's foot (47 px with the bar in the header, and before that
-    /// they were the 32 px every playlist opened with).
+    /// 1 at the top), its lanes fitted to the 8 tracks of the p4 fixtures in the 434 px track
+    /// area under the 64 px toolbar: they share 434 − 24 − 1 = 409 px, floor(409 / 8) − 1 = 50
+    /// px lanes, 8 rows whole (8 · 51 − 1 = 407 px; 9 take 458) and the "+ Track" row right
+    /// under them, y 408..432. (They were 47 px, floor(434 / 9) − 1, while that row took a
+    /// lane's share; 64 px, 6 rows, while 64 was the fitted lanes' floor; 46 px with the bar in
+    /// the header, and before that the 32 px every playlist opened with.)
     fn p4_grid() -> crate::ui::playlist_layout::Grid {
         use crate::ui::playlist_layout::{fitted_lane, tracks_size_alone};
         let area = tracks_size_alone(iced::Size::new(1000.0, 560.0), layout::TOOLBAR_HEIGHT);
-        crate::ui::playlist_layout::Grid {
+        let grid = crate::ui::playlist_layout::Grid {
             scroll: dawsome_engine::time::Ticks(0),
-            zoom: crate::ui::playlist_layout::DEFAULT_ZOOM,
+            zoom: crate::ui::playlist_layout::ZOOM.default,
             bar: dawsome_engine::time::Ticks(384),
             top: 0,
             lane: fitted_lane(8, area.height),
-        }
+            area: area.height,
+        };
+        assert_eq!((area.height, grid.lane, grid.rows()), (434.0, 50.0, 8));
+        grid
     }
 
     // p4_two_clips with the playlist alone (colors and window points as gen_p4_expected.py prints
-    // them): clip bodies #5B7FA6, empty lanes #34383F, bar lines #484D55 with the lane color 24 px
-    // right of each, and a bright bar number (every channel above 0x90) 3..15 px right of each bar
-    // line, none mid-bar.
+    // them): clip bodies #5B7FA6; the lanes at 64 px a bar, every other bar from bar 1 shaded
+    // #393D44 and the others #34383F; bar lines #484D55, but the ones starting bars 1, 5, 9 and
+    // 13 #626873 with a companion right of each, #626873 at 45 % over the shaded lane (#4B5059);
+    // the lane's color 24 px right of each line; and a bar number 3..15 px right of each bar
+    // line, bright (every channel above 0xB4) at bars 1, 5, 9 and 13, in the secondary text at the
+    // others (#9FA3A9: drawn, none bright: its brightest channel is 0xA9), none mid-bar. (Before the grid's shaded bars every lane was
+    // #34383F, every bar line #484D55 and every number bright.)
     #[test]
     #[ignore = "needs a screenshot of p4_two_clips with --panels playlist: scripts/ui-check.sh takes one and runs this"]
     fn p4_screenshot_shows_the_playlist() {
@@ -622,7 +736,11 @@ mod tests {
         let tracks = |x: f32, y: f32| tracks_in_window(Point::new(x, y));
         let body = [0x5B, 0x7F, 0xA6];
         let lane = [0x34, 0x38, 0x3F];
+        let shaded = [0x39, 0x3D, 0x44];
+        let ground = |bar: i64| if bar % 2 == 0 { shaded } else { lane };
         let bar_line = [0x48, 0x4D, 0x55];
+        let strong_line = [0x62, 0x68, 0x73];
+        let companion = [0x4B, 0x50, 0x59];
         let mut points: Vec<(String, Point, [u8; 3])> = vec![
             (
                 "clip 1 body".into(),
@@ -640,30 +758,35 @@ mod tests {
                 lane,
             ),
             (
-                "track 2 lane".into(),
+                "track 2 lane, bar 1 shaded".into(),
                 tracks(bar_x(0) + 24.0, lane_center(1, 22.0)),
-                lane,
+                shaded,
             ),
         ];
         // The design's window points, written out: the layout must put them there. (As
-        // gen_p4_expected.py prints them: under the 64 px toolbar, in 47 px lanes a row every 48
-        // px over the scroll bar at the panel's foot (track 2's was y 194 in 47 px lanes, y 130
-        // and 163 under the 56 px one in 32 px lanes, and y 146 and 193 under the 72 px one in
-        // 46 px lanes.)
-        assert_eq!(grid.lane, 47.0);
+        // gen_p4_expected.py prints them: under the 64 px toolbar, in 50 px lanes a row every 51
+        // px, track 2's lane from y 116 + 51 = 167, read 22 px in, 189 (it was y 203 in 64 px
+        // lanes while 64 was the fitted lanes' floor, y 186 in 47 px lanes a row every 48, y 194
+        // with the bar in the header, y 130 and 163 under the 56 px one in 32 px lanes, and y 146
+        // and 193 under the 72 px one in 46 px lanes.)
+        assert_eq!(grid.lane, 50.0);
         let spec_points = [
             (144.0, 138.0),
             (272.0, 138.0),
             (208.0, 138.0),
-            (144.0, 186.0),
+            (144.0, 189.0),
         ];
         for ((name, at, _), (x, y)) in points.iter().zip(spec_points) {
             assert_eq!((at.x, at.y), (x, y), "{name}: layout moved the probe point");
         }
+        // The bar lines are read across the last whole row, track 8's (7 · 51 = 357 .. 407 in the
+        // tracks, 25 px in, 382, window 116 + 382 = 498). (Pins moved: y 475 in its 47 px row,
+        // and track 6's lane, y 473, while 64 px lanes showed 6 rows.)
         let lane_8 = lane_center(7, (grid.lane / 2.0).floor());
+        assert!(grid.shows(7) && !grid.shows(8));
         for bar in 1..=13 {
             let line = tracks(bar_x(bar), lane_8);
-            assert_eq!((line.x, line.y), (120.0 + 64.0 * bar as f32, 475.0));
+            assert_eq!((line.x, line.y), (120.0 + 64.0 * bar as f32, 498.0));
             // Why the center of the logical pixel: the screenshot is the last frame the window
             // drew, and a compositor that is not showing the window (a locked screen) lets it
             // draw only its first, before the window reports its scale, so the lines are not on
@@ -673,20 +796,27 @@ mod tests {
             // center is covered snapped or not; `lines_land_on_whole_device_pixels` in
             // ui/playlist.rs pins the snapping itself.
             let center = Point::new(line.x + 0.5, line.y + 0.5);
-            points.push((format!("bar line {}", bar + 1), center, bar_line));
+            let strong = bar % 4 == 0;
+            let color = if strong { strong_line } else { bar_line };
+            points.push((format!("bar line {}", bar + 1), center, color));
+            if strong {
+                let next = Point::new(line.x + 1.5, line.y + 0.5);
+                points.push((format!("bar line {}'s companion", bar + 1), next, companion));
+            }
             points.push((
                 format!("lane after bar line {}", bar + 1),
                 tracks(line.x + 24.0, lane_8),
-                lane,
+                ground(bar),
             ));
         }
         // Each clip's start line (#1A1C1F) at its first pixel, x 120 and 248, and the mark of
         // Pattern 1's tick-0 note (#DDE6F0) right of it, never over it: on the line it read as
-        // a note outside the clip. The mark's row: one key in a 47 px lane, so the body under the
-        // 10 px title less 2 px padding each side is 33 px, the mark 4 px high in its middle, y
-        // 26.5..30.5 in the lane, 144.5 at its middle in the window (the lane's 22 is 138).
-        let mark_y = lane_center(0, 28.5);
-        assert_eq!(tracks(0.0, mark_y).y, 144.5);
+        // a note outside the clip. The mark's row: one key in a 50 px lane, so the body under the
+        // 10 px title less 2 px padding each side is 36 px, the mark 4 px high in its middle, y
+        // 28..32 in the lane, 146 at its middle in the window (the lane's 22 is 138). (Pins
+        // moved: 33 px in the 47 px lane, the mark at 144.5; 50 px in a 64 px one, at 153.)
+        let mark_y = lane_center(0, 30.0);
+        assert_eq!(tracks(0.0, mark_y).y, 146.0);
         for (clip, start) in [(1, bar_x(0)), (2, bar_x(2))] {
             points.push((
                 format!("clip {clip} start line"),
@@ -700,23 +830,34 @@ mod tests {
             ));
         }
         let wrong = wrong_colors(&shot, &points);
-        // Bar-number boxes [x+3, x+15] x [90, 102] for x = 120 + 64b, b = 0..12, window pixels.
-        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);
+        // Bar-number boxes [x+3, x+15] x [90, 102] for x = 120 + 64b, b = 0..12, window pixels:
+        // text drawn there lifts pixels well off the ruler's #1F2125 (every channel above 0x48);
+        // the bright numbers' pixels (#C9CDD3) reach above 0xB4 in every channel, the secondary
+        // ones' (#9FA3A9) never can. (Measured: the bright numbers' best pixels 194..200
+        // in red, the secondary ones' 149..159.)
+        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0xB4);
+        let drawn = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x48);
         let band =
             ruler_in_window(Point::new(0.0, 2.0)).y..ruler_in_window(Point::new(0.0, 15.0)).y;
         assert_eq!((band.start, band.end), (90.0, 103.0));
         let mut unlabeled = Vec::new();
+        let mut wrong_tone = Vec::new();
         let mut mid_bar = Vec::new();
         for bar in 0..13 {
             let x = bar_x(bar);
-            let label = shot.count_matching((x + 3.0)..(x + 16.0), band.clone(), bright);
-            let middle = shot.count_matching((x + 35.0)..(x + 48.0), band.clone(), bright);
+            let label = (x + 3.0)..(x + 16.0);
+            let lit = shot.count_matching(label.clone(), band.clone(), bright);
+            let text = shot.count_matching(label, band.clone(), drawn);
+            let middle = shot.count_matching((x + 35.0)..(x + 48.0), band.clone(), drawn);
             println!(
-                "bar {} number box: {label} bright px, mid-bar box {middle}",
+                "bar {} number box: {text} drawn px, {lit} bright; mid-bar box {middle}",
                 bar + 1
             );
-            if label == 0 {
+            if text == 0 {
                 unlabeled.push(bar + 1);
+            }
+            if (lit > 0) != (bar % 4 == 0) {
+                wrong_tone.push(bar + 1);
             }
             if middle > 0 {
                 mid_bar.push(bar + 1);
@@ -725,8 +866,12 @@ mod tests {
         assert!(wrong.is_empty(), "wrong color at {wrong:?}");
         assert!(unlabeled.is_empty(), "no number for bars {unlabeled:?}");
         assert!(
+            wrong_tone.is_empty(),
+            "bright numbers are bars 1, 5, 9, 13 alone; wrong at {wrong_tone:?}"
+        );
+        assert!(
             mid_bar.is_empty(),
-            "bright pixels mid-bar in bars {mid_bar:?}"
+            "text pixels mid-bar in bars {mid_bar:?}"
         );
     }
 
@@ -885,13 +1030,16 @@ mod tests {
 
     // p5_delay_sync with the mixer alone at 1000 x 560 (insert 1 selected, its desk 560 − 64 − 6
     // = 490 px): the effects area starts at 1000 − 332 = 668 (sixteen inserts end at 1068), its
-    // view at (674, 52). Insert 1's delay, four knobs, is the first block, 252 x 84 at (674, 52):
-    // its name box (698..874, under the 64 px toolbar and the 6 px handle window y 122..144)
-    // has bright text (every channel above 0x90), and its light at (674 + 12, 52 + 11), window
-    // (686, 133), is lit #6CC24A: the fixture says nothing of it, so it is on. The add tile,
-    // 192 x 84, does not fit beside it (674 + 252 + 6 + 192 = 1124 > 986) and starts the next
-    // line at (674, 142): it is drawn (pixels other than the area's ground) and its words are
-    // dim (no bright pixel), window box [680, 860] × [216, 292].
+    // view at (674, 28). Insert 1's delay, four knobs, is the first block, 252 x 84 at (674, 28):
+    // its name box (698 to 2 px short of its ‹ target, 674 + 252 − 3 × 24 − 2 = 852; under the
+    // 64 px toolbar and the 6 px handle window y 98..120) has bright text (every channel above
+    // 0xB4), and its light at (674 + 12, 28 + 11), window (686, 109), is lit #6CC24A: the fixture
+    // says nothing of it, so it is on. The add tile, 192 x 84, does not fit beside it (674 + 252
+    // + 6 + 192 = 1124 > 986) and starts the next line at (674, 28 + 84 + 6 = 118): it is drawn
+    // (pixels other than the area's ground) and its words are in the secondary text #9FA3A9 (no
+    // bright pixel: its brightest channel is 0xA9; measured, the name's best pixel (200,
+    // 204, 210), the tile's (159, 162, 168)), window box [680, 860] × [192, 268]. (Pins moved:
+    // with the blocks at 52, 24 px lower; with the head's 16 and 14 px targets the name to 874.)
     #[test]
     #[ignore = "needs a screenshot of p5_delay_sync with --panels mixer: scripts/ui-check.sh takes one and runs this"]
     fn p5_delay_screenshot_shows_the_delays_block_lit() {
@@ -920,11 +1068,11 @@ mod tests {
         let tile = window(tile);
         assert_eq!(
             (name.x, name.x + name.width, name.y, name.y + name.height),
-            (698.0, 874.0, 122.0, 144.0)
+            (698.0, 852.0, 98.0, 120.0)
         );
-        assert_eq!(light, Point::new(686.0, 133.0));
-        assert_eq!((tile.x, tile.y), (674.0, 212.0));
-        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);
+        assert_eq!(light, Point::new(686.0, 109.0));
+        assert_eq!((tile.x, tile.y), (674.0, 188.0));
+        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0xB4);
         let named = shot.count_matching(
             name.x..name.x + name.width,
             name.y..name.y + name.height,
@@ -932,7 +1080,7 @@ mod tests {
         );
         let inside = (tile.x + 6.0)..(tile.x + tile.width - 6.0);
         let rows = (tile.y + 4.0)..(tile.y + tile.height - 4.0);
-        let ground = rgb8(crate::ui::style::PANEL);
+        let ground = rgb8(crate::ui::style::palette().panel);
         let drawn = shot.count_matching(inside.clone(), rows.clone(), |pixel| {
             !near(pixel, ground, TOLERANCE)
         });
@@ -947,16 +1095,21 @@ mod tests {
         let wrong = wrong_colors(&shot, &lit);
         assert!(wrong.is_empty(), "wrong color at {wrong:?}");
         assert!(drawn > 0, "the add tile is drawn");
-        assert_eq!(loud, 0, "the add tile's words are dim");
+        assert_eq!(loud, 0, "the add tile's words are in the secondary text");
     }
 
     // p5_gain with the mixer alone at 1000 px: the effects area starts at 1000 − 332 = 668, so
-    // strip 10 (x 632..692) runs under it, and its name must stop at the area's edge rather
-    // than run into the area's title ("Insert 3", from x 674): the area's ground between the
-    // two, over the title and name rows (window y 94..114 under the 64 px toolbar and the
-    // mixer's handle: the title from mixer y 24, the compact strip's name row 28..44), holds no
-    // text. (Strip 12 crossed the slot panel's edge at 800 before the effects area took the
-    // strips' room. Pin moved with the compact strip: the name row was 32..48, to 118.)
+    // strip 10 (x 632..692) runs under it, and its name must stop at the area's edge. Over the
+    // name rows (window y 94..114 under the 64 px toolbar and the mixer's handle: from the
+    // header's foot, mixer y 24, past the compact strip's name row 28..44) the area's margin
+    // left of its blocks (668..674, the blocks 6 px in) holds only its ground: no strip's name
+    // run in; and between the header's foot and the blocks' first line (window y 94..98, mixer
+    // 24..28) the whole area to its marks' margin (668..986) does: no title, the selected
+    // insert being named by the header's routing control alone. (The title, "Insert 3", stood
+    // from x 674 before it went, and the probe looked left of it only. Strip 12 crossed the
+    // slot panel's edge at 800 before the effects area took the strips' room. Pins moved: with
+    // the compact strip the name row was 32..48, to 118; with the blocks at 52 the whole area
+    // held only its ground over the name rows, until the blocks moved up to 28.)
     #[test]
     #[ignore = "needs a screenshot of p5_gain with --panels mixer: scripts/ui-check.sh takes one and runs this"]
     fn p5_strip_names_stop_at_the_effects_area() {
@@ -973,16 +1126,24 @@ mod tests {
             strip < edge && strip + mix::STRIP_WIDTH > edge,
             "strip 10 crosses the edge"
         );
-        let title_left = edge + mix::EFFECTS_INSET;
-        let rows = mix::in_window(Point::new(0.0, mix::TITLE_TOP)).y
+        let marks = width - mix::MARKS_WIDTH;
+        assert_eq!(marks, 986.0);
+        let blocks = edge + mix::EFFECTS_INSET;
+        assert_eq!(blocks, 674.0);
+        let rows = mix::in_window(Point::new(0.0, mix::HEADER_HEIGHT)).y
             ..mix::in_window(Point::new(0.0, mix::NAME_TOP + mix::NAME_HEIGHT)).y;
         assert_eq!((rows.start, rows.end), (94.0, 114.0));
-        let ground = rgb8(crate::ui::style::PANEL);
-        let text = shot.count_matching(edge..title_left, rows, |pixel| {
-            !near(pixel, ground, TOLERANCE)
-        });
-        println!("pixels other than the area's ground left of its title: {text}");
-        assert_eq!(text, 0, "strip 10's name runs into the effects area");
+        let band = rows.start..mix::in_window(Point::new(0.0, mix::BLOCKS_TOP)).y;
+        assert_eq!((band.start, band.end), (94.0, 98.0));
+        let ground = rgb8(crate::ui::style::palette().panel);
+        let not_ground = |pixel| !near(pixel, ground, TOLERANCE);
+        let name = shot.count_matching(edge..blocks, rows, not_ground);
+        let title = shot.count_matching(edge..marks, band, not_ground);
+        println!(
+            "pixels other than the area's ground: by its edge {name}, over its blocks {title}"
+        );
+        assert_eq!(name, 0, "a strip's name in the effects area");
+        assert_eq!(title, 0, "a title over the effects' blocks");
     }
 
     // p8_notice at 1000 px with no audio device: two missing samples with long names and the
@@ -1013,7 +1174,7 @@ mod tests {
     }
 
     // p8_notice with no audio device at 1000, 960, 930, 900 and 880 px: audio is off, so
-    // Retry shows. Along y 12 (6d K5, pin moved from y 20: the buttons are 40 px tall from y 8
+    // Retry shows. Along y 12 (pin moved from y 20: the buttons are 40 px tall from y 8
     // now, their 15 px text from about y 21; then 52 px tall from y 10, their 16 px
     // text from about y 26; then 46 px tall from y 9, their 14 px text from about y 23), above
     // the buttons' text, Retry and File are each
@@ -1031,7 +1192,7 @@ mod tests {
         let width = shot.width as f32 / shot.scale;
         let spread = crate::ui::toolbar::shot_spread(width, true);
         let [retry, _, file, _] = crate::ui::toolbar::retry_edit_file_and_help(&spread);
-        let ground = rgb8(crate::ui::style::PANEL);
+        let ground = rgb8(crate::ui::style::palette().panel);
         let boxes = shot.runs_along(12.0, |pixel| !near(pixel, ground, TOLERANCE));
         let last: Vec<_> = boxes.iter().rev().take(2).rev().collect();
         println!("Retry {retry:?}, File {file:?}; the last boxes along y 12: {last:?}");
@@ -1068,10 +1229,10 @@ mod tests {
     #[test]
     #[ignore = "needs a screenshot of the picker: scripts/ui-check.sh takes one and runs this"]
     fn p7_picker_screenshot_lists_three_instruments_and_dims_the_failed_file() {
-        use crate::ui::picker::{list_origin, ROW_HEIGHT, ROW_TONES};
+        use crate::ui::picker::{list_origin, ROW_HEIGHT};
         let shot = read_ui_shot();
         let origin = list_origin(iced::Size::new(1000.0, 560.0));
-        let tones = ROW_TONES.map(rgb8);
+        let tones = crate::ui::style::palette().row_tones.map(rgb8);
         let row_point = |row: usize, x: f32| {
             Point::new(origin.x + x, origin.y + (row as f32 + 0.5) * ROW_HEIGHT)
         };
@@ -1099,7 +1260,7 @@ mod tests {
         let (plugin, failed) = (brightest(0), brightest(4));
         println!("brightest text: plugin row {plugin}, failed file {failed}");
         assert!(failed < plugin, "the failed file's text is dimmer");
-        let well: u32 = rgb8(crate::ui::style::RACK_WELL)
+        let well: u32 = rgb8(crate::ui::style::palette().bg)
             .iter()
             .map(|&channel| u32::from(channel))
             .sum();
@@ -1110,12 +1271,16 @@ mod tests {
     // 560 window: its format column (positions from crate::ui::picker) names each row's format.
     // Rows 0 and 2 (Dawsome Test Fail and Tick, VST3 alone) have the same text there, pixel for
     // pixel where it is drawn, as wide as "VST3" measures; row 1 (Dawsome Test Sine, the CLAP
-    // build of a plugin installed in both) has other text, as wide as "CLAP" measures (the two
-    // words are 1.5 px apart at 12 px: the widths are held to 1 px).
+    // build of a plugin installed in both) has other text, as wide as "CLAP" measures (the widths
+    // held to 1 px). Changed with the bundled font: in Noto Sans the two words were 1.5 px
+    // apart at 12 px, so the widths told them apart too, and the probe held that; in Inter they
+    // are 0.36 px apart (31.14 and 31.49), so only the pixels tell them apart, which the probe
+    // has always held (the CLAP row's text other than the VST3 rows', theirs alike).
     #[test]
     #[ignore = "needs a screenshot of the picker over both formats: scripts/ui-check.sh takes one and runs this"]
     fn p27_picker_screenshot_names_each_rows_format() {
-        use crate::ui::picker::{list_origin, FORMAT_X, KIND_X, ROW_HEIGHT, TEXT_SIZE};
+        use crate::ui::fonts::size;
+        use crate::ui::picker::{list_origin, FORMAT_X, KIND_X, ROW_HEIGHT};
         use crate::ui::text_fit::text_width;
         let shot = read_ui_shot();
         let origin = list_origin(iced::Size::new(1000.0, 560.0));
@@ -1147,16 +1312,15 @@ mod tests {
             };
             (drawn, width)
         };
-        let (vst3, clap) = (text_width("VST3", TEXT_SIZE), text_width("CLAP", TEXT_SIZE));
+        let (vst3, clap) = (
+            text_width("VST3", size::LABEL),
+            text_width("CLAP", size::LABEL),
+        );
         let ((fail, fail_width), (sine, sine_width), (tick, tick_width)) =
             (column(0), column(1), column(2));
         println!(
             "format column widths: Fail {fail_width}, Sine {sine_width}, Tick {tick_width}; \
              VST3 measures {vst3}, CLAP {clap}"
-        );
-        assert!(
-            (vst3 - clap).abs() > 1.0,
-            "the two words' widths tell them apart"
         );
         assert!(
             !fail.is_empty() && fail == tick,
@@ -1338,8 +1502,9 @@ mod tests {
             let band = shot.pixel(Point::new(browser::WIDTH - 20.0, rect.center_y()));
             let title = format!("{} \u{b7} ", section.title());
             let words = browser::ROW_LEFT + 12.0;
-            let count_x = words + text_width(&title, 12.0);
-            let count_end = words + text_width(&format!("{title}{count}"), 12.0) + 1.0;
+            let count_x = words + text_width(&title, crate::ui::fonts::size::LABEL);
+            let count_end =
+                words + text_width(&format!("{title}{count}"), crate::ui::fonts::size::LABEL) + 1.0;
             let ys = library_text_rows(row);
             let title_px = shot.count_matching(words..count_x - 6.0, ys.clone(), bright);
             let count_px = shot.count_matching(count_x..count_end, ys, bright);
@@ -1356,18 +1521,21 @@ mod tests {
     }
 
     /// Whether `pixel` is text at all (some channel at 0x50 or more on the panel's ground), and
-    /// bright text (some channel at 0x80 or more).
+    /// bright text: every channel above 0xB4, which the text (#C9CDD3) reaches and neither the
+    /// secondary text (#9FA3A9, its brightest channel 0xA9) nor the disabled (#6E747C) can.
+    /// (Some channel at 0x80 or more, before the present secondary text, which reaches it.)
     fn drawn(pixel: [u8; 3]) -> bool {
         pixel.iter().any(|&value| value >= 0x50)
     }
 
     fn not_dim(pixel: [u8; 3]) -> bool {
-        pixel.iter().any(|&value| value >= 0x80)
+        pixel.iter().all(|&value| value > 0xB4)
     }
 
-    // p10_library with the Library alone at 1000 by 844 (--cache p7_catalogue.json, --midi-ports
+    // p10_library with the Library alone at 1000 by 908 (--cache p7_catalogue.json, --midi-ports
     // "Port A,Port B", a settings file playing Port A; 44 px over the 800 it was, for the external
-    // input's two rows, so every row still shows): the three section headers sit at the rows
+    // input's two rows, then 64 more for the Library's 24 px rows (were 22), so every row still
+    // shows: 64 + 52 + 32 × 24 = 884, a row to spare): the three section headers sit at the rows
     // the Library model gives, each with its count; Port A's tick is lit (#F29A2E) and its row
     // ends with "→ kick" in the accent, Port B's tick is off (#4A4F57) with no link, and Port C,
     // which "keys" links to but is not plugged in, has an empty tick and only dim text.
@@ -1410,8 +1578,8 @@ mod tests {
         let (a, b, c) = (row_of("Port A"), row_of("Port B"), row_of("Port C"));
         assert_eq!(
             library_row(c).y + library_row(c).height,
-            layout::TOOLBAR_HEIGHT + 52.0 + 22.0 * items.len() as f32,
-            "every row in an 844 px window"
+            layout::TOOLBAR_HEIGHT + 52.0 + 24.0 * items.len() as f32,
+            "every row in a 908 px window"
         );
         let mut wrong = library_headers(&shot, &items);
         let tick = |row| tick_rect(library_row(row)).center();
@@ -1427,7 +1595,8 @@ mod tests {
                 ),
             ],
         ));
-        let link_x = browser::WIDTH - 8.0 - text_width("\u{2192} kick", 12.0);
+        let link_x =
+            browser::WIDTH - 8.0 - text_width("\u{2192} kick", crate::ui::fonts::size::LABEL);
         let accent = |row| {
             let xs = link_x - 2.0..browser::WIDTH - 6.0;
             shot.count_near(xs, library_text_rows(row), [0xF2, 0x9A, 0x2E], 40)
@@ -1438,7 +1607,7 @@ mod tests {
             shot.count_matching(library_text(PORT_NAME_X), library_text_rows(c), not_dim);
         println!(
             "accent px right of Port A {link_a}, B {link_b}, C {link_c}; Port C text px \
-             {c_text}, of them at 0x80 or more {c_bright}"
+             {c_text}, of them bright {c_bright}"
         );
         assert!(wrong.is_empty(), "wrong at {wrong:?}");
         assert!(link_a > 0, "Port A says it plays kick");
@@ -1446,9 +1615,10 @@ mod tests {
         assert!(c_text > 0 && c_bright == 0, "Port C is written, dim");
     }
 
-    // A new document with the Library alone at 1000 by 800, no plugin catalogue and --midi-ports
+    // A new document with the Library alone at 1000 by 860 (800 before the Library's 24 px rows:
+    // its 30 rows end at 64 + 52 + 30 × 24 = 836, a row to spare), no plugin catalogue and --midi-ports
     // none: the plugin instruments' and the MIDI devices' empty states are written on their rows,
-    // dim (no channel reaches 0x80 anywhere in their boxes), Rescan is a button (#3A3E45 inside
+    // in the secondary text (no bright pixel anywhere in their boxes), Rescan is a button (#3A3E45 inside
     // it), and the section headers sit at their rows with their counts.
     #[test]
     #[ignore = "needs a screenshot of the Library with nothing installed: scripts/ui-check.sh takes one and runs this"]
@@ -1478,7 +1648,7 @@ mod tests {
             let xs = library_text(ROW_LEFT + INDENT);
             let text = shot.count_matching(xs.clone(), library_text_rows(row), drawn);
             let bright = shot.count_matching(xs, library_text_rows(row), not_dim);
-            println!("hint row {row}: text px {text}, at 0x80 or more {bright}");
+            println!("hint row {row}: text px {text}, bright {bright}");
             if text == 0 || bright > 0 {
                 wrong.push(format!("hint row {row}"));
             }
@@ -1495,11 +1665,13 @@ mod tests {
         assert!(wrong.is_empty(), "wrong at {wrong:?}");
     }
 
-    // A new document with the Library alone at 1000 by 844 (44 px over the 800 it was, for the
-    // external input's two rows, so the MIDI devices header still shows) and the four test sets
+    // A new document with the Library alone at 1000 by 908 (44 px over the 800 it was, for the
+    // external input's two rows, then 64 more for the Library's 24 px rows, so the MIDI devices
+    // header, row 32, still shows: 64 + 52 + 33 × 24 = 908) and the four test sets
     // of tests/fixtures/instruments in the data folder's instruments/: the Instruments header
-    // counts the twelve kit sounds and the four sets; "Instrument sets" is written dim on its
-    // row; each set's row holds its glyph (drawn left of the name) and its name in bright text.
+    // counts the twelve kit sounds, the four sets and Dawsome Synth; "Instrument sets" is
+    // written in the secondary text on its row; each set's row holds its glyph (drawn left of the name) and its
+    // name in bright text.
     #[test]
     #[ignore = "needs a screenshot of the Library with the test sets shipped: scripts/ui-check.sh takes one and runs this"]
     fn p11_library_screenshot_lists_the_instrument_sets() {
@@ -1524,7 +1696,7 @@ mod tests {
             folders: 1,
             ..Contents::default()
         });
-        assert!(matches!(items[0], Item::Header { count: 16, .. }));
+        assert!(matches!(items[0], Item::Header { count: 17, .. }));
         let mut wrong = library_headers(&shot, &items);
         let group = items
             .iter()
@@ -1533,7 +1705,7 @@ mod tests {
         let label = shot.count_matching(library_text(ROW_LEFT), library_text_rows(group), drawn);
         let label_bright =
             shot.count_matching(library_text(ROW_LEFT), library_text_rows(group), not_dim);
-        println!("'{SHIPPED_SETS}' row {group}: text px {label}, at 0x80 or more {label_bright}");
+        println!("'{SHIPPED_SETS}' row {group}: text px {label}, bright {label_bright}");
         if label == 0 || label_bright > 0 {
             wrong.push(SHIPPED_SETS.to_owned());
         }
@@ -1584,7 +1756,8 @@ mod tests {
             ..Contents::default()
         });
         let right = WIDTH - 8.0;
-        let mark = right - text_width(PLAYING_MARK, 11.0) - 1.0..right + 1.0;
+        let mark =
+            right - text_width(PLAYING_MARK, crate::ui::fonts::size::LABEL) - 1.0..right + 1.0;
         let warm = |[r, g, b]: [u8; 3]| r >= 0x80 && r > g.saturating_add(0x20) && g > b;
         let mut wrong = Vec::new();
         for (row, item) in items.iter().enumerate() {
@@ -1604,8 +1777,6 @@ mod tests {
         assert!(wrong.is_empty(), "wrong at {wrong:?}");
     }
 
-    /// Where settings panel point `point` is in the window when the panel is the only one:
-    /// under the toolbar.
     /// Where a part of the Settings window's General page lies in the window's shot: where the
     /// layout puts it, the page unscrolled under its header. (Settings was a
     /// panel under the main window's toolbar, everything 72 px lower.)
@@ -1622,36 +1793,44 @@ mod tests {
     }
 
     // The Settings window with --midi-ports none (positions from crate::ui::settings_layout,
-    // colors of the page's design): the "MIDI input" title box holds bright text (every channel
-    // above 0x90); the line saying no port was found holds text, and dim text (no channel reaches
-    // 0x80 anywhere in its box); no checkbox is ticked (no #F29A2E pixel anywhere in the window).
+    // colors of the page's design): the "MIDI input" title box holds bright text (#C9CDD3: every
+    // channel above 0xB4); the line saying no port was found holds text, in the secondary text
+    // (#9FA3A9, whose brightest channel is 0xA9: no bright pixel in its box); no checkbox is ticked (no #F29A2E pixel in the window
+    // but the chosen audio device's dot, in the column of the audio sections' marks, x 12..26
+    // from the output's title down, which holds it: the accent's row, whose swatch and wheel
+    // show the accent by design, is on the Theme page since, and the band it held, 290..414, is
+    // probed too). (Pin moved: no accent pixel anywhere, until the chosen dot took the accent.)
     #[test]
     #[ignore = "needs a screenshot of --panels settings --midi-ports none --screenshot-window settings: scripts/ui-check.sh takes one and runs this"]
     fn p9_settings_screenshot_says_no_port_was_found() {
         use crate::ui::settings_layout::Layout;
         let shot = read_ui_shot();
-        let layout = Layout { ports: 0, notes: 0 };
+        let layout = Layout::default();
         let title = settings_in_window(layout.midi_title());
         let message = settings_in_window(layout.empty_message().expect("no port"));
         // Pins moved 16 px down under the 72 px toolbar (were 88 and 130), then 72 px up: the
-        // Settings window's own (were 104 and 146).
-        assert_eq!((title.y, message.y), (32.0, 74.0), "the page's rows");
-        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);
+        // Settings window's own (were 104 and 146); the message 2 px lower with the 24 px rows
+        // (52 + 24; was 74).
+        assert_eq!((title.y, message.y), (32.0, 76.0), "the page's rows");
+        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0xB4);
         let drawn = |pixel: [u8; 3]| pixel.iter().any(|&value| value >= 0x50);
-        let not_dim = |pixel: [u8; 3]| pixel.iter().any(|&value| value >= 0x80);
         let title_bright = shot.count_matching(x_range(title), y_range(title), bright);
         let message_drawn = shot.count_matching(x_range(message), y_range(message), drawn);
-        let message_bright = shot.count_matching(x_range(message), y_range(message), not_dim);
+        let message_bright = shot.count_matching(x_range(message), y_range(message), bright);
         let width = shot.width as f32 / shot.scale;
         let height = shot.height as f32 / shot.scale;
-        let ticked = shot.count_near(0.0..width, 0.0..height, [0xF2, 0x9A, 0x2E], TOLERANCE);
+        let accent = [0xF2, 0x9A, 0x2E];
+        let marks = (12.0..26.0, layout.audio().title().y..height);
+        let dot = shot.count_near(marks.0.clone(), marks.1.clone(), accent, TOLERANCE);
+        let ticked = shot.count_near(0.0..width, 0.0..height, accent, TOLERANCE) - dot;
         println!(
-            "title bright px {title_bright}; message text px {message_drawn}, of them at 0x80 or \
-             more {message_bright}; ticked px {ticked}"
+            "title bright px {title_bright}; message text px {message_drawn}, of them bright \
+             {message_bright}; ticked px {ticked}; the chosen device's dot px {dot}"
         );
+        assert!(dot > 0, "the chosen output's dot in the accent");
         assert!(title_bright > 0, "the section is titled");
         assert!(message_drawn > 0, "the empty line is written");
-        assert_eq!(message_bright, 0, "and dim");
+        assert_eq!(message_bright, 0, "in the secondary text");
         assert_eq!(ticked, 0, "no checkbox is ticked");
     }
 
@@ -1662,16 +1841,21 @@ mod tests {
     fn p9_settings_screenshot_ticks_the_two_ports_that_play() {
         use crate::ui::settings_layout::Layout;
         let shot = read_ui_shot();
-        let layout = Layout { ports: 2, notes: 0 };
+        let layout = Layout {
+            ports: 2,
+            ..Layout::default()
+        };
         let center = |row: usize| settings_in_window(layout.checkbox(row)).center();
         assert_eq!(
             [center(0), center(1), center(2)],
             // Pins moved 16 px down under the 72 px toolbar (were 119, 141, 163), then 72 px up:
-            // the Settings window's own (were 135, 157, 179).
+            // the Settings window's own (were 135, 157, 179); then the 14 px boxes 5 px into
+            // 24 px rows from 52, their centres at x 12 + 7 and y 52 + 24r + 12 (were
+            // (18, 63), (18, 85), (18, 107)).
             [
-                Point::new(18.0, 63.0),
-                Point::new(18.0, 85.0),
-                Point::new(18.0, 107.0)
+                Point::new(19.0, 64.0),
+                Point::new(19.0, 88.0),
+                Point::new(19.0, 112.0)
             ],
             "the page's rows"
         );
@@ -1686,6 +1870,158 @@ mod tests {
         ];
         let wrong = wrong_colors(&shot, &points);
         assert!(wrong.is_empty(), "wrong color at {wrong:?}");
+    }
+
+    // The Settings window at 720 x 560 with --midi-ports "Port A,Port B" and a settings file
+    // choosing an output this machine does not list ("Probe device"), which Settings shows last,
+    // marked missing, after the devices the machine lists: so the first choice, "System default",
+    // is unchosen, whatever the machine lists. Positions by hand from crate::ui::settings_layout's
+    // table (`the_audio_section_follows_the_display`, two ports): the output section's rows from
+    // y 388, 24 px each; a mark is the 14 px box 5 px into its row from the 12 px margin, so
+    // choice k's centre is (19, 400 + 24k); the dot's radius 3.5, the ring's 7, so 5 px right of
+    // a centre is ring. Colors: the unchosen mark all the unticked checkbox's #4A4F57; the chosen
+    // one's dot the ticked checkbox's accent #F29A2E, its ring #4A4F57. (The dot was the text's
+    // grey, #CFD3D8, on the ring's #4A4F57 before: hard to see.)
+    #[test]
+    #[ignore = "needs a screenshot of the Settings window choosing an output not listed: scripts/ui-check.sh takes one and runs this"]
+    fn p9_settings_marks_the_chosen_output_in_the_accent() {
+        use crate::ui::settings_layout::Layout;
+        let shot = read_ui_shot();
+        let layout = Layout {
+            ports: 2,
+            outputs: 8,
+            ..Layout::default()
+        };
+        let center = |index: usize| settings_in_window(layout.audio().mark(index)).center();
+        assert_eq!(
+            [center(0), center(1), center(2)],
+            [
+                Point::new(19.0, 400.0),
+                Point::new(19.0, 424.0),
+                Point::new(19.0, 448.0)
+            ],
+            "the audio section's marks"
+        );
+        let (accent, unlit) = ([0xF2, 0x9A, 0x2E], [0x4A, 0x4F, 0x57]);
+        // The chosen one is last: the first mark down the column from choice 1 with the dot.
+        let height = shot.height as f32 / shot.scale;
+        let chosen = (1..8)
+            .take_while(|&index| center(index).y < height)
+            .find(|&index| near(shot.pixel(center(index)), accent, TOLERANCE))
+            .expect("a chosen mark with the accent's dot");
+        let ring = |index: usize| Point::new(center(index).x + 5.0, center(index).y);
+        println!("the chosen output is choice {chosen}");
+        let points: Vec<(String, Point, [u8; 3])> = vec![
+            ("System default, unchosen".into(), center(0), unlit),
+            ("its ring".into(), ring(0), unlit),
+            ("the chosen mark's ring".into(), ring(chosen), unlit),
+        ];
+        let wrong = wrong_colors(&shot, &points);
+        assert!(wrong.is_empty(), "wrong color at {wrong:?}");
+    }
+
+    // The Settings window, its General page tall enough to show whole (a settings file keeping
+    // it 720 x 900, read and not written), with --midi-ports none: the page's last thing is
+    // "Reset to defaults" (positions from crate::ui::settings_layout: at the left margin, 132 x
+    // 18, x 12..144, a section's gap under the input latency's buttons, whose rows depend on the
+    // audio devices this machine lists, so the probe finds the button's row down its column):
+    // down x 14, the last run of the button's face (#3A3E45, Graphite's button) is 18 px tall,
+    // its row's pixels at x 13 and 143 the face and at x 11 and 145 the page's ground, its words
+    // bright (every channel above 0xB4), and under it, down to the window's 22 px foot line,
+    // only the ground.
+    #[test]
+    #[ignore = "needs a screenshot of --panels settings --midi-ports none with the window 720 x 900: scripts/ui-check.sh takes one and runs this"]
+    fn p9_settings_general_page_ends_with_the_reset_button() {
+        use crate::ui::settings_layout::RESET_WIDTH;
+        use crate::ui::style;
+        let shot = read_ui_shot();
+        let height = shot.height as f32 / shot.scale;
+        let face = rgb8(style::palette().button);
+        let ground = rgb8(style::palette().bg);
+        let at = |x: f32, y: f32| shot.pixel(Point::new(x, y));
+        let rows: Vec<f32> = (0..height as usize)
+            .map(|y| y as f32 + 0.5)
+            .filter(|&y| near(at(14.0, y), face, TOLERANCE))
+            .collect();
+        let last = *rows.last().expect("a button down the left margin");
+        let run = rows
+            .iter()
+            .rev()
+            .zip(0..)
+            .take_while(|&(&y, step)| (y - (last - step as f32)).abs() < 0.01)
+            .count();
+        let top = last - run as f32 + 1.0;
+        let middle = top + 9.0;
+        println!("the last face down x 14: y {top}..{last} ({run} rows)");
+        assert_eq!(run, 18, "18 px tall");
+        assert_eq!(12.0 + RESET_WIDTH, 144.0);
+        for (x, want, what) in [
+            (13.0, face, "its left edge"),
+            (143.0, face, "its right edge"),
+            (11.0, ground, "left of it"),
+            (145.0, ground, "right of it"),
+        ] {
+            assert!(
+                near(at(x, middle), want, TOLERANCE),
+                "{what}: {:02X?}",
+                at(x, middle)
+            );
+        }
+        let words = shot.count_matching(12.0..144.0, top..top + 18.0, |pixel| {
+            pixel.iter().all(|&value| value > 0xB4)
+        });
+        assert!(words > 20, "its words: {words} px");
+        let foot = height - crate::ui::layout::HINT_BAR_HEIGHT;
+        let under = shot.count_matching(0.0..400.0, last + 2.0..foot, |pixel| {
+            !near(pixel, ground, TOLERANCE)
+        });
+        assert_eq!(under, 0, "nothing under it down to the window's foot line");
+    }
+
+    // The Settings window 1400 px wide (a settings file keeping it 1400 x 700, read and not
+    // written), --midi-ports "Port A,Port B": its General page in three columns
+    // (crate::ui::settings_layout::Columns: (1400 − 24 − 64) / 3 = 437.333 px each, at x 12,
+    // 481.333 and 950.667). Each column's first title at y 32..52 holds bright text (every channel
+    // above 0xB4: "MIDI input", "Audio output", "Audio input (new input channels)"), and the 32
+    // px between two columns, from the titles down to the reset's row, hold only the page's
+    // ground: nothing a column draws runs into the next.
+    #[test]
+    #[ignore = "needs a screenshot of --panels settings with the window 1400 x 700: scripts/ui-check.sh takes one and runs this"]
+    fn p9_settings_general_page_stands_in_three_columns() {
+        use crate::ui::settings_layout::{Columns, Layout, Section, COLUMN_GAP};
+        use crate::ui::style;
+        let shot = read_ui_shot();
+        let width = shot.width as f32 / shot.scale;
+        let columns = Columns::of(width);
+        println!("{width} px: {columns:?}");
+        assert_eq!(columns.count, 3, "three columns at {width} px");
+        let layout = Layout {
+            ports: 2,
+            width,
+            ..Layout::default()
+        };
+        let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0xB4);
+        for section in [Section::Midi, Section::Output, Section::Input] {
+            let title = settings_in_window(layout.title(section));
+            assert_eq!(title.y, 32.0, "{section:?} heads its column");
+            let lit = shot.count_matching(x_range(title), y_range(title), bright);
+            println!("{section:?} title at x {}: {lit} bright px", title.x);
+            assert!(lit > 20, "{section:?}'s title is written in its column");
+        }
+        let ground = rgb8(style::palette().bg);
+        let height = shot.height as f32 / shot.scale - crate::ui::layout::HINT_BAR_HEIGHT;
+        for column in 0..2 {
+            let from = columns.x(column) + columns.inner;
+            let gap = from..from + COLUMN_GAP;
+            let drawn = shot.count_matching(gap.clone(), 32.0..height, |pixel| {
+                !near(pixel, ground, TOLERANCE)
+            });
+            println!(
+                "between columns {column} and {}: x {gap:?}, {drawn} px",
+                column + 1
+            );
+            assert_eq!(drawn, 0, "nothing between column {column} and the next");
+        }
     }
 
     // p9_stretch_ui with the playlist alone: two four-bar clips of the same file (x 120..376),
@@ -1705,10 +2041,12 @@ mod tests {
             let top = tracks_in_window(Point::new(0.0, grid.row_top(row))).y;
             top..top + TITLE_HEIGHT
         };
-        // Under the 64 px toolbar, in the 47 px lanes that fit the 8 tracks over the scroll bar
-        // (124 and 172 in 47 px lanes before, 108 and 141 in 32 px lanes under the 56 px
-        // one, and 124 and 171 in 46 px lanes under the 72 px one).
-        assert_eq!((strip(0).start, strip(1).start), (116.0, 164.0));
+        // Under the 64 px toolbar, in the 50 px lanes the 8 tracks are fitted to (`p4_grid`):
+        // track 1's strip at 116, track 2's 51 px lower, 167 (pins moved: 181 in 64 px lanes
+        // while 64 was the fitted lanes' floor, 116 and 164 in 47 px lanes, 124 and 172 with the
+        // bar in the header, 108 and 141 in 32 px lanes under the 56 px one, and 124 and 171 in
+        // 46 px lanes under the 72 px one).
+        assert_eq!((strip(0).start, strip(1).start), (116.0, 167.0));
         let bright = |pixel: [u8; 3]| pixel.iter().all(|&value| value > 0x90);
         let name_end = shot
             .rightmost_matching(left..right, strip(1), bright)

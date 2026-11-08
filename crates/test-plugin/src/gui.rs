@@ -207,8 +207,9 @@ impl PluginGuiImpl for MainThread<'_> {
         }
     }
 
-    fn set_scale(&self, _scale: f64) -> Result<(), PluginError> {
-        log("set_scale");
+    // Logged with the scale it was told, which it refuses: it takes the window system's.
+    fn set_scale(&self, scale: f64) -> Result<(), PluginError> {
+        log(format!("set_scale {scale}"));
         Err(PluginError::Message("it takes the window system's scale"))
     }
 

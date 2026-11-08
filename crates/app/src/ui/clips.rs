@@ -75,6 +75,12 @@ pub fn automation_name(
             let owner = ProcessorOwner::Channel(*id);
             plugin_param_name(registry, owner, &processor.id, *param_id, &channel(id)?)?
         }
+        AutomationTarget::InstrumentParam { channel: id, key } => {
+            let processor = project.channels.get(id)?.processor.as_ref()?;
+            let factory = registry.get(&processor.id)?;
+            let info = factory.params().iter().find(|info| info.key == key)?;
+            format!("{} · {}", channel(id)?, info.label)
+        }
     })
 }
 

@@ -200,7 +200,7 @@ fn the_bends(call: usize) -> Vec<i16> {
         .collect()
 }
 
-// K2. Bend +8191 before call 1, 0 before call 2 and -8192 before call 3 reach the VST3 sine as
+// Bend +8191 before call 1, 0 before call 2 and -8192 before call 3 reach the VST3 sine as
 // points of its "Bend" parameter, (b + 8192)/16383, at the first frame of the call that takes
 // them; it bends as the CLAP sine does, so its 2,048 frames are the generator's to the bit (its
 // probes and SHA-256), however each call is cut after the bend is taken (1, 7, 64 and seeded
@@ -247,7 +247,7 @@ fn bend_value(b: i16) -> f64 {
     number(&p28()["bend"]["values"][b.to_string()])
 }
 
-// K2 (messy). Three bends before one call (100, -3000, 8191) play as 8191 alone: a later point
+// A messy case: three bends before one call (100, -3000, 8191) play as 8191 alone: a later point
 // on the same frame replaces the earlier, as the last MIDI message wins in CLAP.
 #[test]
 fn three_bends_before_one_call_play_as_the_last() {
@@ -269,7 +269,7 @@ fn three_bends_before_one_call_play_as_the_last() {
     assert_eq!(sha256(&frames), text(&answer["sha256"]));
 }
 
-// K2 (no mapping). The Tick class's controller has no MIDI mapping: it is sent no bend, so at
+// No mapping: the Tick class's controller has no MIDI mapping: it is sent no bend, so at
 // gain 0.5 it plays the unbent sine (the generator's unbent SHA-256).
 #[test]
 fn a_plugin_without_a_mapping_is_sent_no_bend() {
@@ -280,7 +280,7 @@ fn a_plugin_without_a_mapping_is_sent_no_bend() {
     assert_eq!(sha256(&frames), text(&answer["unbent_sha256"]));
 }
 
-// K2 (mapping changed). Once the sine's controller maps nothing (its restart with
+// A mapping changed: once the sine's controller maps nothing (its restart with
 // kMidiCCAssignmentChanged) and the host has ticked, the bends go nowhere: the unbent sine.
 #[test]
 fn a_mapping_that_goes_takes_the_bend_with_it() {
@@ -324,7 +324,7 @@ fn context(events: &[PortEvent]) -> ProcessContext<'_> {
     }
 }
 
-// K2 (messy, the audio half called by hand). The wheel at 100 reaches "Wheel" as 100/127, and
+// A messy case, the audio half called by hand: the wheel at 100 reaches "Wheel" as 100/127, and
 // the sine reports it as "Wheel heard"; a wheel of 200 is masked as CLAP's message is (72); a
 // bend of 30000 is held to 8191 (the point 1.0).
 #[test]
@@ -377,7 +377,7 @@ fn with_gain(mut project: Project) -> Project {
     project
 }
 
-// K3. The gain's "Steps" has 4 steps (0..4, default 4, text "4/4"); a value from the engine
+// The gain's "Steps" has 4 steps (0..4, default 4, text "4/4"); a value from the engine
 // reaches the plugin as the nearest whole step over 4, whatever the control ring carried (2.4,
 // 2.5, 2.6, 7, -1, NaN), flushed while stopped: its "Steps heard" is the generator's. The
 // sine's parameters the MIDI mapping names (Bend, Wheel) are hidden from the panels.
@@ -430,7 +430,7 @@ fn a_stepped_parameter_hears_whole_steps_and_mapped_ones_are_hidden() {
     assert_eq!(shown, rows);
 }
 
-// K4. A restart with kReloadComponent (and with kIoChanged) is a Restart notice for its `owner`
+// A restart with kReloadComponent (and with kIoChanged) is a Restart notice for its `owner`
 // after a tick; kLatencyChanged makes the Latency class report 128 frames, which the host
 // reads again at the tick, and play its input 128 frames late (p28's render of
 // p27_vst3_latency, to the bit).
@@ -483,7 +483,7 @@ fn restarts_are_noticed_and_a_new_latency_is_heard() {
     assert_eq!(sha256(&frames), text(&render["sha256"]));
 }
 
-// K4. A restart with kParamTitlesChanged (the gain renames its parameter 0 "Level") is a Params
+// A restart with kParamTitlesChanged (the gain renames its parameter 0 "Level") is a Params
 // notice after a tick, and the parameters are read again; with kMidiCCAssignmentChanged (the
 // sine maps nothing) too, and the sine's Bend and Wheel are no longer left out of the panels.
 // Neither creates anything again. What a plugin asks inside the host's own state load (the

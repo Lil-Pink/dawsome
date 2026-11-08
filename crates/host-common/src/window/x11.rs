@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(resized(&configure(7, 8)), None, "its child's");
     }
 
-    // W0. An embedder's window adds its children's structure (SUBSTRUCTURE_NOTIFY, 1 << 19) and
+    // An embedder's window adds its children's structure (SUBSTRUCTURE_NOTIFY, 1 << 19) and
     // its focus (FOCUS_CHANGE, 1 << 21) to every plugin window's mask; a child it watches is
     // heard for its properties (PROPERTY_CHANGE, 1 << 22) and structure (gen_p29's pins).
     #[test]

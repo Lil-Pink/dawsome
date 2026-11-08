@@ -107,14 +107,19 @@ fn lin(db: f32) -> f64 {
     exp2(f64::from(db) / 20.0 * LOG2_10)
 }
 
-/// Auto gain's scale for a drive of `drive_db` when `on`: lin(−d/(1 + d/40)), the fit
-/// of how much louder tanh makes a sound at that drive; 1 when off.
+/// Auto gain's scale for a drive of `drive_db` when `on` ([`auto_gain`]); 1 when off.
 fn makeup(drive_db: f32, on: bool) -> f64 {
     if !on {
         return 1.0;
     }
-    let drive = f64::from(drive_db);
-    exp2(-(drive / (1.0 + drive / 40.0)) / 20.0 * LOG2_10)
+    auto_gain(f64::from(drive_db))
+}
+
+/// Auto gain's scale for a drive of `drive_db`: lin(−d/(1 + d/40)), the fit of how much louder
+/// tanh makes a sound at that drive. Dawsome Synth's Drive takes it too, at the drive in dB
+/// whose gain is its d.
+pub(super) fn auto_gain(drive_db: f64) -> f64 {
+    exp2(-(drive_db / (1.0 + drive_db / 40.0)) / 20.0 * LOG2_10)
 }
 
 /// The tone control's frequency: 1 kHz at 0, 20 kHz at 1, evenly in octaves:
@@ -133,6 +138,19 @@ fn tone_coefficient(tone: f32, sample_rate: u32) -> f64 {
 fn ln_cosh(u: f64) -> f64 {
     let magnitude = u.abs();
     magnitude + (-2.0 * magnitude).exp().ln_1p() - LN_2
+}
+
+/// The mean of tanh between `before` and `u`, the shaper's output for a step from the frame
+/// before's driven value to this one's: (F(u) − F(before))/(u − before), F = ln cosh, or
+/// tanh((u + before)/2) where they are within [`SMALL_DIFFERENCE`]. Dawsome Synth's Drive
+/// shapes its voices by it too.
+pub(super) fn adaa_tanh(u: f64, before: f64) -> f64 {
+    let difference = u - before;
+    if difference.abs() < SMALL_DIFFERENCE {
+        ((u + before) / 2.0).tanh()
+    } else {
+        (ln_cosh(u) - ln_cosh(before)) / difference
+    }
 }
 
 pub(super) struct Factory;
@@ -204,13 +222,7 @@ impl Distortion {
     /// Side `side`'s wet value for input `x`, advancing that side one frame.
     fn shape(&mut self, side: usize, x: f32) -> f32 {
         let u = self.drive * f64::from(x);
-        let before = self.driven[side];
-        let difference = u - before;
-        let y = if difference.abs() < SMALL_DIFFERENCE {
-            ((u + before) / 2.0).tanh()
-        } else {
-            (ln_cosh(u) - ln_cosh(before)) / difference
-        };
+        let y = adaa_tanh(u, self.driven[side]);
         self.driven[side] = u;
         let y = y * self.makeup;
         let low = &mut self.low[side];

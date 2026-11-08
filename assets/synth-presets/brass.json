@@ -1,0 +1,16 @@
+{
+  "synth": "dawsome.synth",
+  "name": "Brass",
+  "params": {
+    "osc2_wave": 2,
+    "osc2_cents": 5,
+    "osc_mix": 0.5,
+    "cutoff": 0.4,
+    "filter_env": 0.5,
+    "filter_attack": 0.45,
+    "filter_decay": 0.55,
+    "filter_sustain": 0.6,
+    "amp_attack": 0.3,
+    "vel_cutoff": 0.4
+  }
+}

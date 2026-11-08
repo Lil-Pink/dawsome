@@ -231,10 +231,13 @@ pub enum AutomationTarget {
     EffectPlugin { effect: EffectId, param_id: u32 },
     /// A plugin channel's instrument parameter, by the plugin's own number for it.
     ChannelParam { channel: ChannelId, param_id: u32 },
+    /// A synth channel's instrument parameter, by the key it is saved under.
+    InstrumentParam { channel: ChannelId, key: String },
 }
 
 /// A target as the file writes it: `{"channel_volume":1}`, `{"effect":{"id":3,"param":"mix"}}`,
-/// `{"effect":{"id":3,"param_id":7}}`, `{"channel_param":{"channel":2,"param_id":7}}`.
+/// `{"effect":{"id":3,"param_id":7}}`, `{"channel_param":{"channel":2,"param_id":7}}`,
+/// `{"channel_param":{"channel":2,"param":"cutoff"}}`.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum TargetFile {
@@ -255,7 +258,10 @@ enum TargetFile {
     },
     ChannelParam {
         channel: ChannelId,
-        param_id: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        param: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        param_id: Option<u32>,
     },
 }
 
@@ -288,8 +294,21 @@ impl TryFrom<TargetFile> for AutomationTarget {
                     id.0
                 ))
             }
-            TargetFile::ChannelParam { channel, param_id } => {
-                Self::ChannelParam { channel, param_id }
+            TargetFile::ChannelParam {
+                channel,
+                param: None,
+                param_id: Some(param_id),
+            } => Self::ChannelParam { channel, param_id },
+            TargetFile::ChannelParam {
+                channel,
+                param: Some(key),
+                param_id: None,
+            } => Self::InstrumentParam { channel, key },
+            TargetFile::ChannelParam { channel, .. } => {
+                return Err(format!(
+                    "automation target channel_param {}: names a param or a param_id, one of them",
+                    channel.0
+                ))
             }
         })
     }
@@ -313,9 +332,16 @@ impl From<AutomationTarget> for TargetFile {
                 param: None,
                 param_id: Some(param_id),
             },
-            AutomationTarget::ChannelParam { channel, param_id } => {
-                Self::ChannelParam { channel, param_id }
-            }
+            AutomationTarget::ChannelParam { channel, param_id } => Self::ChannelParam {
+                channel,
+                param: None,
+                param_id: Some(param_id),
+            },
+            AutomationTarget::InstrumentParam { channel, key } => Self::ChannelParam {
+                channel,
+                param: Some(key),
+                param_id: None,
+            },
         }
     }
 }

@@ -71,7 +71,7 @@ def frames_at(frames, rate):
 
 # ---------- the projects (the landed format: canonical field order, defaults left out) ----------
 def J(d): return json.dumps(d, separators=(",", ":"), ensure_ascii=False)
-def tracks(n=8): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, n + 1)]
+def tracks(n=6): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, n + 1)]
 def sampler(i, name, sample, port=None):
     c = {"id": i, "name": name, "kind": "sampler", "sample": sample, "volume": 1.0, "pan": 0.0, "mute": False}
     if port: c["midi_input"] = port
@@ -101,7 +101,7 @@ def after_kit(kit):
     channel = {"id": 2, "name": sound["name"], "kind": "audio",
                "sample": "starter-kit/" + sound["file"], "volume": 1.0, "pan": 0.0, "mute": False}
     doc = project(BASE["channels"] + [channel], BEAT,
-                  {"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]})
+                  {"next_track_id": 7, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]})
     return doc, {"sound": sound["name"], "file": sound["file"], "track": track, "bar": bar,
                  "tick": start, "file_frames": sound["frames"], "file_rate": sound["rate"],
                  "frames": frames, "length": clip["length"], "document": "p10_after_kit.json"}
@@ -121,7 +121,7 @@ def after_plugin():
                "volume": NEW_CHANNEL_VOLUME, "pan": 0.0, "mute": False}
     clip = {"id": 1, "track": track, "start": start, "length": BAR, "kind": "pattern", "pattern": 1}
     doc = project(BASE["channels"] + [channel], BEAT,
-                  {"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]})
+                  {"next_track_id": 7, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]})
     return doc, {"plugin": "Bell Keys", "id": "clap:org.example.bells", "track": track, "bar": bar,
                  "tick": start, "selected_channel": 2, "document": "p10_after_plugin.json"}
 

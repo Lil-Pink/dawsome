@@ -91,20 +91,38 @@ print("p4_two_clips (no --song) --bars 1: frames", t2s(BAR, 44100, 120000), "ons
 
 # Headless probe points (logical px; window 1000x560, playlist panel only, origin (0,64), zoom 64 px/bar).
 # Probes sit at bar x + 24: clear of beat lines (+16, +32, +48) and of note marks (multiples of 16 for these patterns).
-# (The toolbar is 64 px, and the lanes fit the 8 tracks and the "+ Track" row into the
-# track area. The timeline's 10 px scroll bar moved from the header to under the tracks, so the
-# area is 560 - 64 - 24 - 28 - 10 = 434 px: floor(434 / 9) - 1 = 47 px lanes, a row every 48 px; it was 436,
-# 47 px lanes a row every 48, then 426 under the 72 px toolbar, 46 px lanes a row every 47.)
+# (The toolbar is 64 px, and the lanes fit the 8 tracks into the track area, the "+ Track" row
+# taking its own 24 px and a gap: 560 - 64 - 24 - 28 - 10 = 434 px, the tracks sharing
+# 434 - 25 = 409, floor(409 / 8) - 1 = 50 px lanes a row every 51 px, (434 + 1) // 51 = 8 rows
+# whole, the "+ Track" row under them at 408..432. The bar lines are read across the last whole
+# row, track 8's. It was floor(434 / 9) - 1 = 47 px lanes a row every 48 while the "+ Track"
+# row took a lane's share, 64 px lanes and 6 rows while 64 was the fitted lanes' floor; 436,
+# then 426 under the 72 px toolbar, 46 px lanes a row every 47.)
 TOOLBAR = 64
 TIME_BAR = 10
 TRACKS_AREA = 560 - TOOLBAR - 24 - 28 - TIME_BAR
-LANE = max(32, min(96, TRACKS_AREA // 9 - 1))
+LANE = max(32, min(106, (TRACKS_AREA - 24 - 1) // 8 - 1))
 X0, PX_BAR, RULER_Y, LOOP_Y, TRACK_Y, ROW = 120, 64, TOOLBAR + 24, TOOLBAR + 24 + 16, TOOLBAR + 24 + 28, LANE + 1
-lane8 = TRACK_Y + 7 * ROW + LANE // 2
-print("probe bar lines (lane color #484D55) x", [X0 + b * PX_BAR for b in range(1, 14)], "y", lane8, "; lane between them at x+24")
-print("probe bar-number boxes (text pixel present) x", [(X0 + b * PX_BAR + 3, X0 + b * PX_BAR + 15) for b in range(13)], "y", (RULER_Y + 2, RULER_Y + 14),
-      "; mid-bar boxes (no text) at x+35..x+47")
+SHOWN = (TRACKS_AREA + 1) // ROW
+lane_last = TRACK_Y + (SHOWN - 1) * ROW + LANE // 2
+# The grid's design (B, shaded bars), bar b counted from 0 (bar 1): every 4th bar's line (bars 1,
+# 5, 9, 13) is BAR_LINE #626873 with a companion right of it, BAR_LINE at 45 % over the lane;
+# the others LANE_BAR_LINE #484D55. At 64 px a bar every other bar from bar 1 is shaded, LANE
+# lightened by 5 a channel (#393D44); the rest is LANE #34383F. The 4-bar numbers are written in
+# TEXT #C9CDD3 (bright), the others in TEXT_DIM #6E747C.
+LANE_RGB, LANE_ALT = (0x34, 0x38, 0x3F), tuple(c + 5 for c in (0x34, 0x38, 0x3F))
+BAR_LINE, LANE_BAR_LINE = (0x62, 0x68, 0x73), (0x48, 0x4D, 0x55)
+def ground(b):
+    return LANE_ALT if b % 2 == 0 else LANE_RGB
+def companion(b):
+    return tuple(round(0.45 * line + 0.55 * lane) for line, lane in zip(BAR_LINE, ground(b)))
+hexed = lambda rgb: "#" + "".join(f"{c:02X}" for c in rgb)
+print("probe bar lines x", [(X0 + b * PX_BAR, hexed(BAR_LINE if b % 4 == 0 else LANE_BAR_LINE)) for b in range(1, 14)],
+      "y", lane_last, "; lane after each at x+24", [hexed(ground(b)) for b in range(1, 14)])
+print("probe strong lines' companions at x+1", [(X0 + b * PX_BAR + 1, hexed(companion(b))) for b in (4, 8, 12)])
+print("probe bar-number boxes x", [(X0 + b * PX_BAR + 3, X0 + b * PX_BAR + 15, "bright" if b % 4 == 0 else "dim") for b in range(13)],
+      "y", (RULER_Y + 2, RULER_Y + 14), "; mid-bar boxes (no text) at x+35..x+47")
 print("probe p4_two_clips clip body #5B7FA6 at", [(X0 + b * PX_BAR + 24, TRACK_Y + 22) for b in (0, 2)],
-      "lane #34383F at", [(X0 + PX_BAR + 24, TRACK_Y + 22), (X0 + 24, TRACK_Y + ROW + 22)])
+      "lane", [((X0 + PX_BAR + 24, TRACK_Y + 22), hexed(ground(1))), ((X0 + 24, TRACK_Y + ROW + 22), hexed(ground(0)))])
 print("probe p4_loop strip #C47A2C at", (X0 + PX_BAR + 24, LOOP_Y + 6), "ruler #1F2125 at", [(X0 + 24, LOOP_Y + 6), (X0 + 2 * PX_BAR + 24, LOOP_Y + 6)],
       "; p4_loop_off strip #5E5143 at", (X0 + PX_BAR + 24, LOOP_Y + 6))

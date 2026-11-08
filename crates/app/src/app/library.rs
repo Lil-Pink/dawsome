@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use dawsome_engine::dsp::synth::NAME as SYNTH;
 use dawsome_engine::edit::Edit;
 use dawsome_engine::project::{stable_port_name, Channel, ChannelId, ChannelKind, SoundSource};
 use dawsome_engine::time::Ticks;
@@ -127,7 +128,8 @@ impl App {
     }
 
     /// A press on a Library row outside the Samples tree, the cursor at window point `at`: a
-    /// sound previews (and may be dragged), a plugin or a device may be dragged, Rescan scans,
+    /// sound, a set, a plugin or the synth previews (and may be dragged), a device may be
+    /// dragged, Rescan scans,
     /// a tick lets a device's messages in or keeps them out, and the right button on a linked
     /// device offers Unlink.
     pub(super) fn picked(&mut self, pick: Pick, button: mouse::Button, at: Point) -> Task<Message> {
@@ -136,7 +138,7 @@ impl App {
         let left = button == mouse::Button::Left;
         let instrument = matches!(
             pick,
-            Pick::Sound(_) | Pick::Set(_) | Pick::Plugin(_) | Pick::ExternalInput
+            Pick::Sound(_) | Pick::Set(_) | Pick::Plugin(_) | Pick::Synth | Pick::ExternalInput
         );
         if left && instrument {
             // A press soon after a click (a press let go of without a drag) on the same row adds
@@ -191,6 +193,9 @@ impl App {
                 let name = crate::ui::library::EXTERNAL_INPUT.to_owned();
                 self.browse.press = Some(Press::new(Held::Input, name, at));
             }
+            Pick::Synth if left => {
+                self.browse.press = Some(Press::new(Held::Synth, SYNTH.to_owned(), at));
+            }
             Pick::Rescan => self.start_scan(true),
             // A press on a group's label folds or opens it, and keeps it for Enter, Left and
             // Right.
@@ -210,9 +215,9 @@ impl App {
                 self.settings.midi_inputs.toggle(&port, self.ports.names());
                 self.inputs_changed();
             }
-            // The right button on a kit sound, a set or the external input: it goes on the rack
-            // and its instrument window opens, the window being a channel's.
-            Pick::Sound(_) | Pick::Set(_) | Pick::ExternalInput => {
+            // The right button on a kit sound, a set, the synth or the external input: it goes
+            // on the rack and its instrument window opens, the window being a channel's.
+            Pick::Sound(_) | Pick::Set(_) | Pick::Synth | Pick::ExternalInput => {
                 let id = self.session.project().next_channel_id;
                 self.add_picked(&pick);
                 if self.session.project().channels.contains_key(&id) {
@@ -310,7 +315,28 @@ impl App {
             self.replace_sound(channel, source, name);
             return;
         }
-        let (id, mut edits) = self.new_instrument_channel(sfz, name);
+        let (id, edits) = self.new_instrument_channel(sfz, name);
+        self.add_where_dropped(id, edits);
+    }
+
+    /// Dawsome Synth let go of: on a playlist lane, a new synth channel and a clip of the rack's
+    /// pattern at the floor-snapped tick there, one undo step; on a channel's header, that
+    /// channel's sound; elsewhere on the rack, a new synth channel; either way the channel
+    /// selected. Anywhere else, nothing.
+    pub(super) fn drop_synth(&mut self) {
+        if let (true, Some(channel)) = (self.browse.rack_hover, self.browse.drop_header) {
+            self.replace_sound(channel, SoundSource::synth(), SYNTH);
+            return;
+        }
+        let (id, add) = self.new_synth_channel();
+        self.add_where_dropped(id, vec![add]);
+    }
+
+    /// Commits `edits`, which add channel `id`, where a Library drag was let go of: on a
+    /// playlist lane with a clip of the rack's pattern at the floor-snapped tick there, one undo
+    /// step; elsewhere on the rack as they are; anywhere else, nothing. The channel is selected
+    /// once it is there.
+    pub(super) fn add_where_dropped(&mut self, id: ChannelId, mut edits: Vec<Edit>) {
         let project = self.session.project();
         if let Some((track, tick)) = self.arranger.drop_target(project) {
             // The drop target is snapped already: placed at its tick exactly.
@@ -396,6 +422,24 @@ impl App {
         self.add_and_select(id, one_step(edits));
     }
 
+    /// The new channel's id and the edit adding Dawsome Synth at its defaults at the end of the
+    /// rack, named as the synth is.
+    fn new_synth_channel(&self) -> (ChannelId, Edit) {
+        let id = self.session.project().next_channel_id;
+        let add = Edit::AddSynthChannel {
+            id,
+            name: SYNTH.to_owned(),
+        };
+        (id, add)
+    }
+
+    /// Adds Dawsome Synth to the end of the rack, one undo step, and selects it: what a double
+    /// press or Enter on its Library row does.
+    pub(super) fn add_synth(&mut self) {
+        let (id, add) = self.new_synth_channel();
+        self.add_and_select(id, add);
+    }
+
     /// Adds the starter kit's sound `index` to the end of the rack as a sampler channel named
     /// after it, writing the kit into its folder where it is missing, one undo step, and selects
     /// it; with no folder for the kit, says so.
@@ -421,13 +465,14 @@ impl App {
         }
     }
 
-    /// Adds what a Library row holds to the end of the rack: a kit sound, a set or a plugin
-    /// instrument; anything else, nothing.
+    /// Adds what a Library row holds to the end of the rack: a kit sound, a set, a plugin
+    /// instrument, the synth or the external input; anything else, nothing.
     pub(super) fn add_picked(&mut self, pick: &Pick) {
         match pick {
             Pick::Sound(index) => self.add_kit_sound(*index),
             Pick::Set(set) => self.add_set(&set.sfz, &set.name),
             Pick::Plugin(plugin) => self.add_plugin(PickerTarget::Instrument, plugin),
+            Pick::Synth => self.add_synth(),
             Pick::ExternalInput => {
                 self.add_input_channel();
             }
@@ -576,9 +621,11 @@ mod tests {
     fn library_app(path: &Path, host: Host) -> (App, Player) {
         let project: Project = project_file::open(path).expect("opens").project;
         let (mut app, player) = app_hosted(project, path, host);
-        // 1000 × 576: the room under the toolbar these tests' rows were placed in, 504 px, as
-        // the 1000 × 560 window gave it under the 56 px toolbar (72 px now).
-        let _ = app.update(Message::WindowResized(Size::new(1000.0, 576.0)));
+        // 1000 × 620: the rows these tests' rows were placed in, 21 under the Library's 52 px
+        // head (as the 1000 × 560 window gave them under the 56 px toolbar, and one more for
+        // Dawsome Synth's, above the plugins), 24 px each (WCAG 2.2's target size): 64 + 52 + 21 × 24.
+        // (1000 × 598 with 22 px rows.)
+        let _ = app.update(Message::WindowResized(Size::new(1000.0, 620.0)));
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
         let _ = app.update(Message::TogglePanel(Panel::Browser));
         (app, player)
@@ -935,7 +982,7 @@ mod tests {
     /// What the device drop target over the rack sends with the cursor on rack row `row`.
     fn over_row(app: &App, row: usize) -> Option<Message> {
         let project = app.session.project();
-        let size = layout::rack_canvas_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16);
         let target = DeviceDrop {
             project,
             over: app.browse.drop_channel,
@@ -1161,7 +1208,10 @@ mod tests {
             app.settings.midi_inputs,
             MidiInputs::Named(["Port A".to_owned()].into())
         );
-        let layout = settings_layout::Layout { ports: 2, notes: 0 };
+        let layout = settings_layout::Layout {
+            ports: 2,
+            ..settings_layout::Layout::default()
+        };
         let box_a = layout.checkbox(1).center();
         let _ = app.update(Message::Settings(SettingsMessage::Pressed(box_a)));
         assert!(matches!(
@@ -1185,7 +1235,7 @@ mod tests {
             header,
             Item::Header {
                 section: Section::Instruments,
-                count: 12,
+                count: 13,
                 open: true
             }
         ));
@@ -1197,7 +1247,7 @@ mod tests {
             [
                 Item::Header {
                     section: Section::Instruments,
-                    count: 12,
+                    count: 13,
                     open: false
                 },
                 Item::Header {
@@ -1212,10 +1262,11 @@ mod tests {
     }
 
     // Walking the Samples tree with the arrow keys keeps the selected row in view, now that the
-    // tree sits under the Instruments section: in a 416 px window 13 rows show, and the tree's
-    // first row is list row 23 (12 kit sounds, 4 hint lines, Rescan and the external input
-    // under its group come before it; the plugins' hint has said where VST3 plugins go since
-    // VST3 reached the app, one line more).
+    // tree sits under the Instruments section: in a 428 px window 13 rows show (64 + 52 + 13 ×
+    // 24: the Library's rows 24 px; 416 with 22 px ones), and the tree's
+    // first row is list row 24 (12 kit sounds, Dawsome Synth, 4 hint lines, Rescan and the
+    // external input under its group come before it; the plugins' hint has said where VST3
+    // plugins go since VST3 reached the app, one line more).
     // (Pin moved: a 400 px window with the 56 px toolbar; 416 keeps the same
     // room under the 72 px one.)
     #[test]
@@ -1225,8 +1276,8 @@ mod tests {
             ..Host::offline()
         };
         let (mut app, _player) = library_app(&fixture("p10_base.json"), host);
-        app.window_size = Size::new(1000.0, 416.0);
-        let visible = browser::visible_rows(416.0 - TOOLBAR_HEIGHT);
+        app.window_size = Size::new(1000.0, 428.0);
+        let visible = browser::visible_rows(428.0 - TOOLBAR_HEIGHT);
         assert_eq!(visible, 13);
         let row_of = |app: &App, tree| {
             app.library_items()
@@ -1237,7 +1288,7 @@ mod tests {
         // On Linux; Windows' plugin hint is a line longer (its folders take two lines), so
         // every row under it lies one further down.
         let shift = crate::ui::library::PLUGIN_HINT.len() - 4;
-        assert_eq!(row_of(&app, 0), 23 + shift);
+        assert_eq!(row_of(&app, 0), 24 + shift);
         for selected in 0..3 {
             let _ = app.update(Message::Browser(BrowserMessage::Key(Nav::Down)));
             assert_eq!(app.browse.model.selected, Some(selected));
@@ -1247,8 +1298,8 @@ mod tests {
         }
         assert_eq!(
             app.browse.library.top,
-            13 + shift,
-            "list row 25 is the last shown"
+            14 + shift,
+            "list row 26 is the last shown"
         );
         for _ in 0..3 {
             let _ = app.update(Message::Browser(BrowserMessage::Key(Nav::Up)));
@@ -1256,8 +1307,8 @@ mod tests {
         assert_eq!(app.browse.model.selected, Some(0));
         assert_eq!(
             app.browse.library.top,
-            13 + shift,
-            "row 23 is still in view"
+            14 + shift,
+            "row 24 is still in view"
         );
     }
 
@@ -1279,7 +1330,7 @@ mod tests {
     /// What the sound target over the rack sends with the cursor on rack point `at`.
     fn over_header(app: &App, at: Point) -> Option<Message> {
         let project = app.session.project();
-        let size = layout::rack_canvas_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16);
         let target = crate::ui::rack::SoundDrop {
             project,
             over: app.browse.drop_header,
@@ -1403,7 +1454,7 @@ mod tests {
         assert_eq!(app.session.history().undo_len(), 1, "the same one does not");
     }
 
-    // P4 known answers (gen_p15_expected.py): a set, a kit sound and a plugin each held from the
+    // Known answers (gen_p15_expected.py): a set, a kit sound and a plugin each held from the
     // Library, moved onto a channel's header (its target says which) and let go of there give
     // exactly the case's document: the channel keeps its id, notes, routing, mute, volume, pan
     // and MIDI input, takes the sound and the settings its kind takes, and its new sound's
@@ -1450,7 +1501,7 @@ mod tests {
         }
     }
 
-    // P4: let go of between two rows, or moved off a header onto the steps, a set adds a new
+    // Let go of between two rows, or moved off a header onto the steps, a set adds a new
     // channel as before; over an audio channel's header (p8_ui's first row) there is no target.
     #[test]
     fn a_sound_let_go_of_off_the_headers_adds_a_channel_as_before() {
@@ -1466,6 +1517,10 @@ mod tests {
         assert_eq!(app.browse.drop_header, None);
         let between = Point::new(80.0, layout::row_top(1) - 4.0);
         assert!(over_header(&app, between).is_none());
+        // "+ Instrument…" under the rows is no channel's header either: let go of there, the
+        // set adds a channel as anywhere off the headers.
+        let add = layout::add_instrument_rect(app.rack_rows().len()).center();
+        assert!(over_header(&app, add).is_none(), "the add button");
         release(&mut app, Point::new(500.0, 200.0));
         let project = app.session.project();
         assert_eq!(project.channels.len(), 5, "a new channel");
@@ -1585,8 +1640,8 @@ mod tests {
         assert_eq!(app.selected_channel, Some(ChannelId(2)));
     }
 
-    // The shipped sets list under the kit, counted among the instruments: 12 kit sounds and the
-    // four test sets make 16.
+    // The shipped sets list under the kit, counted among the instruments: 12 kit sounds, the
+    // four test sets and Dawsome Synth make 17.
     #[test]
     fn the_shipped_sets_list_under_the_kit() {
         let host = Host {
@@ -1599,7 +1654,7 @@ mod tests {
             items[0],
             Item::Header {
                 section: Section::Instruments,
-                count: 16,
+                count: 17,
                 open: true
             }
         ));
@@ -1929,6 +1984,76 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("removed");
     }
 
+    // The real door for Dawsome Synth: its row is the first under Plugins, whatever a scan found
+    // (none here); a click previews it; a second press soon after adds a synth channel at its
+    // defaults, named after it, selected, one undo step; its oscillator 1 set to a sine through
+    // the app's edit (the default is a saw), a device's A4 (velocity 127) on it sounds through
+    // the player at 440 Hz. The level by hand from the defaults: volume −6 dB
+    // (10^(−6/20)), velocity → level 100% (gain 127/128, the velocity), sustain 100%, oscillator
+    // 2 mixed out, at the channel's added volume 9/16, by projection over 396 whole periods.
+    #[test]
+    fn dawsome_synth_from_the_library_is_a_synth_channel_a_device_plays() {
+        use crate::ui::browser_model::Playing;
+        use dawsome_engine::project::ProcessorRef;
+        let (mut app, mut player) = library_app(&fixture("p10_base.json"), Host::offline());
+        let items = app.library_items();
+        let plugins = items
+            .iter()
+            .position(|item| *item == Item::Group(crate::ui::library::PLUGINS))
+            .expect("the Plugins group");
+        assert_eq!(items[plugins + 1], Item::Synth, "first under Plugins");
+        click(&mut app, &Item::Synth);
+        assert_eq!(app.browse.model.playing, Some(Playing::Synth), "a preview");
+        assert_eq!(app.session.project().channels.len(), 1, "a click adds none");
+        let at = row_center(&app, &Item::Synth);
+        press(&mut app, at, mouse::Button::Left);
+        assert_eq!(app.error, None);
+        let channel = &app.session.project().channels[&ChannelId(2)];
+        assert_eq!(
+            (channel.name.as_str(), channel.kind),
+            ("Dawsome Synth", ChannelKind::Synth)
+        );
+        assert_eq!(channel.processor, Some(ProcessorRef::new("dawsome.synth")));
+        assert_eq!(app.selected_channel, Some(ChannelId(2)));
+        assert_eq!(app.session.history().undo_len(), 1);
+        assert_eq!(app.browse.model.playing, None, "the preview ends");
+        app.commit(Edit::SetChannelParam {
+            channel: ChannelId(2),
+            key: "osc1_wave".into(),
+            value: Some(0.0),
+        });
+        assert_eq!(app.error, None);
+        assert_eq!(app.session.history().undo_len(), 2);
+        // The player takes the waiting plans first, one per call, as the stream's calls do.
+        for _ in 0..16 {
+            player.process(&mut [[0.0; 2]; 64]);
+        }
+        let device = Router::new(app.session.midi_inbox(), ControllerQueue::default());
+        device.deliver(&[0x90, 69, 127]);
+        let mut out = vec![[0.0f32; 2]; 44_100];
+        player.process(&mut out);
+        let started: Vec<ChannelId> = app
+            .session
+            .take_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                EngineEvent::LiveNoteStarted { channel, .. } => Some(channel),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started, [ChannelId(2)], "the selected synth plays the note");
+        assert!(out.iter().all(|[left, right]| left == right), "centred");
+        let (mut s, mut c) = (0.0, 0.0);
+        for (n, frame) in out.iter().enumerate().skip(4410) {
+            let phase = std::f64::consts::TAU * 440.0 * n as f64 / 44_100.0;
+            s += f64::from(frame[0]) * phase.sin();
+            c += f64::from(frame[0]) * phase.cos();
+        }
+        let amplitude = 2.0 * s.hypot(c) / (44_100.0 - 4410.0);
+        let want = 10f64.powf(-6.0 / 20.0) * (127.0 / 128.0) * (9.0 / 16.0);
+        assert!((amplitude - want).abs() < 1e-4, "{amplitude}, not {want}");
+    }
+
     // Enter while the Library has the keys adds the instrument row pressed last: a plugin as
     // the picker adds it, a kit sound as a sampler channel named after it (the kit written into
     // its folder). Without such a row Enter walks the Samples tree as before.
@@ -1971,7 +2096,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("removed");
     }
 
-    // 6d review 3: while the keyboard plays notes (as a first start has it), Enter through the
+    // While the keyboard plays notes (as a first start has it), Enter through the
     // window's key path still adds the instrument row pressed last, the plugin, and the numpad's
     // Enter does the same for the kit sound; neither plays a note.
     #[test]
@@ -2445,8 +2570,9 @@ mod tests {
         let path = fixture("p10_base.json");
         // The session's registry is the host's, so the previews create real instances.
         let (mut app, mut player) = app_hosted(&path, host);
-        // The room the Library had under the 56 px toolbar (see `library_app`).
-        let _ = app.update(Message::WindowResized(Size::new(1000.0, 576.0)));
+        // The rows the Library had under the 56 px toolbar, and Dawsome Synth's row, 24 px each
+        // (see `library_app`).
+        let _ = app.update(Message::WindowResized(Size::new(1000.0, 620.0)));
         let _ = app.update(Message::TogglePanel(Panel::Browser));
         let plugins: Vec<Item> = app
             .library_items()

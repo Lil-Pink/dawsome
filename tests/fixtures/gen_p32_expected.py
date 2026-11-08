@@ -1,9 +1,9 @@
-"""Known answers for the seven native effects of Phase A (§3, §4 A.1-A.9):
+"""Known answers for the seven native effects:
 chorus, flanger, phaser, distortion, filter, gate and stereo width, each in insert 1 of a
 project whose one sampler channel plays an input file at tick 0, rendered by `dawsome render`
 to 32-bit float.
 
-Expected values come from the spec's formulas restated below, never from engine code (the Rust
+Expected values come from the formulas restated below, never from engine code (the Rust
 did not exist yet: this file is the ground truth the Rust follows). gen_p11_expected.py's
 `f32`, `exp2`, `hermite`, `LOG2_10`, `LN_2` and `jf` are imported, as gen_p24_expected.py does.
 Every input is authored here: the sounds, the projects and p32_expected.json.
@@ -12,7 +12,7 @@ Notation: all arithmetic is f64 unless written f32(...); a parameter is the f32 
 holds (the effect gets f32 values), widened to f64 where an f64 formula uses it; sr = 44100.0;
 TAU = 2 pi (std TAU, Python 2.0 * math.pi); PI = std PI; TINY = 1e-30.
 Products and sums are evaluated LEFT TO RIGHT exactly as written in the comments below (each
-"order fixed" note is one the spec left open; the Rust follows this file).
+"order fixed" note fixes an order the formulas leave open; the Rust follows this file).
 
 The render path (what lies between the effect and the file, read from render.rs and laws.rs):
   sampler   a step hit (length 0) on key 60 at velocity 1.0, volume 1, centered: the sampler's
@@ -30,7 +30,7 @@ The render path (what lies between the effect and the file, read from render.rs 
   So the render is the effect's output with negative zeros made positive. The five "dry"
   projects (no effect) prove that path through the real door: their hash is the input's.
 
-The shared parts (§3):
+The shared parts:
   blend      dsp.rs's: mix == 0 -> dry, mix == 1 -> wet (the bits), else keep = f32(1 - mix),
              f32(f32(keep * dry) + f32(mix * wet))
   blend_power dsp.rs's equal-power mix (chorus, flanger, phaser): mix == 0
@@ -54,7 +54,7 @@ The shared parts (§3):
              p > level: level = a * level + (1 - a) * p, else r * level + (1 - r) * p;
              level = snap64(level)
 
-The effects (§4; the parameter tables are EFFECTS below; the chorus's sum, high-pass and
+The effects (the parameter tables are EFFECTS below; the chorus's sum, high-pass and
 defaults, the flanger's and phaser's Spread, the equal-power mix, Auto gain, the filter's Slope
 and level compensation, the gate's RMS detector and Bass mono came from a comparison of the
 effects with professional ones):
@@ -123,14 +123,15 @@ The inputs (44.1 kHz mono 32-bit float, 0.5 s = 22050 frames; stereo.wav two cha
                     (n counts from the file's start throughout, so the phase runs on)
 The render: one bar at 120 BPM (88200 frames, `--bars 1`), so 1.5 s follow each file.
 
-Tiers (A.9): "exact" cases compare the SHA-256 of the render's sample bytes (left, right
+Tiers: "exact" cases compare the SHA-256 of the render's sample bytes (left, right
 interleaved, little-endian f32: gen_p24's sha256_of, the WAV's data chunk); "close" cases compare
 the probed frames (every frame in [0, 512), then every 32nd; p32_expected.json "probe_frames")
 within 1e-6 and carry the generator's own SHA-256 too, which Linux's libm will likely match;
 "amplitude" entries are closed forms measured by projection over whole periods (gen_p5's
 amplitude) within 1e-4.
 
-The cases (p32_<case>.json; A.9's table, both columns, and mix 0 for every effect with a mix):
+The cases (p32_<case>.json; each effect at its defaults and at its extremes, and mix 0 for every
+effect with a mix):
   dry_<input>        no effect: the input's bits (proves the sampler path above), exact
   chorus_default     sine440, defaults, close; chorus_extreme: depth 1, rate 5, mix 1, close,
                      frames [0, 441) exactly 0; chorus_mix0: the dry hash; chorus_still:
@@ -169,8 +170,8 @@ The cases (p32_<case>.json; A.9's table, both columns, and mix 0 for every effec
                      filter_lp24_far: slope 24, cutoff the control nearest 110 Hz, two octaves
                      under the sine: 0.5 comp |H|^2, about -48 dB where 12 dB gives -24
   gate_default       bursts, defaults (RMS detector; threshold -40 dB), exact;
-                     gate_range0: the dry hash; gate_hold0: exact; gate_release_1ms (not in A.9:
-                     README inconsistency 2): exact, the -60 dB stretch is f32(x * floor) from
+                     gate_range0: the dry hash; gate_hold0: exact; gate_release_1ms (added: the
+                     default release never reaches the floor in time): exact, the -60 dB stretch is f32(x * floor) from
                      stretch.at_floor_from to its end; gate_rms_closed and gate_rms_open:
                      bursts at threshold -8 and -10 dB, exact: the 0.5 sine peaks at
                      -6.02 dBFS (a peak detector opens at both) but its RMS is -9.03 dBFS, so
@@ -223,7 +224,7 @@ PROBE_FRAMES = list(range(512)) + list(range(512, FRAMES, 32))
 SVF_MAX = 0.45 * SRF                                 # the EQ's MAX_FREQ_FRACTION of the rate
 
 
-# ---------- the shared parts (§3) ----------
+# ---------- the shared parts ----------
 def snap(v):
     """dsp.rs `snap` on an f32 (compared as f64)."""
     return 0.0 if abs(v) < TINY else v
@@ -331,7 +332,7 @@ SQRT_3 = 1.7320508075688772                          # the f64 nearest sqrt 3 (s
 CHORUS_LOW_CUT_HZ = 150.0                            # the chorus's wet high-pass
 
 
-# ---------- the controls' mappings (decision 6) ----------
+# ---------- the controls' mappings ----------
 def phaser_center_hz(v): return 100.0 * exp2(v * (2.0 + LOG2_10))
 def distortion_tone_hz(v): return 1000.0 * exp2(v * (1.0 + LOG2_10))
 def filter_cutoff_hz(v): return 20.0 * exp2(v * (3.0 * LOG2_10))
@@ -356,7 +357,7 @@ def distortion_makeup(drive_db, auto):
     return lin(-(drive_db / (1.0 + drive_db / 40.0))) if auto else 1.0
 
 
-# ---------- the effects (§4) ----------
+# ---------- the effects ----------
 def chorus(inl, inr, p):
     rate, depth, mix = p["rate"], p["depth"], p["mix"]
     line = Line(20.0)
@@ -448,6 +449,16 @@ def antiderivative(u):
     return a + math.log1p(math.exp(-2.0 * a)) - LN_2
 
 
+def adaa_tanh(u, u1):
+    """The mean of tanh between u1 and u (first-order ADAA): (F1(u) - F1(u1)) / (u - u1), or
+    tanh((u + u1) / 2) where they are within 1e-5 of each other. The distortion's shaper, and
+    gen_p33_expected.py's Drive."""
+    d = u - u1
+    if abs(d) < 1e-5:
+        return math.tanh((u + u1) / 2.0)
+    return (antiderivative(u) - antiderivative(u1)) / d
+
+
 def distortion(inl, inr, p):
     drive, outdb, mix = lin(p["drive_db"]), lin(p["output_db"]), p["mix"]
     makeup = distortion_makeup(p["drive_db"], p["auto_gain"] == 1.0)
@@ -459,11 +470,7 @@ def distortion(inl, inr, p):
         x = (inl[n], inr[n])
         for s in (0, 1):
             u = drive * x[s]
-            d = u - u1[s]
-            if abs(d) < 1e-5:
-                y = math.tanh((u + u1[s]) / 2.0)
-            else:
-                y = (antiderivative(u) - antiderivative(u1[s])) / d
+            y = adaa_tanh(u, u1[s])
             u1[s] = u
             y = y * makeup
             lp[s] = snap64(lp[s] + c * (y - lp[s]))
@@ -538,7 +545,7 @@ def width(inl, inr, p):
     return out_l, out_r
 
 
-# ---------- the parameter tables (§4 A.1-A.7, A.8) ----------
+# ---------- the parameter tables ----------
 def P(key, label, lo, hi, default, unit, whole=False):
     return {"key": key, "label": label, "min": lo, "max": hi, "default": default, "unit": unit,
             "whole": whole}
@@ -773,8 +780,8 @@ CASES = {
     "gate_default": ("dawsome.gate", "p32_bursts.wav", {}, "exact"),
     "gate_range0": ("dawsome.gate", "p32_bursts.wav", {"range_db": 0.0}, "exact"),
     "gate_hold0": ("dawsome.gate", "p32_bursts.wav", {"hold_ms": 0.0}, "exact"),
-    # Not in A.9's table: the default release (1/e in 100 ms) never brings the -60 dB stretch
-    # to the floor inside its 200 ms (README, inconsistency 2); at 1 ms it does.
+    # Added to the cases: the default release (1/e in 100 ms) never brings the -60 dB stretch
+    # to the floor inside its 200 ms; at 1 ms it does.
     "gate_release_1ms": ("dawsome.gate", "p32_bursts.wav", {"release_ms": 1.0}, "exact"),
     # The RMS detector. The 0.5 sine's RMS (-9.03 dBFS) lies between -10 and -8,
     # its peak (-6.02) above both: open at -10, never at -8.
@@ -818,10 +825,24 @@ def sha256_of(left, right):
     return hashlib.sha256(data).hexdigest()
 
 
+def compensated_sum(xs):
+    """Python 3.12+'s sum() of floats, written out: Neumaier's compensated sum from 0.0. Python
+    3.11's sum() adds plainly left to right, so the amplitudes' last digits, and with them
+    p32_expected.json, depended on the Python that ran this file (3.11 failed --check)."""
+    total = compensation = 0.0
+    for x in xs:
+        t = total + x
+        if abs(total) >= abs(x): compensation += (total - t) + x
+        else: compensation += (x - t) + total
+        total = t
+    # As CPython's: a correction that is inf or nan (the sum overflowed) is left out.
+    return total + compensation if math.isfinite(compensation) else total
+
+
 def amplitude(y, hz, lo, hi):
     """gen_p5's: projection on sin/cos over [lo, hi), a whole number of periods."""
-    s = sum(y[n] * math.sin(TAU * hz * n / SRF) for n in range(lo, hi))
-    c = sum(y[n] * math.cos(TAU * hz * n / SRF) for n in range(lo, hi))
+    s = compensated_sum(y[n] * math.sin(TAU * hz * n / SRF) for n in range(lo, hi))
+    c = compensated_sum(y[n] * math.cos(TAU * hz * n / SRF) for n in range(lo, hi))
     return 2.0 * math.hypot(s, c) / (hi - lo)
 
 
@@ -836,6 +857,13 @@ def first_zero_tail(left, right):
     return k
 
 
+def magnitude(z):
+    """|z| by math.hypot, CPython's own and correctly rounded, never abs(z): abs of a complex is
+    the C library's hypot, which differs by an ulp between glibc 2.43 and 2.44 on three of these
+    amplitudes (2.44's not correctly rounded), so p32_expected.json depended on the machine."""
+    return math.hypot(z.real, z.imag)
+
+
 def svf_closed_complex(kind, hz, fc, q):
     """H of the prewarped analog SVF at hz, for the input e^(+j w n): the trapezoidal SVF is the
     bilinear transform of the analog one, s = j W, W = tan(PI hz / sr) / tan(PI fc / sr)."""
@@ -847,7 +875,7 @@ def svf_closed_complex(kind, hz, fc, q):
 
 def svf_closed(kind, hz, fc, q):
     """|H| of the prewarped analog SVF at hz (the trapezoidal SVF's exact steady state)."""
-    return abs(svf_closed_complex(kind, hz, fc, q))
+    return magnitude(svf_closed_complex(kind, hz, fc, q))
 
 
 def phaser_closed(amplitude_in, count, hz, fc, mix):
@@ -855,7 +883,7 @@ def phaser_closed(amplitude_in, count, hz, fc, mix):
     each stage lags theta = 2 atan(tan(PI hz / sr) / tan(PI fc / sr)) (90 degrees at fc)."""
     theta = 2.0 * math.atan(math.tan(PI * hz / SRF) / math.tan(PI * fc / SRF))
     gd, gw = power_gains(mix)
-    return amplitude_in * abs(gd + gw * cmath.exp(complex(0.0, -count * theta))), theta
+    return amplitude_in * magnitude(gd + gw * cmath.exp(complex(0.0, -count * theta))), theta
 
 
 def chorus_still_closed(amplitude_in, hz, mix):
@@ -869,9 +897,9 @@ def chorus_still_closed(amplitude_in, hz, mix):
     wet = (math.sqrt(3.0) * hermite_gain * svf_closed_complex(HIGH, hz, CHORUS_LOW_CUT_HZ,
                                                               FRAC_1_SQRT_2)
            * cmath.exp(complex(0.0, -w * delay)))
-    if mix == 1.0: return amplitude_in * abs(wet)
+    if mix == 1.0: return amplitude_in * magnitude(wet)
     gd, gw = power_gains(mix)
-    return amplitude_in * abs(gd + gw * wet)
+    return amplitude_in * magnitude(gd + gw * wet)
 
 
 WINDOW = (4410, FILE_FRAMES)                         # 176 periods of 440 Hz, inside the file
@@ -958,8 +986,9 @@ def case_answer(case):
         a["left_equals_right"] = True
     if case == "width_bass_mono":
         h = svf_closed_complex(HIGH, 440.0, width_bass_hz(values["bass_mono"]), FRAC_1_SQRT_2)
-        a["amplitude"] = amplitude_answer(left, right, [0.25 * abs(1.0 + h), 0.25 * abs(1.0 - h)])
-    # What the Rust test asserts for this case (README "asserts").
+        a["amplitude"] = amplitude_answer(left, right, [0.25 * magnitude(1.0 + h),
+                                                        0.25 * magnitude(1.0 - h)])
+    # What the Rust test asserts for this case.
     asserts = ["sha256"] if tier == "exact" else ["probes"]
     for key in ("same_as", "zero_before", "sounding", "amplitude", "peak_at_most", "hand_frames",
                 "left_equals_right", "lead", "sides_differ", "scaled"):
@@ -985,7 +1014,7 @@ def expected():
 
 # ---------- self-checks ----------
 CHECKS = []
-NOTES = []                                           # spec statements that do not hold
+NOTES = []                                           # stated rules that do not hold
 
 
 def check(name, ok, detail):
@@ -1182,9 +1211,9 @@ def self_checks(answers):
     check("SQRT_3, FRAC_1_SQRT_2 are the correctly rounded f64s",
           SQRT_3 == math.sqrt(3.0) and FRAC_1_SQRT_2 == math.sqrt(0.5), "")
     # Gate: the -60 dB stretch once closed comes out at the floor (x1e-4). At the default
-    # release (1/e in 100 ms) it does not within the stretch: a note, not a check (README).
+    # release (1/e in 100 ms) it does not within the stretch: a note, not a check.
     closed, at, end_gain, floor = gate_settle("gate_default")
-    NOTES.append("gate_default: the spec's '-60 dB stretch comes out x1e-4 once closed' does not "
+    NOTES.append("gate_default: the rule '-60 dB stretch comes out x1e-4 once closed' does not "
                  "hold: closes at frame %d, gain %.6g at the stretch's end (frame %d), floor %.6g; "
                  "%s" % (closed, end_gain, B2 - 1, floor,
                          "never exactly x floor" if at is None else "x floor from %d" % at))

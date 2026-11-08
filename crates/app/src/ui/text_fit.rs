@@ -6,7 +6,9 @@
 
 use std::borrow::Cow;
 
-use iced::{Font, Renderer, Size};
+use iced::{Renderer, Size};
+
+use crate::ui::fonts;
 
 /// What ends a text cut short.
 const ELLIPSIS: char = '\u{2026}';
@@ -59,18 +61,31 @@ pub fn fit_width(content: &str, room: f32, size: f32) -> Option<Cow<'_, str>> {
 /// The width `content` takes on one line at text size `size`, in the window's font.
 pub fn text_width(content: &str, size: f32) -> f32 {
     use iced::advanced::text::{self as core_text, Paragraph as _};
+    fonts::load();
     let paragraph = <Renderer as core_text::Renderer>::Paragraph::with_text(core_text::Text {
         content,
         bounds: Size::INFINITE,
         size: size.into(),
         line_height: core_text::LineHeight::default(),
-        font: Font::DEFAULT,
+        font: fonts::UI,
         align_x: core_text::Alignment::Default,
         align_y: iced::alignment::Vertical::Top,
         shaping: core_text::Shaping::default(),
         wrapping: core_text::Wrapping::None,
     });
     paragraph.min_width()
+}
+
+/// The width of the widest of `values` at text size `size`, rounded up to a whole pixel: the
+/// room a readout keeps whatever it shows, so what follows it stays put as its value changes.
+/// Why measured and not a digit count: the bundled font's digits are proportional (its '1' is
+/// narrower than its '4').
+pub fn widest<S: AsRef<str>>(values: impl IntoIterator<Item = S>, size: f32) -> f32 {
+    values
+        .into_iter()
+        .map(|value| text_width(value.as_ref(), size))
+        .fold(0.0, f32::max)
+        .ceil()
 }
 
 #[cfg(test)]

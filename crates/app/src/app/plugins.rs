@@ -504,12 +504,14 @@ impl App {
 
     /// Opens `owner`'s plugin window; the parameter window when the plugin has none it can show
     /// here, or when windows cannot open (the reason goes to the toolbar). Returns what opened,
-    /// `None` when `owner` plays no plugin or it is missing.
+    /// `None` when `owner` plays no plugin or it is missing. The plugin is told the desktop's
+    /// scale, the app's own windows' without the zoom: a plugin's window is its own drawing,
+    /// not the app's, so the zoom leaves it as it is.
     pub(super) fn open_plugin(&mut self, owner: ProcessorOwner) -> Option<Editor> {
         let title = self.plugin_title(owner)?;
         let name = self.plugin_reference(owner)?.display_name().to_owned();
         let opened = match host_of(&self.session, owner) {
-            Some(host) => host.open_editor(owner, &title),
+            Some(host) => host.open_editor(owner, &title, f64::from(self.os_scale)),
             None => Err(HostError::Missing),
         };
         match opened {
@@ -898,10 +900,10 @@ pub(super) mod app_tests {
     use crate::project_file;
     use crate::ui::hint::ChannelRow;
     use crate::ui::layout;
-    use crate::ui::mixer_layout;
     use crate::ui::mixer_state::{Menu, MixerMessage, ADD_MENU};
     use crate::ui::panels::{Panel, Panels};
     use crate::ui::param_window::ParamMessage;
+    use crate::ui::{knob_block, mixer_layout};
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
     const SINE: ProcessorOwner = ProcessorOwner::Channel(ChannelId(1));
@@ -1279,7 +1281,7 @@ pub(super) mod app_tests {
         let project = app.session.project().clone();
         app.mixer.select(InsertId(1), &project);
         let block = mixer_blocks(&app)[0];
-        let knob = mixer_layout::knob_rect(mixer_layout::knob_cell(block, 1, 0)).center();
+        let knob = knob_block::knob_rect(knob_block::knob_cell(block, 1, 0)).center();
         let message = MixerMessage::Pressed {
             at: knob,
             button: iced::mouse::Button::Right,
@@ -1716,7 +1718,7 @@ pub(super) mod app_tests {
         assert_eq!(rows, wanted, "the new plugin's rows");
     }
 
-    // Rack → "+ Plugin instrument…" → the picker; Enter adds the first instrument listed as a
+    // The rack's "+ Instrument…" → the picker; Enter adds the first instrument listed as a
     // plugin channel named after it, selected, one undo step.
     #[test]
     fn the_picker_adds_a_plugin_channel() {

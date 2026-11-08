@@ -210,7 +210,7 @@ fn assert_render(frames: &[[f32; 2]], answer: &Value) {
     assert_eq!(sha256(frames), text(&answer["sha256"]));
 }
 
-// K1. A project naming the VST3 sine opens with no notice (before VST3 reached the app it said
+// A project naming the VST3 sine opens with no notice (before VST3 reached the app it said
 // "Missing plugin") and plays p27's frames: the sine from frame 6000 at gain 0.5, every frame
 // of the bar the generator's; the VST3 gain in an insert plays p27's impulse at 0.5.
 #[test]
@@ -231,7 +231,7 @@ fn a_vst3_project_opens_with_no_notice_and_plays_its_formula() {
     assert_render(&play(&mut player, frames, 512), answer);
 }
 
-// K1. With the CLAP test plugins, the VST3 test module and the module that crashes beside them,
+// With the CLAP test plugins, the VST3 test module and the module that crashes beside them,
 // the pickers list both formats as gen_p28 says: the VST3 sine left out for the CLAP one of the
 // same name and maker, the VST3 Fail, Tick and Latency marked "(VST3)", the crashed module under
 // "Could not load (1)". The Library lists the plugin instruments under their maker, Dawsome:
@@ -279,7 +279,7 @@ fn both_formats_are_listed_once_each_with_their_format() {
     }
 }
 
-// K1. With the VST3 module alone, on the VST3 sine's project: the picker lists Fail, Sine and
+// With the VST3 module alone, on the VST3 sine's project: the picker lists Fail, Sine and
 // Tick, each "(VST3)"; choosing Sine adds channel 2 playing `vst3:<the sine's id>` named
 // "Dawsome Test Sine", with no state, selected, one undo step; its first capture is p27's
 // sine_1.0 preset (its own state as it starts, gain 1).
@@ -322,7 +322,7 @@ fn a_vst3_plugin_chosen_in_the_picker_is_a_new_channel() {
     );
 }
 
-// K3. The VST3 gain's parameter window lists Gain, Steps and Steps heard; Steps is stepped from
+// The VST3 gain's parameter window lists Gain, Steps and Steps heard; Steps is stepped from
 // 0 to 4, its default 4 ("4/4"). Its slider (120 px, gen_p28's slider width, its 4 steps)
 // pressed and moved 90 px left sends 1.0; after a stopped call (the idle flush) and a tick the
 // plugin heard 0.25 ("Steps heard"), the window reads 1.0 and "1/4", and the capture is p27's
@@ -433,7 +433,7 @@ fn the_parameter_windows_timer_reads_the_rows_it_builds() {
     assert_eq!(text_of_steps(&app), Some(default), "the timer");
 }
 
-// K4. The VST3 sine asks for a reload (kReloadComponent, then kIoChanged): after a tick the app
+// The VST3 sine asks for a reload (kReloadComponent, then kIoChanged): after a tick the app
 // has captured it (p27's sine_0.5, the document's own: no undo step, nothing unsaved) and made it
 // again from that state, and the old instance goes once its audio half is back; Play then gives
 // p27's frames to the bit. Opening the project made one instance though the sine's controller
@@ -470,7 +470,7 @@ fn a_vst3_plugin_asking_for_a_reload_is_made_again_from_its_state() {
     assert_render(&play(&mut player, frames, 512), answer);
 }
 
-// K4. The VST3 gain renames its parameter 0 "Level" (kParamTitlesChanged) with its parameter
+// The VST3 gain renames its parameter 0 "Level" (kParamTitlesChanged) with its parameter
 // window open: after a tick the window's first row reads "Level" (its label too), its list
 // scrolled as it was, and nothing was made again.
 #[test]
@@ -490,7 +490,7 @@ fn a_renamed_vst3_parameter_renames_the_open_panels_row() {
     assert_eq!(app.host.vst3.created(), created);
 }
 
-// K4. The VST3 Latency effect (44.1 kHz) says it delays its sound by 64 frames: its parameter
+// The VST3 Latency effect (44.1 kHz) says it delays its sound by 64 frames: its parameter
 // window's footer says so with its milliseconds, as gen_p28 writes it; asked to restart with
 // kLatencyChanged, after a tick it says 128, its slot's hint value too ("VST3 · delays its sound
 // by 128 frames (2.9 ms); not compensated"), and Play puts the impulse at 128 (p28's render, to
@@ -638,7 +638,7 @@ fn bend_through_the_door(app: &App, player: &mut Player) -> Vec<[f32; 2]> {
     frames
 }
 
-// K2. A device's pitch bend through the app's door bends the CLAP sine (MIDI bend messages) and
+// A device's pitch bend through the app's door bends the CLAP sine (MIDI bend messages) and
 // the VST3 sine (points of the parameter its MIDI mapping names) alike: both play gen_p28's
 // 2,048 frames to the bit. The mod wheel at 100 reaches the VST3 sine as 100/127 ("Wheel heard"
 // after a call and a tick), and neither control marks the document changed.

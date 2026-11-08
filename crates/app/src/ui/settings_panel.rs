@@ -1,11 +1,14 @@
 //! The Settings window's General page (F10, 6): which MIDI input ports play, what the inputs
-//! dropped, the typing keyboard's octave, the hint bar, the audio output device, and the audio
-//! input device a new input channel plays; and the header over both pages, its tabs. One canvas
+//! dropped, the typing keyboard's octave, the hint bar, the zoom, the audio output device, and
+//! the audio input device a new input channel plays; and the header over the three pages, its
+//! tabs.
+//! One canvas
 //! draws the page from [`settings_layout`] positions, under the header that stays while it
 //! scrolls, and reports presses in the page's coordinates (the header's top-left corner is
 //! their origin, so the layout's positions are the window's with the page unscrolled); the app
-//! turns them into changes. A window of its own (it was a panel stacked in
-//! the main window, which could not scroll to its lower options).
+//! turns them into changes. The Theme page reports its own the same way
+//! ([`crate::ui::theme_page`]). A window of its own (it was a panel stacked in the main window,
+//! which could not scroll to its lower options).
 
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::canvas::{self, Event, Frame, Geometry, Text};
@@ -14,34 +17,66 @@ use iced::{mouse, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme,
 use crate::app::Message;
 use crate::audio::OutputChoice;
 use crate::settings::MidiInputs;
+use crate::ui::color_wheel::WheelPart;
+use crate::ui::fonts::size;
+use crate::ui::hint::Hover;
 use crate::ui::settings_layout::{
     tab, tab_at, AudioLayout, Hit, LatencyLayout, Layout, SettingsPage, HEADER_HEIGHT, INSET,
-    SECTION_GAP, TEXT_SIZE, TITLE_SIZE,
 };
+use crate::ui::theme_page::ColorTarget;
 
 /// The Settings window's size at its first opening: the Keys page's table across and the
-/// General page with a few ports and devices down.
-pub const WINDOW_SIZE: Size = Size::new(720.0, 560.0);
+/// General page with a few ports and devices down, in one column (under 800 px: two columns
+/// from there, three from 1200, [`crate::ui::settings_layout::Columns`]).
+pub const WINDOW_SIZE: Size = Size::new(crate::ui::settings_layout::FIRST_WIDTH, 560.0);
 /// The least the window is made: the header's tabs and the first group (the MIDI input's
 /// title, "All ports" and a port or the line saying none was found) always show above the foot
 /// line; the rest scrolls.
 pub const WINDOW_MIN: Size = Size::new(420.0, 240.0);
 
-/// A point of the General page's canvas, which starts under the header, in the page's
-/// coordinates (the header's top-left corner the origin), which the layout gives.
-fn page_point(at: Point) -> Point {
+/// The Settings window's share of the main window's width and height ([`window_size_for`]).
+pub const MAIN_SHARE: (f32, f32) = (0.47, 0.67);
+
+/// The Settings window's size when it opens over a main window `main` big (logical pixels
+/// both): its share of each side ([`MAIN_SHARE`]), rounded to a whole pixel, never under
+/// [`WINDOW_MIN`]. The window keeps it: the user does not resize it. Why: asked a window that
+/// sits over the main one as the user had placed it (906 × 698 over 1916 × 1047), the same
+/// share whatever the screen, its page laid out for that width ([`crate::ui::settings_layout::
+/// Columns`]); a window larger than its monitor is made to fit as every pop-out is.
+pub fn window_size_for(main: Size) -> Size {
+    Size::new(
+        (main.width * MAIN_SHARE.0).round().max(WINDOW_MIN.width),
+        (main.height * MAIN_SHARE.1).round().max(WINDOW_MIN.height),
+    )
+}
+
+/// A point of the General or the Theme page's canvas, which starts under the header, in the
+/// page's coordinates (the header's top-left corner the origin), which the layouts give.
+pub(crate) fn page_point(at: Point) -> Point {
     Point::new(at.x, at.y + HEADER_HEIGHT)
 }
 use crate::ui::style;
 use crate::ui::text_fit::fit_width;
 
 /// What the panel reports.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SettingsMessage {
-    /// A left press at this point of the panel (its header's tabs, or the General page).
+    /// A left press at this point of the window (its header's tabs, the General page or the
+    /// Theme page).
     Pressed(Point),
     /// A left press at this point of the Keys page, under the header.
     KeysPressed(Point),
+    /// The cursor moved to this point of the Theme page while a press on this part of the
+    /// colour wheel is held, wherever the cursor is.
+    WheelDragged(WheelPart, Point),
+    /// The press on the colour wheel let go of.
+    WheelReleased,
+    /// The colour's hex box holds this text, as typed.
+    HexTyped(String),
+    /// Enter in the colour's hex box.
+    HexEntered,
+    /// The Theme page's menu chose what the colour wheel edits.
+    ColorTargetChosen(ColorTarget),
 }
 
 /// What the settings panel shows.
@@ -57,6 +92,8 @@ pub struct SettingsPanel<'a> {
     pub octave: String,
     /// Whether the hint bar shows (a scripted run hides it whatever the settings say).
     pub hints: bool,
+    /// The zoom every window draws at.
+    pub zoom: crate::zoom::Zoom,
     /// The output devices offered, "System default" first, the chosen one marked.
     pub outputs: Vec<OutputChoice>,
     /// What plays now, how it is resampled when it is ("Resampling 44100 → 48000 Hz"), why the
@@ -75,6 +112,11 @@ pub struct SettingsPanel<'a> {
     pub latency_devices: String,
     pub latency: Option<String>,
     pub measuring: bool,
+    /// "Reset to defaults" was pressed once and waits for the second press: it reads "Press
+    /// again to reset".
+    pub reset_armed: bool,
+    /// The page's width (the Settings window's), which decides its columns.
+    pub width: f32,
 }
 
 /// The header across the Settings window: its title and the page tabs, the shown page's lit.
@@ -82,22 +124,22 @@ fn draw_header(frame: &mut Frame, page: SettingsPage, width: f32) {
     frame.fill_rectangle(
         Point::ORIGIN,
         Size::new(width, HEADER_HEIGHT),
-        style::HEADER,
+        style::palette().raised,
     );
     text(
         frame,
         "Settings",
         Point::new(INSET, HEADER_HEIGHT / 2.0),
-        style::TEXT,
-        TEXT_SIZE,
+        style::palette().text,
+        size::LABEL,
     );
     for shown in SettingsPage::ALL {
         let rect = tab(shown);
         let color = if shown == page {
-            frame.fill_rectangle(rect.position(), rect.size(), style::BUTTON);
-            style::TEXT
+            frame.fill_rectangle(rect.position(), rect.size(), style::palette().button);
+            style::palette().text
         } else {
-            style::TEXT_DIM
+            style::palette().text_secondary
         };
         centered(frame, shown.title(), rect.center(), color);
     }
@@ -198,10 +240,10 @@ impl<'a> SettingsPanel<'a> {
         canvas::Canvas::new(self).width(Fill).height(height).into()
     }
 
-    /// The page's height from the header's top: down to its last line (the input latency's
-    /// buttons) and a section's gap under it.
+    /// The page's height from the header's top: down to its last row ("Reset to defaults")
+    /// and a section's gap under it.
     pub fn content_height(&self) -> f32 {
-        self.latency_layout().bottom() + SECTION_GAP
+        self.layout().page_bottom()
     }
 
     /// The lines under the ports: the counts that are not 0, and the problem.
@@ -220,22 +262,27 @@ impl<'a> SettingsPanel<'a> {
             ));
         }
         if let Some(problem) = self.problem {
-            notes.push((problem.to_owned(), style::TEXT_DIM));
+            notes.push((problem.to_owned(), style::palette().text_secondary));
         }
         notes
     }
 
-    /// Where everything is, for what the panel lists now.
+    /// Where everything is, for what the panel lists now and its width.
     pub fn layout(&self) -> Layout {
         Layout {
             ports: self.ports.len(),
             notes: self.notes().len(),
+            outputs: self.outputs.len(),
+            output_lines: self.output_lines().len(),
+            inputs: self.inputs_offered.len(),
+            input_lines: usize::from(self.inputs_problem.is_some()),
+            width: self.width,
         }
     }
 
     /// Where the audio section's parts are.
     pub fn audio_layout(&self) -> AudioLayout {
-        self.layout().audio(self.outputs.len())
+        self.layout().audio()
     }
 
     /// The lines under the output devices: what plays, how it is resampled when it is, why the
@@ -248,21 +295,19 @@ impl<'a> SettingsPanel<'a> {
             .collect()
     }
 
-    /// Where the audio input section's parts are: under the output section.
+    /// Where the audio input section's parts are.
     pub fn input_layout(&self) -> AudioLayout {
-        self.audio_layout()
-            .below(self.output_lines().len(), self.inputs_offered.len())
+        self.layout().input()
     }
 
-    /// Where the input latency section's parts are: under the audio input section and why its
-    /// list is short.
+    /// Where the input latency section's parts are, and "Reset to defaults".
     pub fn latency_layout(&self) -> LatencyLayout {
-        let lines = usize::from(self.inputs_problem.is_some());
-        self.input_layout().latency_below(lines)
+        self.layout().latency()
     }
 
     /// The input latency section: its title, the devices, the figure or "Unknown: takes land
-    /// late", and its buttons (Measure reads "Measuring" while one runs).
+    /// late", and its buttons (Measure reads "Measuring" while one runs); then, under it, the
+    /// page's last row, "Reset to defaults" ("Press again to reset" once pressed).
     fn draw_latency(&self, frame: &mut Frame) {
         let layout = self.latency_layout();
         let title = layout.title();
@@ -270,25 +315,29 @@ impl<'a> SettingsPanel<'a> {
             frame,
             "Input latency (takes of the line in)",
             Point::new(title.x, title.center_y()),
-            style::TEXT,
-            TITLE_SIZE,
+            style::palette().text,
+            size::TITLE,
         );
         let (figure, color) = match &self.latency {
-            Some(words) => (words.as_str(), style::TEXT),
+            Some(words) => (words.as_str(), style::palette().text),
             None => ("Unknown: takes land late", style::WARNING),
         };
         for (line, words, color) in [
-            (0, self.latency_devices.as_str(), style::TEXT_DIM),
+            (
+                0,
+                self.latency_devices.as_str(),
+                style::palette().text_secondary,
+            ),
             (1, figure, color),
         ] {
             let rect = layout.line(line);
-            if let Some(words) = fit_width(words, rect.width, TEXT_SIZE) {
+            if let Some(words) = fit_width(words, rect.width, size::LABEL) {
                 text(
                     frame,
                     &words,
                     Point::new(rect.x, rect.center_y()),
                     color,
-                    TEXT_SIZE,
+                    size::LABEL,
                 );
             }
         }
@@ -297,14 +346,20 @@ impl<'a> SettingsPanel<'a> {
         } else {
             "Measure"
         };
+        let reset = if self.reset_armed {
+            "Press again to reset"
+        } else {
+            "Reset to defaults"
+        };
         for (rect, words) in [
             (layout.measure(), measure),
             (layout.down(), "\u{2212}"),
             (layout.up(), "+"),
             (layout.clear(), "Clear"),
+            (layout.reset(), reset),
         ] {
-            frame.fill_rectangle(rect.position(), rect.size(), style::BUTTON);
-            centered(frame, words, rect.center(), style::TEXT);
+            frame.fill_rectangle(rect.position(), rect.size(), style::palette().button);
+            centered(frame, words, rect.center(), style::palette().text);
         }
     }
 
@@ -317,8 +372,8 @@ impl<'a> SettingsPanel<'a> {
             frame,
             "Audio input (new input channels)",
             Point::new(title.x, title.center_y()),
-            style::TEXT,
-            TITLE_SIZE,
+            style::palette().text,
+            size::TITLE,
         );
         for (index, choice) in self.inputs_offered.iter().enumerate() {
             draw_choice(
@@ -332,9 +387,15 @@ impl<'a> SettingsPanel<'a> {
         }
         if let Some(problem) = &self.inputs_problem {
             let rect = layout.line(0);
-            if let Some(words) = fit_width(problem, rect.width, TEXT_SIZE) {
+            if let Some(words) = fit_width(problem, rect.width, size::LABEL) {
                 let at = Point::new(rect.x, rect.center_y());
-                text(frame, &words, at, style::TEXT_DIM, TEXT_SIZE);
+                text(
+                    frame,
+                    &words,
+                    at,
+                    style::palette().text_secondary,
+                    size::LABEL,
+                );
             }
         }
     }
@@ -350,8 +411,8 @@ impl<'a> SettingsPanel<'a> {
             frame,
             "Audio output",
             Point::new(title.x, title.center_y()),
-            style::TEXT,
-            TITLE_SIZE,
+            style::palette().text,
+            size::TITLE,
         );
         for (index, choice) in self.outputs.iter().enumerate() {
             draw_choice(
@@ -365,9 +426,15 @@ impl<'a> SettingsPanel<'a> {
         }
         for (line, words) in self.output_lines().into_iter().enumerate() {
             let rect = audio.line(line);
-            if let Some(words) = fit_width(words, rect.width, TEXT_SIZE) {
+            if let Some(words) = fit_width(words, rect.width, size::LABEL) {
                 let at = Point::new(rect.x, rect.center_y());
-                text(frame, &words, at, style::TEXT_DIM, TEXT_SIZE);
+                text(
+                    frame,
+                    &words,
+                    at,
+                    style::palette().text_secondary,
+                    size::LABEL,
+                );
             }
         }
     }
@@ -380,8 +447,8 @@ impl<'a> SettingsPanel<'a> {
                 frame,
                 words,
                 Point::new(rect.x, rect.center_y()),
-                style::TEXT,
-                TITLE_SIZE,
+                style::palette().text,
+                size::TITLE,
             );
         };
         title(frame, layout.midi_title(), "MIDI input");
@@ -397,8 +464,8 @@ impl<'a> SettingsPanel<'a> {
                 frame,
                 "No MIDI input ports found",
                 at,
-                style::TEXT_DIM,
-                TEXT_SIZE,
+                style::palette().text_secondary,
+                size::LABEL,
             );
         }
         for (line, (words, color)) in self.notes().into_iter().enumerate() {
@@ -408,7 +475,7 @@ impl<'a> SettingsPanel<'a> {
                 &words,
                 Point::new(rect.x, rect.center_y()),
                 color,
-                TEXT_SIZE,
+                size::LABEL,
             );
         }
         title(frame, layout.typing_title(), "Typing keyboard");
@@ -417,37 +484,56 @@ impl<'a> SettingsPanel<'a> {
             frame,
             "Octave",
             Point::new(row.x, row.center_y()),
-            style::TEXT,
-            TEXT_SIZE,
+            style::palette().text,
+            size::LABEL,
         );
         for (rect, glyph) in [
             (layout.octave_down(), "\u{2212}"),
             (layout.octave_up(), "+"),
         ] {
-            frame.fill_rectangle(rect.position(), rect.size(), style::BUTTON);
-            centered(frame, glyph, rect.center(), style::TEXT);
+            frame.fill_rectangle(rect.position(), rect.size(), style::palette().button);
+            centered(frame, glyph, rect.center(), style::palette().text);
         }
         centered(
             frame,
             &self.octave,
             layout.octave_name().center(),
-            style::TEXT,
+            style::palette().text,
         );
         title(frame, layout.hints_title(), "Hints");
         let checkbox = layout.hints_checkbox();
         let fill = if self.hints {
-            style::ACCENT
+            style::accent()
         } else {
-            style::KNOB_RING
+            style::palette().knob_ring
         };
         frame.fill_rectangle(checkbox.position(), checkbox.size(), fill);
         let row = layout.hints_row();
         text(
             frame,
             "Show hints at the window's foot",
-            Point::new(crate::ui::settings_layout::LABEL_X, row.center_y()),
-            style::TEXT,
-            TEXT_SIZE,
+            Point::new(row.x + crate::ui::settings_layout::LABEL_X, row.center_y()),
+            style::palette().text,
+            size::LABEL,
+        );
+        title(frame, layout.display_title(), "Display");
+        let row = layout.zoom_row();
+        text(
+            frame,
+            "Zoom",
+            Point::new(row.x, row.center_y()),
+            style::palette().text,
+            size::LABEL,
+        );
+        for (rect, glyph) in [(layout.zoom_down(), "\u{2212}"), (layout.zoom_up(), "+")] {
+            frame.fill_rectangle(rect.position(), rect.size(), style::palette().button);
+            centered(frame, glyph, rect.center(), style::palette().text);
+        }
+        centered(
+            frame,
+            &self.zoom.to_string(),
+            layout.zoom_value().center(),
+            style::palette().text,
         );
         self.draw_audio(frame);
         self.draw_inputs(frame);
@@ -457,18 +543,23 @@ impl<'a> SettingsPanel<'a> {
     /// A row of the MIDI section: its checkbox, ticked when `on`, and its words.
     fn draw_row(&self, frame: &mut Frame, layout: &Layout, row: usize, words: &str, on: bool) {
         let checkbox = layout.checkbox(row);
-        let fill = if on { style::ACCENT } else { style::KNOB_RING };
+        let fill = if on {
+            style::accent()
+        } else {
+            style::palette().knob_ring
+        };
         frame.fill_rectangle(checkbox.position(), checkbox.size(), fill);
         let label = layout.label(row);
         // Why cut as well as clipped: the software renderer draws a clipped frame's text whole.
-        if let Some(words) = fit_width(words, label.width, TEXT_SIZE) {
-            clipped_text(frame, label, &words, style::TEXT);
+        if let Some(words) = fit_width(words, label.width, size::LABEL) {
+            clipped_text(frame, label, &words, style::palette().text);
         }
     }
 }
 
-/// Row `index` of an audio section: its round mark (a dot in it when `chosen`), then `words`,
-/// dim when the device is `missing`.
+/// Row `index` of an audio section: its round mark in an unticked checkbox's tone, a dot in it in
+/// the accent when `chosen` (as a ticked checkbox is; it was the text's grey, hard to see on the
+/// mark's grey), then `words`, dim when the device is `missing`.
 fn draw_choice(
     frame: &mut Frame,
     layout: &AudioLayout,
@@ -481,21 +572,21 @@ fn draw_choice(
     let radius = mark.width / 2.0;
     frame.fill(
         &canvas::Path::circle(mark.center(), radius),
-        style::KNOB_RING,
+        style::palette().knob_ring,
     );
     if chosen {
         frame.fill(
             &canvas::Path::circle(mark.center(), radius / 2.0),
-            style::TEXT,
+            style::accent(),
         );
     }
     let label = layout.label(index);
     let color = if missing {
-        style::TEXT_DIM
+        style::palette().text_disabled
     } else {
-        style::TEXT
+        style::palette().text
     };
-    if let Some(words) = fit_width(words, label.width, TEXT_SIZE) {
+    if let Some(words) = fit_width(words, label.width, size::LABEL) {
         clipped_text(frame, label, &words, color);
     }
 }
@@ -509,11 +600,11 @@ fn clipped_text(frame: &mut Frame, label: Rectangle, words: &str, color: Color) 
     let label = label + up;
     frame.with_clip(label, |frame| {
         let at = Point::new(label.x, label.center_y());
-        text(frame, words, at, color, TEXT_SIZE);
+        text(frame, words, at, color, size::LABEL);
     });
 }
 
-fn text(frame: &mut Frame, words: &str, at: Point, color: Color, size: f32) {
+pub(crate) fn text(frame: &mut Frame, words: &str, at: Point, color: Color, size: f32) {
     frame.fill_text(Text {
         content: words.to_owned(),
         position: at,
@@ -524,12 +615,12 @@ fn text(frame: &mut Frame, words: &str, at: Point, color: Color, size: f32) {
     });
 }
 
-fn centered(frame: &mut Frame, words: &str, at: Point, color: Color) {
+pub(crate) fn centered(frame: &mut Frame, words: &str, at: Point, color: Color) {
     frame.fill_text(Text {
         content: words.to_owned(),
         position: at,
         color,
-        size: TEXT_SIZE.into(),
+        size: size::LABEL.into(),
         align_x: Horizontal::Center.into(),
         align_y: Vertical::Center,
         ..Text::default()
@@ -537,12 +628,9 @@ fn centered(frame: &mut Frame, words: &str, at: Point, color: Color) {
 }
 
 impl SettingsPanel<'_> {
-    /// What the hint bar names at `at`: a MIDI, typing or hints control, or an output device.
-    fn hover_at(&self, at: Point) -> Option<crate::ui::hint::Hover> {
-        use crate::ui::hint::Hover;
-        if let Some(page) = tab_at(at) {
-            return Some(Hover::Setting(Hit::Page(page)));
-        }
+    /// What the hint bar names at `at`: a MIDI, typing, hints or zoom control, or an output
+    /// or input device, or the input latency's buttons.
+    fn hover_at(&self, at: Point) -> Option<Hover> {
         if let Some(index) = self.audio_layout().hit(at) {
             let choice = self.outputs.get(index)?;
             return Some(Hover::Output(output_words(choice)));
@@ -560,22 +648,22 @@ impl SettingsPanel<'_> {
 
 impl canvas::Program<Message> for SettingsPanel<'_> {
     /// What the cursor was over last.
-    type State = Option<crate::ui::hint::Hover>;
+    type State = Option<Hover>;
 
     fn update(
         &self,
-        hovered: &mut Option<crate::ui::hint::Hover>,
+        hovered: &mut Option<Hover>,
         event: &Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                cursor.position_in(bounds).map(|at| {
-                    let at = page_point(at);
+                let at = page_point(cursor.position_in(bounds)?);
+                Some(
                     canvas::Action::publish(Message::Settings(SettingsMessage::Pressed(at)))
-                        .and_capture()
-                })
+                        .and_capture(),
+                )
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let now = cursor
@@ -589,7 +677,7 @@ impl canvas::Program<Message> for SettingsPanel<'_> {
 
     fn draw(
         &self,
-        _state: &Option<crate::ui::hint::Hover>,
+        _hovered: &Option<Hover>,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -597,7 +685,7 @@ impl canvas::Program<Message> for SettingsPanel<'_> {
     ) -> Vec<Geometry> {
         // Why no cache: a handful of rectangles and lines, and the counts change as they come.
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::RACK_WELL);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().bg);
         frame.translate(Vector::new(0.0, -HEADER_HEIGHT));
         self.draw_body(&mut frame);
         vec![frame.into_geometry()]
@@ -605,17 +693,42 @@ impl canvas::Program<Message> for SettingsPanel<'_> {
 
     fn mouse_interaction(
         &self,
-        _state: &Option<crate::ui::hint::Hover>,
+        _hovered: &Option<Hover>,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        let over = cursor
+        match cursor
             .position_in(bounds)
-            .and_then(|at| self.hover_at(page_point(at)));
-        if over.is_some() {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
+            .and_then(|at| self.hover_at(page_point(at)))
+        {
+            Some(_) => mouse::Interaction::Pointer,
+            None => mouse::Interaction::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::settings_layout::Columns;
+
+    // The Settings window's size by hand from the main window's: 0.47 and 0.67 of each side,
+    // rounded to a whole pixel. 1920 × 1080: 902.4 → 902, 723.6 → 724, its page in two columns
+    // (902 is 800 or more); 2560 × 1440: 1203.2 → 1203, 964.8 → 965, three (1200 or more);
+    // 1280 × 800: 601.6 → 602, 536, one, above the least (420 × 240) so as it is; a main
+    // window of 800 × 300: 376 and 201, under the least, so 420 × 240.
+    #[test]
+    fn the_settings_window_takes_its_share_of_the_main_window() {
+        let table = [
+            (Size::new(1920.0, 1080.0), Size::new(902.0, 724.0), 2),
+            (Size::new(2560.0, 1440.0), Size::new(1203.0, 965.0), 3),
+            (Size::new(1280.0, 800.0), Size::new(602.0, 536.0), 1),
+            (Size::new(800.0, 300.0), Size::new(420.0, 240.0), 1),
+        ];
+        for (main, settings, columns) in table {
+            let size = window_size_for(main);
+            assert_eq!(size, settings, "{main:?}");
+            assert_eq!(Columns::of(size.width).count, columns, "{main:?}");
         }
     }
 }

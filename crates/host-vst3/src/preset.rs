@@ -116,7 +116,7 @@ mod tests {
         bytes
     }
 
-    // 4. The sine's gain-0.5 preset is the 116 bytes the spec gives (by hand from
+    // The sine's gain-0.5 preset is 116 bytes (by hand from
     // vstpresetfile.cpp's layout): header, the 12 bytes of the component and the 8 of the
     // controller, the list of two; it reads back as it was written.
     #[test]

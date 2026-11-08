@@ -196,7 +196,7 @@ mod tests {
         list.try_into().expect("five words")
     }
 
-    // W0. The XEmbed messages' words: time 0, the opcode, the detail, data1, data2 (EMBEDDED_NOTIFY
+    // The XEmbed messages' words: time 0, the opcode, the detail, data1, data2 (EMBEDDED_NOTIFY
     // names our window, version 0; FOCUS_IN's detail is CURRENT).
     #[test]
     fn the_xembed_words_are_the_protocols() {
@@ -277,7 +277,7 @@ mod tests {
         );
     }
 
-    // W7's rules: our window's focus in (detail Nonlinear, 3) activates and focuses every embedded
+    // The focus rules: our window's focus in (detail Nonlinear, 3) activates and focuses every embedded
     // client, its focus out unfocuses and deactivates them; the focus moving inside our window
     // (Inferior) or to the pointer's (Pointer) is nothing; a child embedded while ours has the
     // focus is activated and focused after it is told it is embedded and mapped.

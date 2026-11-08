@@ -17,12 +17,13 @@ The rules:
             (X11EmbedWindowID on Linux), then for the window (Linux: an X connection; none: the
             editor is let go and the reason is "Plugin windows need X11 (XWayland)"), the
             editor's size (640x480 when it will not say) and whether it resizes, opens a window
-            of ours of that size, gives the editor its frame, attaches it to our window and asks
-            its size once more. The editor answers 400x300 and resizes unless it is told it is
-            fixed; given a frame that answers IRunLoop it makes its own window, a child of ours
-            of its size with _XEMBED_INFO [0, 1] (version 0, MAPPED), which it does not map, and
-            registers two file descriptors with the frame's run loop (its X connection, a
-            pipe's read end); a frame without one is refused (DPF's rule).
+            of ours of that size, gives the editor its frame, attaches it to our window, tells it
+            the scale its window is drawn at (see "scale") and asks its size once more. The
+            editor answers 400x300 and resizes unless it is told it is fixed; given a frame that
+            answers IRunLoop it makes its own window, a child of ours of its size with
+            _XEMBED_INFO [0, 1] (version 0, MAPPED), which it does not map, and registers two file
+            descriptors with the frame's run loop (its X connection, a pipe's read end); a frame
+            without one is refused (DPF's rule).
   xembed    our window hears its children (SUBSTRUCTURE_NOTIFY) and its focus (FOCUS_CHANGE)
             besides itself (STRUCTURE_NOTIFY); a child that appears in it is watched
             (PROPERTY_CHANGE | STRUCTURE_NOTIFY) and its _XEMBED_INFO read; with one it is
@@ -43,6 +44,18 @@ The rules:
             editor has it); our window's own echo of a size is then nothing. A window manager
             may hold our window bigger than asked (KWin keeps a managed window at least 2x48, so
             0x0's 1x1 is not given): what it gives comes back as a user's resize.
+  scale     opening an editor, the host tells it the scale the window it opens in is drawn at,
+            the desktop's (the app's windows' own scale, its zoom not in it): VST3's
+            IPlugViewContentScaleSupport::setContentScaleFactor after attached (the SDK: "The
+            host calls setContentScaleFactor directly before or after the plug-in view is
+            attached"), before its size is asked once more; CLAP's set_scale first in the
+            embedded order, right after create (the gui extension: "If embedded: Set the plugin's
+            GUI scaling using `set_scale`", then can_resize, get_size or set_size, set_parent; X11
+            and Win32 use physical pixels, so the host sets it). A floating CLAP window is the
+            plugin's: no set_scale. These tests open every editor at 1.5 (a 4K screen at 150 %).
+            The VST3 editor logs "setContentScaleFactor 1.5" and takes it (kResultOk) without
+            resizing; the CLAP interface logs "set_scale 1.5" and refuses it (it takes the window
+            system's scale), which the host lets be. Never a key, wheel or focus call.
   close     the window's close button (WM_DELETE_WINDOW), releasing the plugin, or the host
             going: the editor is removed, its frame taken away (setFrame null) and let go ("view
             freed"), our window closed; the plugin's parts then terminate, the controller first,
@@ -54,13 +67,13 @@ The rules:
             5 words: the window, value-mask width | height (4 | 8), the two sides held to
             1..32767), little-endian as this machine sends it.
   clap      CLAP's test interface (crates/test-plugin, `org.dawsome.test.gui` in the file
-            dawsome_test_gui.clap): the host asks whether it takes X11 embedded, creates it, asks
-            its size (400x300) and whether it resizes (yes, unless it is told it is fixed), opens
-            our window of that size (a fixed one with its least and most size that size), gives
-            it our window as its parent and shows it; the interface makes its own window, a
-            child of ours of its size, and maps it. Its adjust_size holds a size to 200..1600 x
-            150..1200, then to the largest 4:3 size inside that (Surge XT's interface holds its
-            aspect too). A plugin's request_resize is answered true and the interface takes the
+            dawsome_test_gui.clap): the host asks whether it takes X11 embedded, creates it, tells
+            it the scale (see "scale"), asks its size (400x300) and whether it resizes (yes,
+            unless it is told it is fixed), opens our window of that size (a fixed one with its
+            least and most size that size), gives it our window as its parent and shows it; the
+            interface makes its own window, a child of ours of its size, and maps it. Its
+            adjust_size holds a size to 200..1600 x 150..1200, then to the largest 4:3 size inside
+            that (Surge XT's interface holds its aspect too). A plugin's request_resize is answered true and the interface takes the
             size at once; our window takes it unless it is the size kept (a fixed one's least
             and most size too), and is kept; no adjust_size or set_size. A user's resize (our
             window's own ConfigureNotify, the last of a tick's): equal to the size kept, or a
@@ -196,10 +209,16 @@ def size_text(size):
     return "%dx%d" % size
 
 
+# The scale every editor of these tests is opened at, and the text the test plugins log it as
+# (Rust's `{}` of 1.5, f64 and f32 alike: exact in binary).
+SCALE, SCALE_TEXT = 1.5, "1.5"
+assert float(SCALE_TEXT) == SCALE
+
+
 def open_log(fixed=False):
     return ["createView editor", "isPlatformTypeSupported X11EmbedWindowID", "getSize " + size_text(SIZE),
             "canResize " + ("no" if fixed else "yes"), "setFrame frame runloop", "attached X11EmbedWindowID",
-            "getSize " + size_text(SIZE)]
+            "setContentScaleFactor " + SCALE_TEXT, "getSize " + size_text(SIZE)]
 
 
 class Frame:
@@ -265,7 +284,7 @@ def plugin_resizes():
 
 
 RESIZES, FIXED_RESIZE = plugin_resizes()
-# By hand (the spec's W4): a first resize sizes both windows and calls onSize; the same size again
+# By hand: a first resize sizes both windows and calls onSize; the same size again
 # is answered true with no onSize; inside onSize a second resizeView is refused; 0x0 is 1x1.
 assert [s["log"] for s in RESIZES] == [
     ["onSize 300x200", "resizeView 300x200 -> true"], ["resizeView 300x200 -> true"],
@@ -321,7 +340,7 @@ FOCUS = {
     "out": {"detail": NOTIFY_NONLINEAR, "heard": ["focus_out", "window_deactivate"]},
     "out_inferior": {"detail": NOTIFY_INFERIOR, "heard": []},
     "in_pointer": {"detail": NOTIFY_POINTER, "heard": []},
-    "never": ["setContentScaleFactor", "onKeyDown", "onKeyUp", "onWheel", "onFocus"],
+    "never": ["onKeyDown", "onKeyUp", "onWheel", "onFocus"],
 }
 CLASS = "dawsome-test"
 PINS = {
@@ -374,7 +393,8 @@ def clap_adjust(size):
 
 
 def clap_open_log(fixed=False):
-    return ["is_api_supported x11 embedded", "create x11 embedded", "get_size " + size_text(CLAP_SIZE),
+    return ["is_api_supported x11 embedded", "create x11 embedded", "set_scale " + SCALE_TEXT,
+            "get_size " + size_text(CLAP_SIZE),
             "can_resize " + ("no" if fixed else "yes"), "set_parent", "show"]
 
 
@@ -482,6 +502,7 @@ EXPECTED = {
                "nonzero": sum(1 for v in RENDER if v != 0.0),
                "probes": [[k, RENDER[k]] for k in (S0 - 1, S0, S0 + 1, S1 - 1, S1)]},
     "size": list(SIZE),
+    "scale": SCALE,
     "constraint": {"least": list(LEAST), "most": list(MOST)},
     "open_log": open_log(),
     "open_heard": ["embedded_notify", "mapped"],

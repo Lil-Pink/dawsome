@@ -37,6 +37,9 @@ mod test_plugins;
 
 /// Set in the child [`in_temp_home`] starts.
 const CHILD: &str = "DAWSOME_REAL_WINDOW_CHILD";
+/// The scale the plugins' windows are opened at: a desktop at 100 %, as these tests have always
+/// opened them (Dawsome told no scale before), so what they check stays what they saw.
+const SCALE: f64 = 1.0;
 
 /// Whether this is the child that does `test`'s work (see real_plugins.rs's twin).
 fn in_temp_home(test: &str) -> bool {
@@ -230,7 +233,7 @@ fn three_cycles_and_quit(catalogue: Catalogue, name: &str, kind: PluginKind) {
     for cycle in 1..=4 {
         let opened = Instant::now();
         assert_eq!(
-            host.open_editor(owner, name),
+            host.open_editor(owner, name, SCALE),
             Ok(Editor::Embedded),
             "{name}, cycle {cycle}"
         );

@@ -64,7 +64,7 @@ The rules:
                  dithered: the tops stay 32767, the rest the dither alone
   p25_expected.json  each case: its inputs and what the tests compare
 
-The cases (the spec's):
+The cases:
   (1) pitched   up and down to the bit, through the command line (32-bit float renders)
   (2) loop      the seams wrap through the loop (continuous, and sustain with an offset inside
                 its loop, released after wrapping), to the bit

@@ -90,6 +90,9 @@ pub enum ParamTarget {
     /// Parameter `id` (the plugin's own number for it) of the plugin `owner` plays. The plugin
     /// holds the value: no plan carries it, and the next plan does not reset it.
     Plugin { owner: ProcessorOwner, id: u32 },
+    /// Parameter `param` (its index in the processor's parameter list) of the synth a channel
+    /// plays.
+    Instrument { channel: ChannelId, param: u16 },
 }
 
 /// The tempo in force from `start_tick` on: tick `t` falls at

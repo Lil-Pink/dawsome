@@ -1,4 +1,4 @@
-//! How long a sound's edits take on the spec's 10x load: a ten-minute stereo sound at 48 kHz
+//! How long a sound's edits take on a 10x load: a ten-minute stereo sound at 48 kHz
 //! (28,800,000 frames, 230 MB as f32) through 200 ops, applied from scratch (what an undo, a
 //! redo or a project's opening costs) and one op at a time on the sound held (what appending an
 //! op costs), then the long result written into an edited cache folder and found there again,

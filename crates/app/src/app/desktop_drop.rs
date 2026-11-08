@@ -114,7 +114,7 @@ impl App {
         };
         match (self.host.pointer)(window) {
             Some((x, y)) => {
-                let scale = self.scale_factor.max(f32::MIN_POSITIVE);
+                let scale = self.device_scale().max(f32::MIN_POSITIVE);
                 Asked::At {
                     device: (x, y),
                     at: Point::new(x as f32 / scale, y as f32 / scale),
@@ -289,10 +289,12 @@ mod tests {
     /// The app on `dir`'s p8_ui (44.1 kHz, 120 BPM, PPQ 96: a bar is 384 ticks; eight tracks,
     /// track 1 holding an audio clip over 0..768 and track 2 an automation clip over 0..384),
     /// the playlist alone in a 1000 × 560 window, the hint bar off, its canvases laid out: the
-    /// tracks area is 560 − 64 − 24 − 28 − 10 = 434 px tall (the toolbar 64 px),
-    /// so the eight tracks and the "+ Track" row fit lanes of floor(434 / 9) − 1 = 47 px, a row
-    /// every 48 px; 64 px a bar
-    /// from x 120, scrolled to tick 0.
+    /// tracks area is 560 − 64 − 24 − 28 − 10 = 434 px tall (the toolbar 64 px), where the
+    /// eight tracks share 434 − 24 − 1 = 409 px: lanes of floor(409 / 8) − 1 = 50 px, a row
+    /// every 51 px, all eight whole (8 · 51 − 1 = 407) and the "+ Track" row right under them,
+    /// y 408..432; 64 px a bar from x 120, scrolled to tick 0. (Lanes of floor(434 / 9) − 1 = 47
+    /// px, a row every 48, while that row took a lane's share; of 64 px, 6 rows, while 64 was
+    /// the fitted lanes' floor.)
     fn drop_app(dir: &Path) -> (App, Player, Window) {
         let path = dir.join("p8_ui.json");
         let project = project_file::open(&path).expect("p8_ui opens").project;
@@ -316,7 +318,11 @@ mod tests {
             app.arranger.panel(),
             Rectangle::new(Point::new(0.0, TOOLBAR_HEIGHT), Size::new(1000.0, 496.0))
         );
-        assert_eq!(app.arranger.grid.lane, 47.0);
+        assert_eq!(
+            (app.arranger.grid.lane, app.arranger.grid.rows()),
+            (50.0, 8)
+        );
+        assert!(app.arranger.grid.shows_add_track(8));
         (app, player, window)
     }
 
@@ -329,8 +335,10 @@ mod tests {
         let _ = app.update(Message::Playlist(PlaylistMessage::SnapSelected(snap)));
     }
 
-    /// Track 3's lane (row 2, tracks y 96..143, window y 212..259) at window x 270, 150 px into
+    /// Track 3's lane (row 2, tracks y 102..152, window y 218..268) at window x 270, 150 px into
     /// the timeline: tick floor(150 · 384 / 64) = 900, which Beat (96 ticks) floors to 864.
+    /// Read at tracks y 114, window 230, as in the 47 px lanes' row 2, 96..143. (Pin moved for
+    /// an afternoon to y 150: y 114 is track 2's lane, 65..129, in 64 px lanes.)
     const ON_TRACK_3: Point = Point::new(270.0, TRACKS_TOP + 114.0);
 
     fn clip_of(app: &App, id: u32) -> (TrackId, Ticks, Ticks, Option<ChannelId>) {
@@ -485,19 +493,27 @@ mod tests {
         assert_eq!(app.session.history().undo_len(), 1);
     }
 
-    // Below the last track (tracks y 400 is row 8, the "+ Track" row's, past the eight tracks)
-    // the drop adds track 9, "Track 9", as "+ Track" would, and lands on it. At x 220, 100 px
-    // into the timeline, tick floor(100 · 384 / 64) = 600, which the Snap's Bar floors to 384
-    // (rounded to the nearest bar it would be 768). One undo takes the track, the channel and
-    // the clip back.
+    // Below the last track the drop adds track 9, "Track 9", as "+ Track" would, and lands on
+    // it: the "+ Track" row's band is tracks y 408..432 across the lanes, right under track 8's
+    // lane (357..407), and tracks y 420 is in it. Under the band, y 433, the 2 px of the well
+    // take nothing. (Pins moved: tracks y 400 was row 8, an empty row a lane tall past the eight
+    // tracks in 47 px lanes, before the "+ Track" row took its own 24 px; for an afternoon the
+    // eight tracks scrolled in 64 px lanes and the drop was made scrolled to the last.) At x 220,
+    // 100 px into the timeline, tick floor(100 · 384 / 64) = 600, which the Snap's Bar floors to
+    // 384 (rounded to the nearest bar it would be 768). One undo takes the track, the channel
+    // and the clip back.
     #[test]
     fn p8_a_drop_below_the_last_track_adds_a_track_for_it() {
         let dir = project_dir("below_the_last_track");
         let (mut app, _player, mut window) = drop_app(&dir);
         assert_eq!(app.arranger.snap, ClipSnap::Bar);
-        let before = document(&app);
         let tone = dir.join("sounds/tone.wav");
-        let below = Point::new(220.0, TRACKS_TOP + 400.0);
+        let untouched = document(&app);
+        let well = Point::new(220.0, TRACKS_TOP + 433.0);
+        window.drop_files(&mut app, std::slice::from_ref(&tone), seen(well));
+        assert_eq!(document(&app), untouched, "the well takes nothing");
+        let below = Point::new(220.0, TRACKS_TOP + 420.0);
+        let before = document(&app);
         window.drop_files(&mut app, std::slice::from_ref(&tone), seen(below));
         let tracks = &app.session.project().playlist.tracks;
         assert_eq!(tracks.len(), 9);
@@ -557,14 +573,40 @@ mod tests {
     ) -> (App, Player, Window) {
         let (mut app, player, window) = drop_app(dir);
         app.main_native = Some(1);
-        app.scale_factor = 1.5;
+        app.os_scale = 1.5;
         app.host.pointer = pointer;
         (app, player, window)
     }
 
+    // Known answer: the window system gives the pointer in the window's
+    // device pixels, which are the system's scale times the zoom per window point: at device
+    // (1000, 500) with the system at 1.0 and the zoom at 125 %, 1000 / 1.25 and 500 / 1.25, so
+    // window point (800, 400); at 100 % (1000, 500) itself.
+    #[test]
+    fn a_dropped_pointer_is_divided_by_the_system_scale_and_the_zoom() {
+        let dir = project_dir("pointer_zoomed");
+        let (mut app, _player, _window) = drop_app(&dir);
+        app.main_native = Some(1);
+        app.host.pointer = |_| Some((1000, 500));
+        assert_eq!(app.os_scale, 1.0);
+        let at = |app: &App| match app.ask_pointer() {
+            super::Asked::At { at, .. } => at,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(at(&app), Point::new(1000.0, 500.0));
+        let _ = app.update(Message::Zoom(crate::zoom::Step::Larger));
+        let _ = app.update(Message::Zoom(crate::zoom::Step::Larger));
+        let _ = app.update(Message::Zoom(crate::zoom::Step::Larger));
+        assert_eq!(app.zoom().percent(), 125);
+        assert_eq!(at(&app), Point::new(800.0, 400.0));
+        std::fs::remove_dir_all(&dir).expect("removed");
+    }
+
     // Known answer: the window saw no cursor (as during a drag from another window) and the
     // window system says the pointer is at device pixel (405, 357) of the main window: at scale
-    // 1.5 that is window point (270, 238), track 3's lane at x 270, so with the Snap on Beat the
+    // 1.5 that is window point (270, 238), tracks y 122, track 3's lane (102..152) at x 270 (it
+    // was (405, 399) for an afternoon, while 64 px lanes put track 2 there), so with the Snap on
+    // Beat the
     // clip lands on track 3 from tick 864, as above. No widget takes the drop; the window's
     // listener hands it on, and the pointer asked decides.
     #[test]
@@ -588,9 +630,11 @@ mod tests {
 
     // The pointer the window system gives wins over the cursor the window saw last: seen over
     // the ruler (window 300, 110), where a drop lands nowhere, while the system says device
-    // pixel (330, 786), window point (220, 524) at scale 1.5: tracks y 400, row 8, below the
-    // last of the eight tracks, tick 600 floored to the Bar, 384. So track 9 is added and the
-    // clip lands on it from tick 384, as a drop there with the cursor seen there does.
+    // pixel (330, 786), window point (220, 524) at scale 1.5: tracks y 408, the first row of the
+    // "+ Track" row's band (408..432) under the last of the eight tracks, tick 600 floored to the
+    // Bar, 384. So track 9 is added and the clip lands on it from tick 384, as a drop there with
+    // the cursor seen there does. (Tracks y 408 was row 8 of the 47 px lanes, an empty row a
+    // lane tall; for an afternoon the pixel was (330, 774), the tracks scrolled in 64 px lanes.)
     #[test]
     fn p8_the_window_systems_pointer_wins_over_the_cursor_seen() {
         let dir = project_dir("pointer_wins");

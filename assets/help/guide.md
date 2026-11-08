@@ -47,14 +47,15 @@ open the ones you need and close the rest.
 ## The panels
 Each panel has a key that opens it, and the same key hides it again:
 - **Library** (**5** or **F8**): your sounds, instruments and MIDI devices, down the left side.
-- **Channel rack** (**1** or **F6**): a row for each sound, with a grid of steps for clicking in a
+- **Channel Rack** (**1** or **F6**): a row for each sound, with a grid of steps for clicking in a
   beat.
 - **Playlist** (**2** or **F5**): the tracks where you lay out your patterns, left to right in
   time.
 - **Piano roll** (**3** or **F7**): a grid of notes, for melodies, bass lines and chords.
 - **Mixer** (**4** or **F9**): where you balance your sounds and add effects.
 - **Settings** (**6** or **F10**, or **Edit → Settings…**): a window of its own, for your
-  speakers, your MIDI keyboard and the keys.
+  speakers, your MIDI keyboard, the keys and the colours, on three pages: **General**, **Keys**
+  and **Theme**.
 
 The six small buttons near the right end of the toolbar open and close the panels too. The lit
 ones are open.
@@ -79,8 +80,8 @@ Further along, the position counts bar : step : tick as the song plays, and a sw
 computer keyboard play notes. The panel buttons, the **File** and **Edit** menus and **Help** sit
 at the right end.
 
-The tempo is your song's speed, in beats per minute (BPM). Drag it left or right, scroll over
-it, or click it and type a number. **Stop** takes you back to where the song plays from.
+The tempo is your song's speed, in beats per minute (BPM), such as 120.0. Drag it left or
+right, scroll over it, or click it and type a number. **Stop** takes you back to where the song plays from.
 
 ![The left of the toolbar: Play, Stop, Record, the metronome, the tempo and the pattern box](toolbar.png)
 
@@ -88,6 +89,24 @@ it, or click it and type a number. **Stop** takes you back to where the song pla
 The line at the bottom of the window tells you about whatever is under the mouse: its name, its
 value, and what a click or a drag does to it. Whenever you're not sure what something is, point at
 it and read the hint bar. You can switch it off and on in Settings, under **Hints**.
+
+## Larger or smaller
+If the text is hard to read, or everything looks too big, change the zoom. Press **Ctrl+=** to
+make every window larger, a step at a time, and **Ctrl+-** to make it smaller. **Ctrl+0** goes
+back to 100 %. You can set it in Settings too, under **Display** on the **General** page.
+Dawsome keeps it for the next time. A plugin's own window keeps its size: it is drawn by the
+plugin, at your screen's own scale.
+
+## Colours
+For another look, open Settings (**6**), click the **Theme** tab at the top and choose a theme:
+**Graphite** (the one you start with), **Slate** (darker), **Gilt** (gold on deep green),
+**Garnet** (rose gold on deep plum) or **Fjord** (ice blue on deep navy). The two small squares
+on each show its colours. Every window changes at once. Your clips, notes, lights and meters
+keep their colours in every theme.
+Under them, **Colours** has one colour wheel and a menu over it. On **Accent** it sets the
+colour of what is lit and selected to any colour you like: drag on the wheel, or type one such as
+#3FA7D6 and press Enter; **Theme's own** puts it back. On **Piano roll notes** it sets the colour
+of the notes in the piano roll; **Channel's own** gives each channel its colour back.
 
 ## Speakers or headphones
 To choose where the sound goes, open Settings (**6**) and look under **Audio output**. It lists
@@ -112,8 +131,9 @@ already in the rack: Kick 909, Snare, Hat closed and Clap.
 right wherever you play them: a piano, basses, guitars, an organ, pads, strings, a marimba, drum
 kits and more, grouped by kind.
 
-**Plugins** lists the CLAP and VST® 3 plugins on your computer, such as Surge XT, a synthesizer
-that comes with Dawsome. A VST3 one says VST3 at the end of its row.
+**Plugins** starts with **Dawsome Synth**, Dawsome's own synthesizer (see **Dawsome Synth**),
+then lists the CLAP and VST® 3 plugins on your computer, such as Surge XT, a synthesizer that
+comes with Dawsome. A VST3 one says VST3 at the end of its row.
 
 To try a sound and add it:
 - Click a sound or a set once to hear a short preview.
@@ -122,7 +142,7 @@ To try a sound and add it:
 - Or drag it onto the rack, or onto a track of the Playlist.
 
 The search box at the top of the Library finds a sound by its name. In the rack, **+
-Instrument…** at the top, or **+** under the last row, offers the same sounds as a list.
+Instrument…** under the last channel offers the same sounds as a list.
 
 ## Your own sounds
 Any sound file of your own (a WAV, FLAC, Ogg, MP3 or AIFF file) can be a channel too. In the
@@ -169,6 +189,48 @@ lowest of all, between **C2** and **C3** (C1 to C2 where middle C is called C4).
 
 The 808s play one note at a time, so each new note cuts off the one before. Any sample or
 instrument set can do the same: tick **One note at a time** in its right-click menu in the rack.
+
+# Dawsome Synth
+Dawsome Synth is Dawsome's own synthesizer. It makes its sound from simple waves rather than
+from recordings, so you can turn it into a bass, a lead, a pad or a pluck. It plays like any
+other instrument: from the piano roll, the computer keyboard or a MIDI keyboard.
+
+## Adding it
+In the Library, under **Instruments**, it is the first row under **Plugins**. Double-click it to
+add it to the rack, or right-click it to add it and open its window straight away.
+
+## Its window
+Double-click its name in the rack. Its knobs sit in blocks laid out like a DJ's booth: a deck on
+each side (the two oscillators) and the mixer between them, with its level under the left deck
+and the Preset list under the right one:
+- **Osc 1** and **Osc 2** make the sound. Pick a wave (Sine, Triangle, Saw or Square) and tune
+  it; **Mix** blends from the first to the second.
+- **Unison** plays up to three copies of each, a little out of tune and spread from left to
+  right, for a thicker sound. **Noise** adds a hiss.
+- **Filter** takes away what is above its **Cutoff**, and **Resonance** makes that edge ring.
+  **Drive** pushes each note a little into distortion, for a warmer, grittier sound.
+- **Filter env** and **Amp env** shape each note: how fast the filter or the volume rises
+  (Attack), falls (Decay), where it stays while you hold the key (Sustain), and how long it
+  rings on after (Release).
+- **LFO** wobbles the pitch or the cutoff, slowly or fast. The mod wheel on a MIDI keyboard adds
+  a vibrato.
+- **Play**: **Glide** slides from one note into the next, **Volume** sets how loud it is, and the
+  last two set how much louder and brighter a note gets when you play harder.
+
+Drag a knob left or right to change it (hold Shift to go slowly) and double-click it to put it
+back. A button such as **Saw** steps to the next choice each click. Right-click a knob to
+automate it, or to link it to a knob on your MIDI keyboard.
+
+![Dawsome Synth's window: its knobs as two decks and a mixer, the level and the Preset list under the decks](synth-window.png)
+
+## Presets
+The **Preset** list under the right deck starts with ready-made sounds: Init (a plain saw), Saw Lead,
+Square Bass, Sub, Pad, Pluck, Keys and Brass. Pick one to hear it, then turn the knobs from
+there. Undo puts back the sound you had before.
+
+When you like a sound, click **Save preset…**, type a name and press **Enter**. Your presets come
+after the ready-made ones, in every synth channel of every project. Saving over one of yours asks
+first.
 
 # Editing a sound
 A sound file can be shaped without changing the file itself: cut away what you do not need, fade
@@ -278,7 +340,7 @@ name to rename the pattern or delete it.
 In the Channel rack, each row has 16 steps to a bar. Click a step to switch it on, and that
 channel plays on that step. **Bars −** and **+** at the top of the rack make the pattern shorter
 or longer, from 1 to 32 bars. For melodies, the piano roll is easier (see **The piano roll**).
-The **Swing** knob right of them plays every second step a little late, for a shuffle: drag it
+The **Swing** knob left of them plays every second step a little late, for a shuffle: drag it
 right (66.7% is a triplet feel), and double-click it to play straight again. The steps still look
 straight on the grid; you hear the swing.
 
@@ -349,8 +411,9 @@ shows.
 
 ## Writing notes
 - Click an empty place to draw a note there. Hold **Alt** to place it off the grid.
-- A new note is as long as the last note you clicked or resized. **Len**, at the top, shows how
-  long that is.
+- A new note is one snap unit long, the smallest cell you see, until you click or resize a
+  note: then it is as long as that one. **Len**, at the top, shows how long that is (when the
+  roll is narrow, Len folds away and the hint over the snap picker says it instead).
 - Drag a note to move it, and drag its right edge to make it longer or shorter.
 - Double-click a note to delete it, or select it and press **Delete**.
 - Click a note to select it, Shift+click to add more, or drag over an empty place to select with
@@ -359,7 +422,9 @@ shows.
   **Right** move them along by the snap.
 - **Ctrl+C**, **Ctrl+X** and **Ctrl+V** copy, cut and paste notes, even into another pattern or
   onto another channel. **Ctrl+B** duplicates them.
-- **Snap**, at the top, says what notes land on as you draw and move them: a step, a beat, a bar.
+- **Snap**, the picker at the top after the channel's name, says what notes land on as you
+  draw and move them: **Line** (the finest line you see, which changes as you zoom; the one it
+  starts on), a step, a beat, a bar.
 
 These keys work on the piano roll after you click in it, or while the mouse is over it with notes
 selected.
@@ -367,7 +432,7 @@ selected.
 ## Velocity
 Velocity is how hard a note is played, which usually means how loud it sounds. The lane under the
 grid has a stem for each note. Drag a stem up or down, or drag across several to paint them. Hold
-Alt and drag to draw a ramp. Drag the line above the lane to make the lane taller.
+Alt and drag to draw a ramp.
 
 ## The Notes menu
 Right-click the grid, or click **Notes** at the top, for Cut, Copy, Paste, Duplicate and Delete,
@@ -383,13 +448,24 @@ and for these changes:
 
 These change the selected notes, or all of them when none is selected.
 
+## Hearing the roll
+- **Play**, the triangle right of the **Notes** menu, plays what the roll holds: this channel's
+  notes of this pattern, nothing else, from the pattern's start. It turns into **Stop** while it
+  plays. You hear the channel's own sound, through its mixer insert, as in the song.
+- **Loop** beside it, lit when you start, repeats the pattern while you edit: change a note and
+  the next pass plays the change. Switch it off to play the pattern once and stop.
+- The toolbar's **Play** goes back to the whole pattern or the song, from its start; **Stop** or
+  Space stops either. **Shift+Space** plays and stops the roll after a click in it.
+- While a take records, the roll's Play is off: stop the take first.
+
 ## Scales and more
-- **Scale** shades the keys outside a scale darker, so you can stay in key. Choose a scale in the
-  menu that says **Scale off**, then choose the note it starts on in the menu that appears beside
-  it.
+- **Scale** shades the keys outside a scale darker, so you can stay in key. Choose a scale in its
+  menu (the narrow chooser after Follow: a long name shows cut short there, and whole in the
+  menu), then choose the note it starts on in the menu that appears beside it.
 - **Fold** shows only the rows with notes and, with a scale, the scale's keys.
 - **Preview**, lit when you start, plays notes as you draw and move them.
 - **Follow** turns the page as the song plays past the view.
+- When the roll is narrow, Preview and Follow show as a small speaker and a small arrow.
 - The notes you play live, on the computer keyboard or a MIDI keyboard, show on the grid as they
   sound.
 
@@ -489,8 +565,8 @@ into it.
 ## Reading a strip
 - The fader sets the strip's volume. Drag it, and hold Shift to move it finely.
 - The knob above it pans the sound left or right. Double-click it to center it.
-- Click the light at a strip's top to mute it. Right-click the light to solo the strip, so you
-  hear it alone.
+- Click the light at a strip's top to mute it: a muted strip's light is a ring instead of a
+  green dot. Right-click the light to solo the strip, so you hear it alone.
 - The master's small clip light, above its meters, comes on when the sound went past the top. It
   stays on until you click it.
 

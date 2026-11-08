@@ -18,13 +18,14 @@ use dawsome_engine::dsp::{
 use dawsome_engine::edit::Edit;
 use dawsome_engine::processor::{param_values, ParamInfo, ProcessorFactory, Registry};
 use dawsome_engine::project::{
-    AutomationTarget, ChannelId, Effect, EffectId, Insert, InsertId, ProcessorOwner, ProcessorRef,
-    Project, EFFECT_SLOTS, FADER_RANGE, PAN_RANGE, SEND_RANGE, UNITY_FADER,
+    AutomationTarget, ChannelId, ChannelKind, Effect, EffectId, Insert, InsertId, ProcessorOwner,
+    ProcessorRef, Project, EFFECT_SLOTS, FADER_RANGE, PAN_RANGE, SEND_RANGE, UNITY_FADER,
 };
 use dawsome_engine::transport::ParamTarget;
 use iced::keyboard::Modifiers;
 use iced::{mouse, Point, Size};
 
+use crate::ui::knob_block::next_choice;
 use crate::ui::mixer_layout::{self, Hit, EFFECTS_SCROLL_PER_NOTCH, SCROLL_PER_NOTCH};
 
 /// The effects the add menu offers, in menu order: EQ, Delay, Reverb, Compressor, Saturator,
@@ -160,6 +161,8 @@ pub enum MixerCommand {
     Drag(MixerDrag),
     /// An insert name went into editing: give its text box the keyboard.
     FocusRename,
+    /// The header's pop-out button: the mixer into its own window, while it is docked.
+    PopOut,
     /// Open the plugin picker for an effect at the end of this insert's chain.
     PickPlugin { insert: InsertId },
     /// Open this plugin effect's window.
@@ -185,7 +188,8 @@ pub enum MixerCommand {
     },
 }
 
-/// A mixer control a drag moves.
+/// A mixer control a drag moves, or a knob in a block of the mixer's (the synth's, in its
+/// instrument window), which moves by the same law.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MixerDrag {
     Fader(InsertId),
@@ -197,6 +201,11 @@ pub enum MixerDrag {
     /// Parameter `index` of an effect, on its knob.
     Param {
         effect: EffectId,
+        index: usize,
+    },
+    /// Parameter `index` of a synth channel's instrument, on its knob in the instrument window.
+    Instrument {
+        channel: ChannelId,
         index: usize,
     },
 }
@@ -217,20 +226,28 @@ impl MixerDrag {
                 let (_, effect) = mixer.effect(effect)?;
                 effect_values(effect, registry)?.get(index).copied()
             }
+            MixerDrag::Instrument { channel, index } => {
+                let processor = synth_processor(project, channel)?;
+                let factory = registry.get(&processor.id)?;
+                param_values(factory.params(), &processor.params)
+                    .get(index)
+                    .copied()
+            }
         }
     }
 
-    /// The parameter's description, for an effect parameter.
+    /// The parameter's description, for an effect's or a synth's parameter.
     fn param_info(self, project: &Project, registry: &Registry) -> Option<ParamInfo> {
-        let MixerDrag::Param { effect, index } = self else {
-            return None;
+        let (id, index) = match self {
+            MixerDrag::Param { effect, index } => {
+                (&project.mixer.effect(effect)?.1.processor.id, index)
+            }
+            MixerDrag::Instrument { channel, index } => {
+                (&synth_processor(project, channel)?.id, index)
+            }
+            MixerDrag::Fader(_) | MixerDrag::Pan(_) | MixerDrag::Send { .. } => return None,
         };
-        let (_, effect) = project.mixer.effect(effect)?;
-        registry
-            .get(&effect.processor.id)?
-            .params()
-            .get(index)
-            .copied()
+        registry.get(id)?.params().get(index).copied()
     }
 
     /// The values the control sweeps.
@@ -239,7 +256,7 @@ impl MixerDrag {
             MixerDrag::Fader(_) => FADER_RANGE,
             MixerDrag::Pan(_) => PAN_RANGE,
             MixerDrag::Send { .. } => SEND_RANGE,
-            MixerDrag::Param { .. } => self
+            MixerDrag::Param { .. } | MixerDrag::Instrument { .. } => self
                 .param_info(project, registry)
                 .map_or(0.0..=1.0, |info| info.min..=info.max),
         }
@@ -261,7 +278,10 @@ impl MixerDrag {
     pub fn horizontal(self) -> bool {
         match self {
             MixerDrag::Fader(_) => false,
-            MixerDrag::Pan(_) | MixerDrag::Send { .. } | MixerDrag::Param { .. } => true,
+            MixerDrag::Pan(_)
+            | MixerDrag::Send { .. }
+            | MixerDrag::Param { .. }
+            | MixerDrag::Instrument { .. } => true,
         }
     }
 
@@ -283,6 +303,11 @@ impl MixerDrag {
                 key: self.param_info(project, registry)?.key.to_owned(),
                 value: Some(value),
             },
+            MixerDrag::Instrument { channel, .. } => Edit::SetChannelParam {
+                channel,
+                key: self.param_info(project, registry)?.key.to_owned(),
+                value: Some(value),
+            },
         })
     }
 
@@ -294,6 +319,10 @@ impl MixerDrag {
             MixerDrag::Send { from, to } => AutomationTarget::Send { from, to },
             MixerDrag::Param { effect, .. } => AutomationTarget::EffectParam {
                 effect,
+                key: self.param_info(project, registry)?.key.to_owned(),
+            },
+            MixerDrag::Instrument { channel, .. } => AutomationTarget::InstrumentParam {
+                channel,
                 key: self.param_info(project, registry)?.key.to_owned(),
             },
         })
@@ -310,8 +339,21 @@ impl MixerDrag {
                 // At most a handful of parameters; a u16 holds every index.
                 param: u16::try_from(index).unwrap_or(u16::MAX),
             },
+            MixerDrag::Instrument { channel, index } => ParamTarget::Instrument {
+                channel,
+                // The synth's 38 parameters; a u16 holds every index.
+                param: u16::try_from(index).unwrap_or(u16::MAX),
+            },
         }
     }
+}
+
+/// The instrument of `channel`, when it is a synth channel: what its knobs set.
+pub fn synth_processor(project: &Project, channel: ChannelId) -> Option<&ProcessorRef> {
+    let shown = project.channels.get(&channel)?;
+    (shown.kind == ChannelKind::Synth)
+        .then_some(shown.processor.as_ref())
+        .flatten()
 }
 
 /// The values an effect's parameters have, in its processor's order; `None` for a processor
@@ -781,6 +823,7 @@ impl MixerState {
             Hit::RouteDown => self.route_channel(-1, context),
             Hit::RouteUp => self.route_channel(1, context),
             Hit::RouteLabel => None,
+            Hit::PopOut => Some(MixerCommand::PopOut),
             Hit::Led(id) if right || context.modifiers.control() => {
                 let mut set = mixer.solo.clone();
                 if right && context.modifiers.shift() {
@@ -979,12 +1022,7 @@ impl MixerState {
         };
         if is_choice(factory, index) {
             let now = *effect_values(effect, context.registry)?.get(index)?;
-            let next = if now + 1.0 > info.max {
-                info.min
-            } else {
-                now + 1.0
-            };
-            return Some(set(Some(next)));
+            return Some(set(Some(next_choice(info, now))));
         }
         Some(if double {
             set(None)
@@ -1062,7 +1100,7 @@ impl MixerState {
         if rise == 0.0 {
             return None;
         }
-        if mixer_layout::route_label_rect().contains(at) {
+        if mixer_layout::route_label_rect(self.size.width).contains(at) {
             return self.route_channel(if rise > 0.0 { 1 } else { -1 }, context);
         }
         let last = self.last(context.project);
@@ -1186,6 +1224,7 @@ fn signed(value: f32, decimals: usize, unit: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dawsome_engine::dsp::synth;
     use dawsome_engine::processor::Taper;
 
     fn fixture(name: &str) -> Project {
@@ -1333,9 +1372,9 @@ mod tests {
         assert_eq!(append_effect(&project, InsertId(99), reverb()), None);
     }
 
-    // The native effects' choices are the distortion's auto gain, the filter's type and slope
-    // and the phaser's stages, and only they show as a button (the width's bass mono names its
-    // 0 "Off" but is a knob: it is not whole).
+    // The native processors' choices are the distortion's auto gain, the filter's type and
+    // slope, the phaser's stages and the synth's waves, unison and LFO shape, and only they show
+    // as a button (the width's bass mono names its 0 "Off" but is a knob: it is not whole).
     #[test]
     fn only_the_named_whole_parameters_are_choices() {
         let registry = Registry::native();
@@ -1357,7 +1396,11 @@ mod tests {
                 (distortion::ID, "auto_gain"),
                 (filter::ID, "type"),
                 (filter::ID, "slope"),
-                (phaser::ID, "stages")
+                (phaser::ID, "stages"),
+                (synth::ID, "osc1_wave"),
+                (synth::ID, "osc2_wave"),
+                (synth::ID, "unison"),
+                (synth::ID, "lfo_shape"),
             ]
         );
     }
@@ -1535,15 +1578,19 @@ mod tests {
             Some("0.50 Hz")
         );
         assert_eq!(effect_param_text(&Choices, 2, 0.0, 44_100), None);
-        // The native effects name the values of their choices (the distortion's auto gain, the
-        // filter's type and slope, the phaser's stages) and the width's bass mono at its
-        // default, Off; none of any other parameter's.
+        // The native processors name the values of their choices (the distortion's auto gain,
+        // the filter's type and slope, the phaser's stages, the synth's waves, unison and LFO
+        // shape) and the width's bass mono at its default, Off; none of any other parameter's.
         let named = [
             (distortion::ID, "auto_gain"),
             (filter::ID, "type"),
             (filter::ID, "slope"),
             (phaser::ID, "stages"),
             (width::ID, "bass_mono"),
+            (synth::ID, "osc1_wave"),
+            (synth::ID, "osc2_wave"),
+            (synth::ID, "unison"),
+            (synth::ID, "lfo_shape"),
         ];
         let registry = Registry::native();
         for factory in registry.factories() {

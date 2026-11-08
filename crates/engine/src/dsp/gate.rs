@@ -22,9 +22,9 @@
 //! At a range of 0 dB the floor is exactly 1, the gain stays exactly 1, and the gate passes the
 //! input's bits.
 
-use std::f64::consts::{LOG2_10, LOG2_E};
+use std::f64::consts::LOG2_E;
 
-use super::{exp2, snap64};
+use super::{exp2, lin, snap64};
 use crate::processor::{ParamInfo, ProcessContext, Processor, ProcessorFactory, Taper};
 
 pub const ID: &str = "dawsome.gate";
@@ -95,11 +95,6 @@ const HYSTERESIS_DB: f64 = 3.0;
 /// the hysteresis and the default hold, notes down to about 50 Hz), short enough that the gate
 /// hears a hit's start and its tail's end soon after them (LSP's gate's default reactivity).
 const DETECTOR_MS: f64 = 10.0;
-
-/// 10^(dB/20), by [`exp2`].
-fn lin(db: f64) -> f64 {
-    exp2(db / 20.0 * LOG2_10)
-}
 
 /// What a level is multiplied by each frame to fall to 1/e of the way in `ms`:
 /// e^(−1/(ms·rate/1000)) by [`exp2`], the limiter's release rule; 0 for 0 ms (no smoothing).

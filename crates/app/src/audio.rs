@@ -1464,7 +1464,7 @@ mod tests {
         ..DEFAULT
     };
 
-    // B8: Settings offers the system's default first, then each output device once in the
+    // Settings offers the system's default first, then each output device once in the
     // order listed (the list is read once, and only for outputs); a chosen device not listed
     // stays last, marked missing; a list that fails offers the default and says why.
     #[test]

@@ -458,16 +458,19 @@ pub(crate) fn retimed(plan: &mut PlayPlan, before: &Course, after: &Course) {
 enum Plays {
     Song,
     Pattern(PatternId),
+    /// One channel's notes of a pattern: another channel plays other notes.
+    Channel(PatternId, ChannelId),
     Nothing,
 }
 
 fn plays(plan: &PlayPlan) -> Plays {
-    match plan.playing {
+    match &plan.playing {
         Playing::Song => Plays::Song,
         Playing::Pattern(index) => plan
             .patterns
-            .get(index)
+            .get(*index)
             .map_or(Plays::Nothing, |pattern| Plays::Pattern(pattern.id)),
+        Playing::Channel { notes, channel, .. } => Plays::Channel(notes.id, *channel),
         Playing::Nothing => Plays::Nothing,
     }
 }
@@ -502,9 +505,18 @@ impl MidiOutState {
             };
             self.find(plan, &course, end, from, until);
         }
+        // A pattern played once sends nothing past where the transport stops, so nothing past
+        // that counts as sent: Loop switched on or the pattern grown before the stop, the
+        // notes the pass then plays on to still go out.
+        let stop = plan
+            .once_end(timeline, position)
+            .map(|stop| at.saturating_add(stop.saturating_sub(position)));
         for channel in &mut plan.channels {
             if let Some(out) = &mut channel.midi_out {
-                out.sent_until = out.sent_until.max(end.saturating_add(out.latency_frames));
+                let reach = end.saturating_add(out.latency_frames);
+                out.sent_until = out
+                    .sent_until
+                    .max(stop.map_or(reach, |stop| reach.min(stop)));
             }
         }
         self.end_where(|note| (note.off < end).then_some(note.off));
@@ -539,10 +551,17 @@ impl MidiOutState {
         };
         let natural = |sample: u64| pass.frame.saturating_add(sample - pass.sample_at);
         match plan.playing {
-            Playing::Pattern(index) => {
-                let Some(pattern) = plan.patterns.get(index) else {
+            Playing::Pattern(_) | Playing::Channel { .. } => {
+                let Some(pattern) = plan.pattern_played() else {
                     return;
                 };
+                // While a pattern plays once, a note from past where the transport stops is not
+                // sent ahead: sent its latency early, it would be cut by the stop as soon as it
+                // began. Known limit: one already sent ahead while it looped (Loop switched off in
+                // the pass's last latency) is ended by the stop, as at a Stop pressed then.
+                let last = plan
+                    .once_end(timeline, pass.sample_at)
+                    .map_or(last, |end| last.min(end));
                 let mut walk = EventWalk::from_tick(pattern, from);
                 while let Some((sample, tick, event)) = walk.next_before(timeline, last) {
                     let gate = gate_frames(timeline, plan.ppq, sample, tick, event, None);

@@ -9,14 +9,12 @@ use std::time::Instant;
 use dawsome_engine::edit::Edit;
 use dawsome_engine::input::InputFeeds;
 use dawsome_engine::project::{ChannelId, ChannelKind, InputSource, Sound, SoundSource};
-use dawsome_engine::time::Ticks;
 use iced::Task;
 
 use super::files::blocking;
 use super::{App, Message};
 use crate::audio::{self, Output};
 use crate::live_input::{self, DeviceInfo, InputDevices, InputState, LiveInputs, Opening};
-use crate::ui::clip_gesture;
 use crate::ui::instrument_window::{ChannelsChoice, DeviceChoice, InputView, InstrumentMessage};
 
 /// What a new input channel is called.
@@ -215,25 +213,7 @@ impl App {
             return;
         }
         let (id, add) = self.new_input_channel();
-        let project = self.session.project();
-        let edit = if let Some((track, tick)) = self.arranger.drop_target(project) {
-            let place = self.pattern.and_then(|pattern| {
-                let index = clip_gesture::index_of(project, track)?;
-                clip_gesture::place(project, pattern, index, tick, Ticks(1))
-            });
-            match place {
-                Some(place) => Edit::Transaction(vec![add, place]),
-                None => add,
-            }
-        } else if self.browse.rack_hover {
-            add
-        } else {
-            return;
-        };
-        self.commit(edit);
-        if self.error.is_none() {
-            self.select_channel(id);
-        }
+        self.add_where_dropped(id, vec![add]);
     }
 
     /// The instrument window's input messages for input channel `channel`: another device (its

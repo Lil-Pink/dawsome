@@ -1,0 +1,9 @@
+{
+  "synth": "dawsome.synth",
+  "name": "Sub",
+  "params": {
+    "osc1_wave": 0,
+    "osc1_octave": -1,
+    "amp_release": 0.3
+  }
+}

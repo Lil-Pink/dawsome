@@ -66,7 +66,7 @@ Run:
   python3 -I gen_p23_expected.py --check DIR  exit 1 unless the files in DIR are what --write
                                               writes
 """
-import copy, hashlib, json, os, struct, sys
+import copy, hashlib, json, math, os, struct, sys
 
 SR = 48000; PPQ = 96; MBPM = 120000; BAR = 4 * PPQ
 LEAD = SR // 10; SPACING = SR // 5; CLICK = 256; CLICKS = 3; AMP = 0.25; SEED = 0x5EED1234
@@ -124,7 +124,21 @@ def placed(signal, at, gain, frames):
     return out
 
 
-def mixed(*parts): return [sum(values) for values in zip(*parts)]
+def compensated_sum(xs):
+    """Python 3.12+'s sum() of floats, written out (gen_p32's): Neumaier's compensated sum from 0.0.
+    Python 3.11's sum() adds plainly left to right, so a frame's last digit, and with it the
+    16-bit sample wherever that digit decides the rounding, would depend on the Python."""
+    total = compensation = 0.0
+    for x in xs:
+        t = total + x
+        if abs(total) >= abs(x): compensation += (total - t) + x
+        else: compensation += (x - t) + total
+        total = t
+    # As CPython's: a correction that is inf or nan (the sum overflowed) is left out.
+    return total + compensation if math.isfinite(compensation) else total
+
+
+def mixed(*parts): return [compensated_sum(values) for values in zip(*parts)]
 
 
 def feeds():
@@ -152,7 +166,7 @@ def ms1(frames, rate):
 
 
 # ---------- the placement cases, through the window ----------
-def tracks(): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, 9)]
+def tracks(): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, 7)]
 
 
 def line_project():
@@ -189,7 +203,7 @@ def after_take(start, offset, length):
                         "notes": []}]
     clip = {"id": 1, "track": 1, "start": start, "length": length, "kind": "audio", "channel": 2}
     if offset: clip["frame_offset"] = offset
-    doc["playlist"] = {"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]}
+    doc["playlist"] = {"next_track_id": 7, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]}
     return doc
 
 

@@ -94,13 +94,17 @@ fn without_an_input_channel_the_old_version_is_written() {
 }
 
 // A version this build does not know is refused by its number, and the message names the
-// versions it reads, 6 among them. (9: version 8 is a sound's edits since the sample editor.)
+// versions it reads, 6 among them. (10: version 8 is a sound's edits since the sample editor,
+// 9 the synth channel.)
 #[test]
 fn a_newer_version_is_refused_by_name() {
     let newer =
-        text("p16_unity.json").replacen(r#""format_version":6"#, r#""format_version":9"#, 1);
+        text("p16_unity.json").replacen(r#""format_version":6"#, r#""format_version":10"#, 1);
     let error = Project::load_json(&newer).expect_err("refused");
-    assert!(matches!(error, LoadError::UnsupportedVersion(9)), "{error}");
+    assert!(
+        matches!(error, LoadError::UnsupportedVersion(10)),
+        "{error}"
+    );
     assert!(error.to_string().contains('6'), "{error}");
 }
 

@@ -166,7 +166,7 @@ fn p24_the_limiter_gives_the_same_bits_however_the_calls_are_cut() {
     }
 }
 
-// The limiter's parameters and name are the spec's (gen_p24_expected.py restates them).
+// The limiter's parameters and name, as gen_p24_expected.py states them.
 #[test]
 fn p24_the_limiter_is_a_native_effect_with_the_specs_parameters() {
     let want = &expected()["limiter"];

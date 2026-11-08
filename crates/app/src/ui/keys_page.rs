@@ -14,16 +14,12 @@ use iced::{mouse, Color, Element, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::Message;
 use crate::keys::{Action, Claim, KeyControl, Keys, Labels, NoteLayout, WhilePlaying};
+use crate::ui::fonts::size;
 use crate::ui::key_names::key_name;
 use crate::ui::settings_layout::{CHECKBOX, INSET, ROW_HEIGHT, SECTION_TITLE_HEIGHT};
 use crate::ui::settings_panel::SettingsMessage;
 use crate::ui::style;
 use crate::ui::text_fit::fit_width;
-
-pub const TITLE_SIZE: f32 = 13.0;
-pub const TEXT_SIZE: f32 = 12.0;
-/// The size of the letters and notes on the drawn keys.
-const KEY_TEXT_SIZE: f32 = 10.0;
 
 /// The note layout chooser: its title, then a row per layout.
 const LAYOUT_TOP: f32 = 8.0;
@@ -267,9 +263,17 @@ pub fn key_face(claim: Claim, base: u8) -> (Color, Color, String) {
             let key = base.saturating_add(offset);
             // The black keys of an octave: C# D# F# G# A#.
             if matches!(key % 12, 1 | 3 | 6 | 8 | 10) {
-                (style::KEY_BLACK, style::TEXT, key_name(key))
+                (
+                    style::palette().key_black,
+                    style::palette().text,
+                    key_name(key),
+                )
             } else {
-                (style::KEY_WHITE, style::KEY_LABEL, key_name(key))
+                (
+                    style::palette().key_white,
+                    style::palette().key_label,
+                    key_name(key),
+                )
             }
         }
         Claim::Control(control) => {
@@ -281,12 +285,20 @@ pub fn key_face(claim: Claim, base: u8) -> (Color, Color, String) {
                 KeyControl::Sustain => "Sustain",
                 KeyControl::AllNotesOff => "All off",
             };
-            (style::BUTTON, style::ACCENT, words.to_owned())
+            (style::palette().button, style::accent(), words.to_owned())
         }
         // Darker than the page's ground: among the notes, playing none, its shortcut off.
-        Claim::Swallowed => (style::KNOB_FACE, style::TEXT_DIM, String::new()),
+        Claim::Swallowed => (
+            style::palette().knob_face,
+            style::palette().text_disabled,
+            String::new(),
+        ),
         // A key's face: its shortcut works as ever.
-        Claim::Free => (style::BUTTON, style::TEXT_DIM, String::new()),
+        Claim::Free => (
+            style::palette().button,
+            style::palette().text_secondary,
+            String::new(),
+        ),
     }
 }
 
@@ -341,19 +353,19 @@ impl<'a> KeysPage<'a> {
     }
 
     fn draw_page(&self, frame: &mut Frame) {
-        frame.fill_rectangle(Point::ORIGIN, frame.size(), style::RACK_WELL);
+        frame.fill_rectangle(Point::ORIGIN, frame.size(), style::palette().bg);
         title(frame, layout_title(), "Note layout");
         for layout in NoteLayout::ALL {
             let mark = layout_mark(layout);
             let radius = mark.width / 2.0;
             frame.fill(
                 &canvas::Path::circle(mark.center(), radius),
-                style::KNOB_RING,
+                style::palette().knob_ring,
             );
             if layout == self.layout {
                 frame.fill(
                     &canvas::Path::circle(mark.center(), radius / 2.0),
-                    style::TEXT,
+                    style::palette().text,
                 );
             }
             let row = layout_row(layout);
@@ -361,18 +373,18 @@ impl<'a> KeysPage<'a> {
                 frame,
                 layout.name(),
                 Point::new(LABEL_X, row.center_y()),
-                style::TEXT,
-                TEXT_SIZE,
+                style::palette().text,
+                size::LABEL,
             );
         }
         let reset = reset_button();
-        frame.fill_rectangle(reset.position(), reset.size(), style::BUTTON);
+        frame.fill_rectangle(reset.position(), reset.size(), style::palette().button);
         centered(
             frame,
             "Reset keys to defaults",
             reset.center(),
-            style::TEXT,
-            TEXT_SIZE,
+            style::palette().text,
+            size::LABEL,
         );
         title(
             frame,
@@ -384,8 +396,8 @@ impl<'a> KeysPage<'a> {
             frame,
             "White and black: the notes \u{b7} orange: octave, velocity, sustain, all off \u{b7} darkest: nothing, its shortcut off \u{b7} gray: its shortcut",
             Point::new(INSET, legend().center_y()),
-            style::TEXT_DIM,
-            TEXT_SIZE,
+            style::palette().text_secondary,
+            size::LABEL,
         );
         title(frame, table_title(), "Shortcuts");
         let head = table_head();
@@ -398,8 +410,8 @@ impl<'a> KeysPage<'a> {
                 frame,
                 words,
                 Point::new(x, head.center_y()),
-                style::TEXT_DIM,
-                TEXT_SIZE,
+                style::palette().text_secondary,
+                size::LABEL,
             );
         }
         for (index, action) in Action::ALL.into_iter().enumerate() {
@@ -412,7 +424,14 @@ impl<'a> KeysPage<'a> {
             (PLAYING_X, ROW_WIDTH, "the same"),
         ];
         for (from, to, words) in cells {
-            cell(frame, words, from, to, esc.center_y(), style::TEXT_DIM);
+            cell(
+                frame,
+                words,
+                from,
+                to,
+                esc.center_y(),
+                style::palette().text_secondary,
+            );
         }
         let note = roll_note();
         cell(
@@ -421,7 +440,7 @@ impl<'a> KeysPage<'a> {
             ACTION_X,
             ROW_WIDTH,
             note.center_y(),
-            style::TEXT_DIM,
+            style::palette().text_secondary,
         );
         cell(
             frame,
@@ -429,7 +448,7 @@ impl<'a> KeysPage<'a> {
             ACTION_X,
             ROW_WIDTH,
             midi_note().center_y(),
-            style::TEXT_DIM,
+            style::palette().text_secondary,
         );
     }
 
@@ -447,12 +466,12 @@ impl<'a> KeysPage<'a> {
                     content: label,
                     position: corner,
                     color: ink,
-                    size: KEY_TEXT_SIZE.into(),
+                    size: size::DENSE.into(),
                     ..Text::default()
                 });
-                if let Some(names) = fit_width(&names, rect.width - 2.0, KEY_TEXT_SIZE) {
+                if let Some(names) = fit_width(&names, rect.width - 2.0, size::DENSE) {
                     let at = Point::new(rect.center_x(), rect.y + rect.height - 8.0);
-                    centered(frame, &names, at, ink, KEY_TEXT_SIZE);
+                    centered(frame, &names, at, ink, size::DENSE);
                 }
             }
         }
@@ -461,32 +480,39 @@ impl<'a> KeysPage<'a> {
     fn draw_row(&self, frame: &mut Frame, index: usize, action: Action) {
         let row = table_row(index);
         if index % 2 == 1 {
-            frame.fill_rectangle(row.position(), row.size(), style::PANEL);
+            frame.fill_rectangle(row.position(), row.size(), style::palette().panel);
         }
         let y = row.center_y();
-        cell(frame, action.label(), ACTION_X, KEYS_X, y, style::TEXT);
+        cell(
+            frame,
+            action.label(),
+            ACTION_X,
+            KEYS_X,
+            y,
+            style::palette().text,
+        );
         if self.rebinding == Some(action) {
             frame.stroke(
                 &canvas::Path::rectangle(row.position(), row.size()),
                 canvas::Stroke::default()
-                    .with_color(style::ACCENT)
+                    .with_color(style::accent())
                     .with_width(1.0),
             );
             let waiting = "Press the new keys\u{2026} (Esc gives up)";
-            cell(frame, waiting, KEYS_X, ROW_WIDTH, y, style::ACCENT);
+            cell(frame, waiting, KEYS_X, ROW_WIDTH, y, style::accent());
             return;
         }
         let (bound, also) = keys_words(self.keys, action);
         let (shown, color) = match &also {
             Some(also) => (format!("{bound} \u{b7} {also}"), style::CONFLICT),
-            None => (bound, style::TEXT),
+            None => (bound, style::palette().text),
         };
         cell(frame, &shown, KEYS_X, PLAYING_X, y, color);
         let playing = self.keys.while_playing(action, self.layout, self.labels);
         let words = while_playing_words(&playing);
         let color = match playing {
-            WhilePlaying::Unchanged => style::TEXT_DIM,
-            _ => style::TEXT,
+            WhilePlaying::Unchanged => style::palette().text_secondary,
+            _ => style::palette().text,
         };
         cell(frame, &words, PLAYING_X, ROW_WIDTH, y, color);
     }
@@ -495,8 +521,8 @@ impl<'a> KeysPage<'a> {
 /// `words` in the column from `from` to `to`, cut to fit it. Why cut as well as clipped: the
 /// software renderer draws a clipped frame's text whole.
 fn cell(frame: &mut Frame, words: &str, from: f32, to: f32, y: f32, color: Color) {
-    if let Some(words) = fit_width(words, to - from - 8.0, TEXT_SIZE) {
-        text(frame, &words, Point::new(from, y), color, TEXT_SIZE);
+    if let Some(words) = fit_width(words, to - from - 8.0, size::LABEL) {
+        text(frame, &words, Point::new(from, y), color, size::LABEL);
     }
 }
 
@@ -505,8 +531,8 @@ fn title(frame: &mut Frame, rect: Rectangle, words: &str) {
         frame,
         words,
         Point::new(rect.x, rect.center_y()),
-        style::TEXT,
-        TITLE_SIZE,
+        style::palette().text,
+        size::TITLE,
     );
 }
 
@@ -595,13 +621,15 @@ mod tests {
     use super::*;
     use crate::ui::panels::Panel;
 
-    // By hand from the units: the chooser's rows at 28 and 50, Reset right of them; A is the
-    // third row's first key at 12 + 1.75 × 32 = 68, y 100 + 2 × 32 = 164; the table's rows
-    // 22 px apart from 304, the first Play / stop, Esc's last and no hit.
+    // By hand from the units: the chooser's rows at 28 and 52 (24 px rows; 50
+    // before), Reset right of them; A is the third row's first key at 12 + 1.75 × 32 = 68, y
+    // 100 + 2 × 32 = 164; the legend at 100 + 4 × 32 + 4 = 232, the table's title after it and
+    // a gap, 232 + 24 + 8 = 264, its head 284, its rows 24 px apart from 308 (were 22 from 304),
+    // the first Play / stop, Esc's last and no hit.
     #[test]
     fn the_page_lays_out_the_chooser_the_keyboard_and_the_table() {
         assert_eq!(layout_row(NoteLayout::Piano).y, 28.0);
-        assert_eq!(layout_row(NoteLayout::TwoRows).y, 50.0);
+        assert_eq!(layout_row(NoteLayout::TwoRows).y, 52.0);
         assert_eq!(
             key_rect(Code::KeyA),
             Some(Rectangle::new(
@@ -611,7 +639,7 @@ mod tests {
         );
         assert_eq!(key_rect(Code::Backspace).map(|rect| rect.width), Some(62.0));
         assert_eq!(key_rect(Code::F5), None);
-        assert_eq!(table_row(0).y, 304.0);
+        assert_eq!(table_row(0).y, 308.0);
         assert_eq!(
             hit(Point::new(100.0, 310.0)),
             Some(KeysHit::Action(Action::PlayStop))
@@ -634,10 +662,12 @@ mod tests {
             hit(layout_mark(NoteLayout::TwoRows).center()),
             Some(KeysHit::Layout(NoteLayout::TwoRows))
         );
-        // Recording v2: a row more, Capture's (was table_row(36)); the pedal, bend and wheel
-        // slice: the MIDI keyboard's line under the roll's (was table_row(37)); help guide H1:
-        // a row more, Help's (was table_row(38)).
-        assert_eq!(content_height(), table_row(39).y + 30.0);
+        // A row more for Capture (was table_row(36)); the MIDI keyboard's line under the roll's
+        // (was table_row(37)); a row more for Help (was table_row(38)); three more for the zoom
+        // (was table_row(39)); a row more for Shift+Space (was table_row(42)). The
+        // MIDI line is table_row(43); the page ends a row (24) and 8 px under its top (22 + 8
+        // before the 24 px rows).
+        assert_eq!(content_height(), table_row(43).y + 32.0);
         assert_eq!(hit(roll_note().center()), None, "the line under the table");
         assert_eq!(hit(midi_note().center()), None, "and the one under it");
     }
@@ -651,18 +681,30 @@ mod tests {
         let face = |code| key_face(layout.claim(code), 60);
         assert_eq!(
             face(Code::KeyA),
-            (style::KEY_WHITE, style::KEY_LABEL, "C5".to_owned())
+            (
+                style::palette().key_white,
+                style::palette().key_label,
+                "C5".to_owned()
+            )
         );
         assert_eq!(
             face(Code::KeyW),
-            (style::KEY_BLACK, style::TEXT, "C#5".to_owned())
+            (
+                style::palette().key_black,
+                style::palette().text,
+                "C#5".to_owned()
+            )
         );
         assert_eq!(face(Code::KeyZ).2, "Oct\u{2212}");
         assert_eq!(
             face(Code::KeyR),
-            (style::KNOB_FACE, style::TEXT_DIM, String::new())
+            (
+                style::palette().knob_face,
+                style::palette().text_disabled,
+                String::new()
+            )
         );
-        assert_eq!(face(Code::Digit1).0, style::BUTTON);
+        assert_eq!(face(Code::Digit1).0, style::palette().button);
         assert_eq!(face(Code::Quote).2, "F6");
     }
 }

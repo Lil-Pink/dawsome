@@ -44,12 +44,15 @@ pub enum Gate {
 
 impl Gate {
     /// How `kind` played before sound settings: a sampler (and an audio channel's notes) to the
-    /// sound's end, an instrument set (and a plugin) until the note ends. An input channel plays
-    /// no notes; its gate is a set's, which nothing reads.
+    /// sound's end, an instrument set (and a plugin or a synth) until the note ends. An input
+    /// channel plays no notes; its gate is a set's, which nothing reads.
     pub fn of(kind: ChannelKind) -> Self {
         match kind {
             ChannelKind::Sampler | ChannelKind::Audio => Gate::OneShot,
-            ChannelKind::Instrument | ChannelKind::Plugin | ChannelKind::Input => Gate::Hold,
+            ChannelKind::Instrument
+            | ChannelKind::Plugin
+            | ChannelKind::Input
+            | ChannelKind::Synth => Gate::Hold,
         }
     }
 }
@@ -164,14 +167,16 @@ impl Sound {
                 start: 0.0,
                 ..self
             },
-            ChannelKind::Audio | ChannelKind::Plugin | ChannelKind::Input => Self::default(),
+            ChannelKind::Audio | ChannelKind::Plugin | ChannelKind::Input | ChannelKind::Synth => {
+                Self::default()
+            }
         }
     }
 
     /// The first setting outside its range, or that a channel of `kind` cannot take, by its
-    /// name: anything but the defaults on an audio, plugin or input channel (its sound is its
-    /// clips, the plugin's own or the input's), reverse or a start on an instrument set (its
-    /// zones have their own).
+    /// name: anything but the defaults on an audio, plugin, synth or input channel (its sound
+    /// is its clips, the plugin's or the synth's own or the input's), reverse or a start on an
+    /// instrument set (its zones have their own).
     pub fn problem(&self, kind: ChannelKind) -> Option<&'static str> {
         let ranges = [
             (SEMITONE_RANGE.contains(&self.semitones), "semitones"),
@@ -188,7 +193,9 @@ impl Sound {
             return Some(name);
         }
         match kind {
-            ChannelKind::Audio | ChannelKind::Plugin | ChannelKind::Input if !self.is_default() => {
+            ChannelKind::Audio | ChannelKind::Plugin | ChannelKind::Input | ChannelKind::Synth
+                if !self.is_default() =>
+            {
                 Some("kind")
             }
             ChannelKind::Instrument if self.reverse => Some("reverse"),
@@ -286,7 +293,12 @@ mod tests {
         assert!(!Sound { cents: 1, ..cut }.shapes_nothing());
         assert_eq!(cut.problem(ChannelKind::Sampler), None);
         assert_eq!(cut.problem(ChannelKind::Instrument), None);
-        for kind in [ChannelKind::Plugin, ChannelKind::Audio, ChannelKind::Input] {
+        for kind in [
+            ChannelKind::Plugin,
+            ChannelKind::Audio,
+            ChannelKind::Input,
+            ChannelKind::Synth,
+        ] {
             assert_eq!(cut.problem(kind), Some("kind"), "{kind:?}");
             assert_eq!(cut.kept_for(kind), Sound::default(), "{kind:?}");
         }

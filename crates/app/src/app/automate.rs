@@ -1,6 +1,6 @@
 //! Automation from the controls: a right press on a rack knob, a mixer fader, pan or send knob,
-//! an effect parameter's slider, or a plugin parameter's row (in the parameter window or the
-//! mixer's slot panel, by the plugin's own id for it) offers "Create automation clip", or
+//! an effect parameter's knob, a synth's knob in its instrument window, or a plugin parameter's
+//! row (in the parameter window or the mixer's slot panel, by the plugin's own id for it) offers "Create automation clip", or
 //! "Show automation clip" when the control has an automation already, and under it the
 //! controller link row (see
 //! `controllers`); while an automation governs a control, the control shows the automation's
@@ -28,16 +28,27 @@ const NEW_CLIP_BARS: u32 = 4;
 const MENU_WIDTH: f32 = 180.0;
 
 /// The menu a right press on a control opens: what it would automate, the control's value now
-/// (normalized over its range), and where the press was, in the coordinates of the panel's
-/// canvas (of the parameter window's list, under the row's slider, when it is open there).
+/// (normalized over its range), and where the press was, in the coordinates of the canvas it is
+/// open over (`over`).
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct AutomateMenu {
     pub target: AutomationTarget,
     pub value: f32,
+    /// The panel the control belongs to.
     pub panel: Panel,
-    /// Open over the parameter window's list rather than on `panel`.
-    pub over_params: bool,
+    pub over: Over,
     pub at: Point,
+}
+
+/// Where the automation menu is open: over which canvas, in which window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Over {
+    /// Its panel's canvas.
+    Panel,
+    /// The parameter window's list, under the row's slider.
+    Params,
+    /// The synth's knobs, in the instrument window.
+    Instrument,
 }
 
 impl AutomateMenu {
@@ -47,7 +58,7 @@ impl AutomateMenu {
             target,
             value: value.clamp(0.0, 1.0),
             panel,
-            over_params: false,
+            over: Over::Panel,
             at,
         }
     }
@@ -68,6 +79,21 @@ impl App {
         at: Point,
     ) {
         self.automate = Some(AutomateMenu::new(target, value, panel, at));
+    }
+
+    /// Opens the automation menu for `target`, whose value is `value` of the way along its
+    /// range, at `at` on the synth's knobs in the instrument window. Its control belongs to the
+    /// rack's channel, as a rack knob's does.
+    pub(super) fn open_instrument_automate_menu(
+        &mut self,
+        target: AutomationTarget,
+        value: f32,
+        at: Point,
+    ) {
+        self.automate = Some(AutomateMenu {
+            over: Over::Instrument,
+            ..AutomateMenu::new(target, value, Panel::Rack, at)
+        });
     }
 
     /// Opens the automation menu for row `index` of `owner`'s plugin (among its parameters
@@ -97,8 +123,13 @@ impl App {
                 param_id: drag.id,
             },
         };
+        let over = if over_params {
+            Over::Params
+        } else {
+            Over::Panel
+        };
         self.automate = Some(AutomateMenu {
-            over_params,
+            over,
             ..AutomateMenu::new(target, value, panel, at)
         });
     }
@@ -154,14 +185,33 @@ impl App {
         let menu = self
             .automate
             .as_ref()
-            .filter(|menu| menu.panel == panel && !menu.over_params)?;
+            .filter(|menu| menu.panel == panel && menu.over == Over::Panel)?;
         Some(self.menu_rows(menu, self.menu_foot(panel)))
     }
 
     /// The menu over the parameter window's list, when it is open there, keeping clear of the
     /// window's last `foot` pixels (its foot line).
     pub(super) fn params_automate_menu_view(&self, foot: f32) -> Option<Element<'_, Message>> {
-        let menu = self.automate.as_ref().filter(|menu| menu.over_params)?;
+        self.over_window_menu_view(Over::Params, foot)
+    }
+
+    /// The menu over the synth's knobs in the instrument window, when it is open there,
+    /// keeping clear of the window's last `foot` pixels (its foot line).
+    pub(super) fn instrument_automate_menu_view(&self, foot: f32) -> Option<Element<'_, Message>> {
+        self.over_window_menu_view(Over::Instrument, foot)
+    }
+
+    /// Whether the automation menu is open over the synth's knobs in the instrument window.
+    pub(super) fn automate_over_instrument(&self) -> bool {
+        self.automate
+            .as_ref()
+            .is_some_and(|menu| menu.over == Over::Instrument)
+    }
+
+    /// The menu, when it is open `over` a canvas of a window of its own, keeping clear of that
+    /// window's last `foot` pixels.
+    fn over_window_menu_view(&self, over: Over, foot: f32) -> Option<Element<'_, Message>> {
+        let menu = self.automate.as_ref().filter(|menu| menu.over == over)?;
         Some(self.menu_rows(menu, foot))
     }
 
@@ -203,6 +253,7 @@ impl App {
             self.automated = automated;
             self.rack_cache.clear();
             self.mixer_cache.clear();
+            self.instrument_caches.synth.clear();
         }
     }
 }

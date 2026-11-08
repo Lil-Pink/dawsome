@@ -22,6 +22,7 @@ use super::{App, FileMessage, Message, RecordMessage};
 use crate::keys::{Action, Chord, Claim, Keys, Scope};
 use crate::ui::browser::{BrowserMessage, Nav};
 use crate::ui::roll::NoteEdit;
+use crate::zoom::Step;
 
 /// What the Keys page says while it waits for a key the system gives no name for.
 pub const UNBINDABLE: &str = "That key cannot run an action: press another, or Esc";
@@ -45,10 +46,14 @@ pub fn message_of(action: Action) -> Message {
         Action::OpenSelected => Message::OpenSelectedChannel,
         Action::Panel(panel) => Message::TogglePanel(panel),
         Action::Help => Message::ToggleHelp,
+        Action::ZoomIn => Message::Zoom(Step::Larger),
+        Action::ZoomOut => Message::Zoom(Step::Smaller),
+        Action::ZoomReset => Message::Zoom(Step::Reset),
         Action::LibraryUp => library(Nav::Up),
         Action::LibraryDown => library(Nav::Down),
         Action::LibraryClose => library(Nav::Left),
         Action::LibraryOpen => library(Nav::Right),
+        Action::RollPlayStop => Message::RollPlayStopKey,
         Action::TransposeUp => Message::RollKey(NoteEdit::Transpose(1)),
         Action::TransposeDown => Message::RollKey(NoteEdit::Transpose(-1)),
         Action::OctaveUp => Message::RollKey(NoteEdit::Transpose(12)),
@@ -556,7 +561,7 @@ mod tests {
         assert!(notes_from(&app, sent).is_empty(), "Enter plays nothing");
     }
 
-    // 6d review 10: Shift+Delete deletes the selection, a second default chord (a habit the
+    // Shift+Delete deletes the selection, a second default chord (a habit the
     // literal matches allowed), with the keyboard playing notes and with it off; chords still
     // match exactly, so Ctrl+Alt+Z undoes nothing either way.
     #[test]
@@ -630,7 +635,7 @@ mod tests {
         );
     }
 
-    // 6d review 1: while the keyboard plays notes (as a first start has it), the keys typed into
+    // While the keyboard plays notes (as a first start has it), the keys typed into
     // a text box are the box's, and letting go of them closes nothing: "90" lands in the
     // tempo's box and Enter sets 90 BPM, "Ve" in the pattern's name, "Ki" in the channel's,
     // each kept by Enter, "ki" in the Library's search. Tab, the sustain key, which a box does
@@ -732,7 +737,7 @@ mod tests {
         let _ = app.update(Message::Settings(SettingsMessage::KeysPressed(at)));
     }
 
-    // 6d K3, through the window's own key events: a press on Pattern / song mode's row waits;
+    // Through the window's own key events: a press on Pattern / song mode's row waits;
     // Shift and Ctrl alone wait on; a key the system names nothing for is refused; Ctrl+M is
     // the new chord, saved by its name; with the keyboard off L then does nothing and Ctrl+M
     // switches the mode. A row waiting gives up on Esc and keeps its keys, and the window stays

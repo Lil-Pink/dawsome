@@ -500,9 +500,10 @@ impl IPlugViewTrait for View {
     }
 }
 
+// Logged with the factor it was told, which it takes without resizing (its size stays its own).
 impl IPlugViewContentScaleSupportTrait for View {
-    unsafe fn setContentScaleFactor(&self, _factor: ScaleFactor) -> tresult {
-        log("setContentScaleFactor");
+    unsafe fn setContentScaleFactor(&self, factor: ScaleFactor) -> tresult {
+        log(format!("setContentScaleFactor {factor}"));
         kResultOk
     }
 }

@@ -1,4 +1,4 @@
-"""Known answers for the sample editor's engine and media slice: a sound's ordered edit list
+"""Known answers for the sample editor's engine and media parts: a sound's ordered edit list
 (crop, delete, silence, fade in, fade out, gain, normalize, reverse) applied before the sound
 plays, the clips' frame offsets moved by the ops that change the length, the zero-crossing
 search, and the project file that holds the list (format_version 8, written only when a sound
@@ -241,7 +241,7 @@ def audio_clip(i, track, channel, offset=0, stretch=None, length=BAR):
 def audio_doc(channels, clips, tempo=P11.MBPM):
     doc = P11.project(channels, [], version=2)
     doc["tempo_mbpm"] = tempo
-    doc["playlist"] = {"next_track_id": 9, "next_clip_id": len(clips) + 1, "tracks": P11.tracks(),
+    doc["playlist"] = {"next_track_id": 9, "next_clip_id": len(clips) + 1, "tracks": P11.tracks(8),
                        "clips": clips}
     doc["format_version"] = version_of(doc)
     return doc
@@ -537,7 +537,7 @@ def long_case():
                                                                     48000, 95999)]}}
 
 
-# ---------- the sample editor window (P1b) ----------
+# ---------- the sample editor window ----------
 # A selection of frames 1000 to 2000 cropped through the window, on the audio channel of
 # p30_undo.json (two clips, one stretched) and on its sampler (no clips): the document after,
 # the clips' offsets moved by the crop's frame map, and the frames the window then shows.
@@ -568,7 +568,7 @@ def editor_case():
 GAIN_PER_PIXEL = 10
 
 
-# ---------- a file changed since its edits (P1c) ----------
+# ---------- a file changed since its edits ----------
 # The editor's crop of the audio channel (its list's source: 72000 frames at 44.1 kHz), its
 # file swapped for the 48000-frame ramp: stale, and the crop still applies, by frame, to what
 # the file holds now.
@@ -614,7 +614,7 @@ def files():
 
 
 def sanity():
-    """What the spec states outright, held here so a rule restated wrong fails at once."""
+    """What the rules state outright, held here so a rule restated wrong fails at once."""
     crop = apply(RAMP, OPS["crop"][1])
     assert len(crop) == 24000 and crop[0] == [12000 / 65536] and crop[-1] == [35999 / 65536]
     delete = apply(RAMP, OPS["delete"][1])

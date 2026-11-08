@@ -21,13 +21,12 @@ use iced::widget::{button, container, space, text, Button, Column};
 use iced::{Element, Event, Fill, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 use crate::app::Message;
+use crate::ui::fonts::size;
 use crate::ui::style;
 
 /// A menu row's height: every row of every panel menu is this tall, so a menu's size is its
 /// rows'.
 pub const ROW_HEIGHT: f32 = 26.0;
-/// The rows' text.
-pub const TEXT_SIZE: f32 = 13.0;
 /// The menu's ground around its rows.
 pub const PADDING: f32 = 4.0;
 
@@ -74,7 +73,7 @@ pub fn row<'a>(
     message: Option<Message>,
 ) -> Button<'a, Message> {
     let dimmed = message.is_none();
-    let label = container(text(label).size(TEXT_SIZE))
+    let label = container(text(label).size(size::BODY))
         .height(Fill)
         .align_y(Vertical::Center);
     button(label)
@@ -90,9 +89,9 @@ pub fn row<'a>(
 pub fn check_row<'a>(label: &'a str, on: bool, message: Message) -> Button<'a, Message> {
     let tick = if on { "\u{2713}" } else { "" };
     let content = iced::widget::row![
-        text(label).size(TEXT_SIZE),
+        text(label).size(size::BODY),
         space().width(Fill),
-        text(tick).size(TEXT_SIZE),
+        text(tick).size(size::BODY),
     ]
     .height(Fill)
     .align_y(Vertical::Center);

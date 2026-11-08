@@ -58,7 +58,7 @@ The rules:
   p22_*_events.json   each case's messages (`--midi-events`)
   p22_expected.json   each case: its inputs and what the tests compare
 
-The cases (the spec's five, the MIDI out's and the links'):
+The cases (five, then the MIDI out's and the links'):
   (1) pedal      pedal down, note on, note off, pedal up: the note ends on the lift; the render
                  equals "held" (the note held to that call); the take holds that length
   (2) repress    pedal down, note on, off, the same key again, off, pedal up: the first voice

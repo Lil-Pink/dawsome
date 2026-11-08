@@ -88,7 +88,10 @@ fn e1_the_editor_draws_two_lanes_the_selection_and_its_foot_line() {
     let x = |frame: f64| area.x + view.x_of(frame);
     let ruler = shot.pixel(Point::new(area.x + 600.0, area.y + RULER_HEIGHT / 2.0));
     println!("ruler {ruler:02X?}");
-    assert!(near(ruler, rgb8(style::HEADER), FACE), "the ruler");
+    assert!(
+        near(ruler, rgb8(style::palette().raised), FACE),
+        "the ruler"
+    );
     let lanes = sample_view::lanes(area.height, 2);
     assert_eq!(lanes.len(), 2, "a lane a side");
     for (side, &(top, height)) in lanes.iter().enumerate() {
@@ -114,7 +117,11 @@ fn e1_the_editor_draws_two_lanes_the_selection_and_its_foot_line() {
         let unlit = shot.pixel(Point::new(x(1.0), low));
         println!("lane {side}: selected {lit:02X?}, not {unlit:02X?}");
         assert!(
-            near(lit, over(style::AUDIO_BODY, style::TEXT, LIT), FACE),
+            near(
+                lit,
+                over(style::AUDIO_BODY, style::palette().text, LIT),
+                FACE
+            ),
             "the selection lights lane {side}"
         );
         assert!(near(unlit, rgb8(style::AUDIO_BODY), FACE), "and only it");
@@ -134,7 +141,7 @@ fn e1_the_editor_draws_two_lanes_the_selection_and_its_foot_line() {
     ));
     println!("gap {gap:02X?}");
     assert!(
-        near(gap, rgb8(style::RACK_WELL), FACE),
+        near(gap, rgb8(style::palette().bg), FACE),
         "the gap between the lanes"
     );
     let foot = WINDOW_SIZE.height - HINT_HEIGHT;
@@ -142,7 +149,7 @@ fn e1_the_editor_draws_two_lanes_the_selection_and_its_foot_line() {
         &shot,
         PADDING..400.0,
         foot..WINDOW_SIZE.height,
-        style::TEXT_DIM,
+        style::palette().text_secondary,
         GLYPH,
     );
     println!("foot line: {words} pixels of dim text");
@@ -152,7 +159,7 @@ fn e1_the_editor_draws_two_lanes_the_selection_and_its_foot_line() {
         foot + HINT_HEIGHT / 2.0,
     ));
     assert!(
-        near(ground, rgb8(style::WINDOW), FACE),
+        near(ground, rgb8(style::palette().window), FACE),
         "on the window's ground"
     );
 }

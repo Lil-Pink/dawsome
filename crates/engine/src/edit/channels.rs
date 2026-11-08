@@ -7,7 +7,7 @@
 //! no ID counter moves on a delete, so undoing one gives the project back byte for byte, and a
 //! clone's inverse gives back the ID it took.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
 use super::{channel_mut, Applied, Edit, EditError, Touched};
@@ -152,7 +152,11 @@ fn untie_parameters(project: &Project, id: ChannelId, source: &SoundSource) -> V
     if plugin == source.plugin_id() {
         return Vec::new();
     }
-    let names_parameter = |target: &AutomationTarget| matches!(target, AutomationTarget::ChannelParam { channel, .. } if *channel == id);
+    let names_parameter = |target: &AutomationTarget| match target {
+        AutomationTarget::ChannelParam { channel, .. }
+        | AutomationTarget::InstrumentParam { channel, .. } => *channel == id,
+        _ => false,
+    };
     let automations = project
         .automation
         .list
@@ -168,6 +172,60 @@ fn untie_parameters(project: &Project, id: ChannelId, source: &SoundSource) -> V
             link: None,
         });
     automations.chain(links).collect()
+}
+
+/// Sets parameter `key` of channel `id`'s synth to `value`, or back to its default (`None`
+/// removes the key). Only the processor's values change, so only the channel is touched: the
+/// compile sends the running synth the values that moved.
+pub(super) fn set_param(
+    project: &mut Project,
+    id: ChannelId,
+    key: String,
+    value: Option<f32>,
+) -> Result<Applied, EditError> {
+    if let Some(value) = value.filter(|value| !value.is_finite()) {
+        return Err(EditError::InvalidParamValue(value));
+    }
+    let shown = channel_mut(project, id)?;
+    let processor = match (shown.kind, shown.processor.as_mut()) {
+        (ChannelKind::Synth, Some(processor)) => processor,
+        _ => return Err(EditError::NotASynthChannel(id.0)),
+    };
+    let old = match value {
+        Some(value) => processor.params.insert(key.clone(), value),
+        None => processor.params.remove(&key),
+    };
+    let inverse = Edit::SetChannelParam {
+        channel: id,
+        key,
+        value: old,
+    };
+    Ok(Applied::channel(inverse, id))
+}
+
+/// Sets channel `id`'s synth's parameters to `params`, every key it leaves out back to its
+/// default: a preset loaded. Only the processor's values change, so only the channel is
+/// touched: the compile sends the running synth each value that moved. A value that is not a
+/// number refuses the whole map, leaving the old one.
+pub(super) fn set_params(
+    project: &mut Project,
+    id: ChannelId,
+    params: BTreeMap<String, f32>,
+) -> Result<Applied, EditError> {
+    if let Some(&value) = params.values().find(|value| !value.is_finite()) {
+        return Err(EditError::InvalidParamValue(value));
+    }
+    let shown = channel_mut(project, id)?;
+    let processor = match (shown.kind, shown.processor.as_mut()) {
+        (ChannelKind::Synth, Some(processor)) => processor,
+        _ => return Err(EditError::NotASynthChannel(id.0)),
+    };
+    let old = mem::replace(&mut processor.params, params);
+    let inverse = Edit::SetChannelParams {
+        channel: id,
+        params: old,
+    };
+    Ok(Applied::channel(inverse, id))
 }
 
 pub(super) fn delete(project: &mut Project, id: ChannelId) -> Result<Applied, EditError> {

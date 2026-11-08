@@ -14,21 +14,33 @@
 //! channel's menu, the Library, Esc, its close button, an undo taking its channel, a new
 //! document) opens or closes the window too. Its size and position are kept in the settings
 //! when it closes.
+//!
+//! On a synth channel it shows the synth's knobs and presets ([`crate::ui::synth_panel`]): a
+//! knob's press is the mixer's (a drag by the mixer's law, a double-click's default, a
+//! choice's next value, a right-click's automation menu, over the knobs); a preset loaded is one
+//! undo step, and Save preset… writes the user's preset into the data folder's
+//! `dawsome/synth-presets`, after asking in the window before it replaces one. Opened on a
+//! synth, the window grows to show the synth's headings in lines, once a showing.
 
 use dawsome_engine::edit::Edit;
+use dawsome_engine::processor::param_values;
 use dawsome_engine::project::{
-    Channel, ChannelId, ChannelKind, Gate, ProcessorOwner, Sound, SoundSource,
+    AutomationTarget, Channel, ChannelId, ChannelKind, Gate, ProcessorOwner, Sound, SoundSource,
 };
 use dawsome_engine::transport::Control as Transport;
-use iced::widget::{container, space};
-use iced::{Element, Fill, Task};
+use iced::widget::{container, operation, space, Id};
+use iced::{Element, Fill, Point, Size, Task};
 
-use super::{App, Message, WindowChange};
+use super::{App, DragTarget, Message, WindowChange};
 use crate::desktop::{self, PopOut};
 use crate::sets::{self, ZoneInfo};
+use crate::synth_presets::{self, Preset};
 use crate::ui::hint::{self, Hover};
 use crate::ui::instrument_window::{self as window, Control, Flag, InstrumentMessage, Map};
+use crate::ui::knob_block::{fraction, next_choice};
+use crate::ui::mixer_state::{is_choice, synth_processor, MixerDrag};
 use crate::ui::style;
+use crate::ui::synth_panel::{self, Knob, Naming, PresetChoice, PresetMessage, SynthView};
 
 /// The window while it is open.
 #[derive(Debug)]
@@ -53,6 +65,14 @@ pub(super) struct Instrument {
     drag: Option<Edit>,
     /// The channel selected before the window opened, given back when it closes.
     previous: Option<ChannelId>,
+    /// A synth channel's: the presets the user saved, as listed when the window opened on it
+    /// or after a save; and Save preset… under way.
+    presets: Vec<Preset>,
+    naming: Option<Naming>,
+    /// Whether the window was given the size its channel wants (a synth's headings in lines)
+    /// since it last showed another channel: once a showing, so a window the user made
+    /// smaller stays so.
+    sized: bool,
 }
 
 impl Instrument {
@@ -105,6 +125,14 @@ impl App {
         let drum = dawsome_media::paths::shipped_part(&shown.sample)
             .is_some_and(|part| part.starts_with("starter-kit/"));
         let map = window::map_of(shown.kind, &shown.name, &zones, drum);
+        let presets = match (shown.kind, &self.host.synth_presets) {
+            (ChannelKind::Synth, Some(dir)) => synth_presets::user_presets(dir),
+            _ => Vec::new(),
+        };
+        // The automation menu over the knobs belongs to the channel they were.
+        if self.automate_over_instrument() {
+            self.automate = None;
+        }
         self.instrument = Some(Instrument {
             channel,
             source: shown.source(),
@@ -118,6 +146,9 @@ impl App {
             other: None,
             drag: None,
             previous,
+            presets,
+            naming: None,
+            sized: false,
         });
         // The Library's preview ends whatever is selected: selecting ends it too, but the
         // channel may be the one selected already, and the keys must play the window's.
@@ -151,6 +182,9 @@ impl App {
         let Some(open) = self.instrument.take() else {
             return false;
         };
+        if self.automate_over_instrument() {
+            self.automate = None;
+        }
         self.route_ports();
         self.end_map_note(&open);
         if self.session.project().channels.contains_key(&open.channel) {
@@ -223,12 +257,30 @@ impl App {
             .unwrap_or_default()
     }
 
-    pub(super) fn instrument_message(&mut self, message: InstrumentMessage) {
-        let Some(channel) = self.instrument.as_ref().map(|open| open.channel) else {
+    /// Esc in the instrument window: the automation menu over its knobs first, then a preset's
+    /// name box (or its question), else the window.
+    pub(super) fn escape_instrument(&mut self) {
+        if self.automate_over_instrument() {
+            self.automate = None;
             return;
+        }
+        if let Some(open) = self
+            .instrument
+            .as_mut()
+            .filter(|open| open.naming.is_some())
+        {
+            open.naming = None;
+            return;
+        }
+        self.close_instrument();
+    }
+
+    pub(super) fn instrument_message(&mut self, message: InstrumentMessage) -> Task<Message> {
+        let Some(channel) = self.instrument.as_ref().map(|open| open.channel) else {
+            return Task::none();
         };
         let Some(shown) = self.session.project().channels.get(&channel) else {
-            return;
+            return Task::none();
         };
         let (kind, sound) = (shown.kind, shown.sound);
         match message {
@@ -307,10 +359,10 @@ impl App {
                 // A switches to B. So an undone switch, which leaves B playing, switches to A
                 // again.
                 let Some(open) = self.instrument.as_mut() else {
-                    return;
+                    return Task::none();
                 };
                 let Some(stored) = open.compared else {
-                    return;
+                    return Task::none();
                 };
                 let next = if sound == stored {
                     open.other
@@ -345,6 +397,181 @@ impl App {
             | InstrumentMessage::InputChannels(_)
             | InstrumentMessage::RefreshInputs) => self.input_message(channel, message),
             InstrumentMessage::MidiOut(change) => self.midi_out_message(channel, change),
+            InstrumentMessage::SynthKnob {
+                index,
+                at,
+                right,
+                double,
+            } => self.synth_knob(channel, index, at, (right, double)),
+            InstrumentMessage::Preset(message) => return self.preset_message(channel, message),
+        }
+        Task::none()
+    }
+
+    /// A press on `channel`'s synth knob for parameter `index` at `at` (`right`, `double`), as
+    /// a press on an effect's knob in the mixer: the right button opens its automation menu
+    /// there, a choice's button steps to its next value, a double press sets its default, else
+    /// a drag starts; each one undo step.
+    fn synth_knob(&mut self, channel: ChannelId, index: usize, at: Point, press: (bool, bool)) {
+        let (right, double) = press;
+        let control = MixerDrag::Instrument { channel, index };
+        let (project, registry) = (self.session.project(), self.session.registry());
+        let Some(factory) =
+            synth_processor(project, channel).and_then(|processor| registry.get(&processor.id))
+        else {
+            return;
+        };
+        let (Some(info), Some(now)) = (
+            factory.params().get(index).copied(),
+            control.value(project, registry),
+        ) else {
+            return;
+        };
+        if right {
+            if let Some(target) = control.automation(project, registry) {
+                let value = fraction(now, info.min, info.max);
+                self.open_instrument_automate_menu(target, value, at);
+            }
+            return;
+        }
+        let set = |value| Edit::SetChannelParam {
+            channel,
+            key: info.key.to_owned(),
+            value,
+        };
+        if is_choice(factory, index) {
+            self.commit(set(Some(next_choice(&info, now))));
+        } else if double {
+            self.commit(set(None));
+        } else {
+            self.start_drag(DragTarget::Mixer(control));
+        }
+    }
+
+    /// The synth's presets: a preset picked loads into `channel` as one undo step; Save
+    /// preset… opens the name box (and gives it the keys), whose Save writes the preset, or
+    /// first asks in the window when one of that name is saved already.
+    fn preset_message(&mut self, channel: ChannelId, message: PresetMessage) -> Task<Message> {
+        match message {
+            PresetMessage::Load(choice) => {
+                if let Some(params) = self.preset_params(&choice) {
+                    self.commit(Edit::SetChannelParams { channel, params });
+                }
+            }
+            PresetMessage::Save => {
+                if let Some(open) = self.instrument.as_mut() {
+                    open.naming = Some(Naming::Typing {
+                        name: String::new(),
+                        problem: None,
+                    });
+                }
+                let input = Id::new(synth_panel::NAME_INPUT);
+                return operation::focus(input);
+            }
+            PresetMessage::Named(typed) => {
+                if let Some(Naming::Typing { name, problem }) = self
+                    .instrument
+                    .as_mut()
+                    .and_then(|open| open.naming.as_mut())
+                {
+                    *name = typed;
+                    *problem = None;
+                }
+            }
+            PresetMessage::Submit => self.submit_preset_name(channel),
+            PresetMessage::Replace => {
+                let replacing = self
+                    .instrument
+                    .as_ref()
+                    .and_then(|open| match &open.naming {
+                        Some(Naming::Replacing { name }) => Some(name.clone()),
+                        _ => None,
+                    });
+                if let Some(name) = replacing {
+                    self.save_preset(channel, name);
+                }
+            }
+            PresetMessage::Cancel => {
+                if let Some(open) = self.instrument.as_mut() {
+                    open.naming = None;
+                }
+            }
+        }
+        Task::none()
+    }
+
+    /// The parameters of the preset `choice` names: a factory one, or one the user saved as
+    /// listed.
+    fn preset_params(
+        &self,
+        choice: &PresetChoice,
+    ) -> Option<std::collections::BTreeMap<String, f32>> {
+        let mut user = self.instrument.iter().flat_map(|open| &open.presets);
+        let preset = if choice.factory {
+            synth_presets::factory()
+                .iter()
+                .find(|preset| preset.name == choice.name)
+        } else {
+            user.find(|preset| preset.name == choice.name)
+        };
+        preset.map(|preset| preset.params.clone())
+    }
+
+    /// The name box's Save: the name as it is saved (its letters, digits, spaces, - and _),
+    /// refused when nothing is left of it or it is a factory preset's; asked about first when a
+    /// preset of it is saved already; else saved.
+    fn submit_preset_name(&mut self, channel: ChannelId) {
+        let Some(dir) = self.host.synth_presets.clone() else {
+            return;
+        };
+        let Some(open) = self.instrument.as_mut() else {
+            return;
+        };
+        let Some(Naming::Typing { name, problem }) = open.naming.as_mut() else {
+            return;
+        };
+        let saved = synth_presets::sanitized(name);
+        if saved.is_empty() {
+            *problem = Some("Type a name: letters, digits, spaces, - or _".to_owned());
+        } else if synth_presets::is_factory_name(&saved) {
+            *problem = Some(format!("{saved} is a starting sound's name; pick another"));
+        } else if synth_presets::file_in(&dir, &saved).exists() {
+            open.naming = Some(Naming::Replacing { name: saved });
+        } else {
+            self.save_preset(channel, saved);
+        }
+    }
+
+    /// Writes `channel`'s synth's sound as the user's preset `name` (as it is saved), the list
+    /// read again after; a write that fails says why in the name box.
+    fn save_preset(&mut self, channel: ChannelId, name: String) {
+        let Some(dir) = self.host.synth_presets.clone() else {
+            return;
+        };
+        let (project, registry) = (self.session.project(), self.session.registry());
+        let Some(processor) = synth_processor(project, channel) else {
+            return;
+        };
+        let Some(factory) = registry.get(&processor.id) else {
+            return;
+        };
+        let values = param_values(factory.params(), &processor.params);
+        let preset = Preset::of(name, factory.params(), &values);
+        let saved = synth_presets::save(&dir, &preset);
+        let Some(open) = self.instrument.as_mut() else {
+            return;
+        };
+        match saved {
+            Ok(()) => {
+                open.naming = None;
+                open.presets = synth_presets::user_presets(&dir);
+            }
+            Err(error) => {
+                open.naming = Some(Naming::Typing {
+                    name: preset.name,
+                    problem: Some(error.to_string()),
+                });
+            }
         }
     }
 
@@ -434,6 +661,7 @@ impl App {
             channel,
             input: self.input_view(open.channel),
             midi_out: self.midi_out_view(open.channel),
+            synth: self.synth_view(open, channel),
             maker: &open.maker,
             inserts,
             map: &open.map,
@@ -446,6 +674,80 @@ impl App {
             width: self.instrument_layout_width(),
             fine: self.modifiers.shift(),
             caches: &self.instrument_caches,
+        })
+    }
+
+    /// What the window shows of `channel` when it is a synth channel: each knob's value (its
+    /// automation's, while one governs it) and marks, the presets (the factory's, then the
+    /// user's) with the one it sounds as picked, and the automation menu over the knobs.
+    fn synth_view<'a>(
+        &'a self,
+        open: &'a Instrument,
+        channel: &'a Channel,
+    ) -> Option<SynthView<'a>> {
+        if channel.kind != ChannelKind::Synth {
+            return None;
+        }
+        let processor = channel.processor.as_ref()?;
+        let factory = self.session.registry().get(&processor.id)?;
+        let project = self.session.project();
+        let values = param_values(factory.params(), &processor.params);
+        let knobs = factory
+            .params()
+            .iter()
+            .zip(values)
+            .map(|(info, value)| {
+                let target = AutomationTarget::InstrumentParam {
+                    channel: open.channel,
+                    key: info.key.to_owned(),
+                };
+                let automation = self.automated.get(&target).copied();
+                Knob {
+                    value: automation.flatten().unwrap_or(value),
+                    automated: automation.is_some(),
+                    linked: project.midi_links.get(&target).is_some(),
+                }
+            })
+            .collect();
+        let offered = || {
+            let factory_presets = synth_presets::factory().iter().map(|preset| (preset, true));
+            factory_presets.chain(open.presets.iter().map(|preset| (preset, false)))
+        };
+        let choice = |(preset, factory): (&Preset, bool)| PresetChoice {
+            name: preset.name.clone(),
+            factory,
+        };
+        let current = offered()
+            .find(|(preset, _)| preset.sounds_as(factory.params(), &processor.params))
+            .map(choice);
+        Some(SynthView {
+            channel: open.channel,
+            factory,
+            knobs,
+            sample_rate: project.sample_rate,
+            presets: offered().map(choice).collect(),
+            current,
+            saves: self.host.synth_presets.is_some(),
+            naming: open.naming.as_ref(),
+            menu: self.instrument_automate_menu_view(window::HINT_HEIGHT),
+            cache: &self.instrument_caches.synth,
+        })
+    }
+
+    /// The size the instrument window shows the open channel at, from `size`: a synth's grown,
+    /// each side, to show its whole booth ([`window::synth_window_size`]); any other's as it
+    /// is.
+    fn instrument_size_for(&self, size: Size) -> Size {
+        let wanted = self
+            .instrument
+            .as_ref()
+            .and_then(|open| self.session.project().channels.get(&open.channel))
+            .filter(|channel| channel.kind == ChannelKind::Synth)
+            .and_then(|channel| channel.processor.as_ref())
+            .and_then(|processor| self.session.registry().get(&processor.id))
+            .map(window::synth_window_size);
+        wanted.map_or(size, |wanted| {
+            Size::new(size.width.max(wanted.width), size.height.max(wanted.height))
         })
     }
 
@@ -488,7 +790,7 @@ impl App {
     }
 
     /// The name of what `channel` plays: its set's as the Library lists it (else its file's),
-    /// its sample's file, its plugin's, or its input device's.
+    /// its sample's file, its plugin's, its synth's, or its input device's.
     pub(super) fn sound_name(&self, channel: &Channel) -> String {
         let stem = |path: &std::path::Path| {
             path.file_stem()
@@ -510,6 +812,12 @@ impl App {
                 .processor
                 .as_ref()
                 .and_then(|processor| processor.name.clone())
+                .unwrap_or_default(),
+            ChannelKind::Synth => channel
+                .processor
+                .as_ref()
+                .and_then(|processor| self.session.registry().get(&processor.id))
+                .map(|factory| factory.name().to_owned())
                 .unwrap_or_default(),
             ChannelKind::Input => match channel.input.as_ref() {
                 Some(input) if input.device.is_empty() => "System default input".to_owned(),
@@ -544,17 +852,36 @@ impl App {
     /// again when `restack`.
     fn sync_instrument_window(&mut self, restack: bool) -> Task<Message> {
         let above = self.windows_above;
+        // The size its channel wants, once a showing ([`Instrument::sized`]).
+        let first_showing = self
+            .instrument
+            .as_mut()
+            .is_some_and(|open| !std::mem::replace(&mut open.sized, true));
+        let kept = self.instrument_place.size(PopOut::Instrument);
+        let wanted = self.instrument_size_for(kept);
         match (self.instrument.is_some(), self.instrument_window) {
             (true, None) => {
                 let settings = desktop::pop_out_settings(
                     PopOut::Instrument,
-                    self.instrument_place.size(PopOut::Instrument),
+                    wanted,
                     self.instrument_place.position(),
                     pop_out_level(above),
+                    self.zoom(),
                 );
                 let (id, opened) = iced::window::open(settings);
                 self.instrument_window = Some(id);
+                // Laid out for the size asked for until the window says its own.
+                self.instrument_width = Some(wanted.width);
                 opened.discard()
+            }
+            (true, Some(id)) if first_showing && wanted != kept => {
+                self.instrument_width = Some(wanted.width);
+                let level = if restack {
+                    iced::window::set_level(id, pop_out_level(above))
+                } else {
+                    Task::none()
+                };
+                Task::batch([iced::window::resize(id, wanted), level])
             }
             (false, Some(id)) => {
                 self.instrument_window = None;
@@ -588,7 +915,7 @@ impl App {
 
     /// Keeps the instrument window's place in the settings for its next opening.
     fn remember_instrument_place(&mut self) {
-        let place = Some(self.instrument_place);
+        let place = Some(self.instrument_place.system(self.zoom()));
         if self.settings.instrument_window != place {
             self.settings.instrument_window = place;
             self.save_settings();
@@ -635,6 +962,7 @@ fn control_edit(channel: ChannelId, sound: Sound, control: Control, value: f32) 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     use dawsome_engine::project::{Gate, Project};
@@ -992,7 +1320,7 @@ mod tests {
     ) -> Option<Message> {
         use iced::widget::canvas::Program as _;
         let project = app.session.project();
-        let size = crate::ui::layout::rack_canvas_size(project.channels.len(), 16);
+        let size = crate::ui::layout::rack_size(project.channels.len(), 16);
         let bounds = iced::Rectangle::new(iced::Point::ORIGIN, size);
         let cursor = iced::mouse::Cursor::Available(at);
         let action = app.channel_rack().update(state, &event, bounds, cursor)?;
@@ -1032,7 +1360,7 @@ mod tests {
         }
     }
 
-    // P3 through the rack's press path: a click on the snare's name selects it and opens no window;
+    // Through the rack's press path: a click on the snare's name selects it and opens no window;
     // a double-click opens its instrument window, a window of its own; a click on the kick's
     // selects it and leaves the window on the snare; a double-click on the kick's retargets that
     // window; another double-click on the kick leaves it as it was (its stored A kept); a right
@@ -1090,7 +1418,7 @@ mod tests {
         );
     }
 
-    // P4: the window shows its channel's sound again when that is replaced, and again when the
+    // The window shows its channel's sound again when that is replaced, and again when the
     // replacement is undone: F1's kick (a sampler: no zones) given the test set Pad shows the
     // set's zones, and the undo the sampler's none; the window stays open on the channel.
     #[test]
@@ -1674,6 +2002,368 @@ mod tests {
             crate::ui::instrument_window::WINDOW_SIZE,
             "what opens next time is bounded"
         );
+    }
+
+    const SYNTH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/p33_sine.json"
+    );
+
+    /// p33_sine (one synth channel, its first oscillator a sine) with its window open, `host`
+    /// saying where the user's presets are kept.
+    fn synth_app(host: Host) -> (App, dawsome_engine::realtime::Player) {
+        let path = Path::new(SYNTH);
+        let project: Project = project_file::open(path).expect("opens").project;
+        let (mut app, player) = app_hosted(project, path, host);
+        let _ = app.update(Message::OpenInstrument(ChannelId(1)));
+        (app, player)
+    }
+
+    /// The synth channel's parameters, as its file keeps them.
+    fn synth_params(app: &App) -> BTreeMap<String, f32> {
+        let channel = &app.session.project().channels[&ChannelId(1)];
+        channel.processor.as_ref().expect("a synth").params.clone()
+    }
+
+    /// A press on the synth's knob for parameter `index`, as its canvas reports one.
+    fn synth_knob(app: &mut App, index: usize, right: bool, double: bool) {
+        let at = Point::new(750.0, 50.0);
+        send(
+            app,
+            M::SynthKnob {
+                index,
+                at,
+                right,
+                double,
+            },
+        );
+    }
+
+    fn preset(app: &mut App, message: PresetMessage) {
+        send(app, M::Preset(message));
+    }
+
+    /// What the window offers in its preset list, and the one it shows picked.
+    fn preset_list(app: &App) -> (Vec<String>, Option<String>) {
+        let shown = app.instrument_shown().expect("open");
+        let synth = shown.synth.expect("a synth's");
+        let names = synth.presets.iter().map(|choice| choice.name.clone());
+        (names.collect(), synth.current.map(|choice| choice.name))
+    }
+
+    // The synth's knobs answer as the mixer's effect knobs: a press on the cutoff (0..1 over a
+    // 200 px sweep) and 100 px to the left leave it at 0.5, live with no plan, then one plan and
+    // one undo step ("Synth setting") on release; with Shift a tenth as fast (100 px more:
+    // 0.45); a double press sets its default again (the key leaves the file); the wave's button
+    // steps the sine (0) to the triangle (1) and the last, the square (3), round to the sine.
+    // Each undo gives back the step before, down to the file as it was.
+    #[test]
+    fn the_synths_knobs_drag_reset_and_step_as_the_mixers_do() {
+        let (mut app, _player) = synth_app(Host::offline());
+        let before = synth_params(&app);
+        let plans = app.session.plans_sent();
+        synth_knob(&mut app, 17, false, false);
+        let _ = app.update(Message::DragMoved(500.0));
+        let _ = app.update(Message::DragMoved(400.0));
+        assert_eq!(synth_params(&app).get("cutoff"), Some(&0.5));
+        assert_eq!(app.session.plans_sent(), plans, "no plan while it moves");
+        let _ = app.update(Message::DragEnded);
+        assert_eq!(app.session.plans_sent(), plans + 1);
+        let history = app.session.history();
+        assert_eq!(
+            (history.undo_len(), history.undo_name()),
+            (1, Some("Synth setting"))
+        );
+        let _ = app.update(Message::ModifiersChanged(iced::keyboard::Modifiers::SHIFT));
+        synth_knob(&mut app, 17, false, false);
+        let _ = app.update(Message::DragMoved(500.0));
+        let _ = app.update(Message::DragMoved(400.0));
+        let _ = app.update(Message::DragEnded);
+        let _ = app.update(Message::ModifiersChanged(iced::keyboard::Modifiers::empty()));
+        let cutoff = synth_params(&app)["cutoff"];
+        assert!((cutoff - 0.45).abs() < 1e-6, "fine: {cutoff}");
+        synth_knob(&mut app, 17, false, true);
+        assert_eq!(synth_params(&app).get("cutoff"), None, "its default");
+        synth_knob(&mut app, 0, false, false);
+        assert_eq!(synth_params(&app).get("osc1_wave"), Some(&1.0));
+        for _ in 0..2 {
+            synth_knob(&mut app, 0, false, false);
+        }
+        assert_eq!(synth_params(&app).get("osc1_wave"), Some(&3.0));
+        synth_knob(&mut app, 0, false, false);
+        assert_eq!(synth_params(&app).get("osc1_wave"), Some(&0.0), "round");
+        assert_eq!(app.session.history().undo_len(), 7);
+        for _ in 0..4 {
+            let _ = app.update(Message::Undo);
+        }
+        assert_eq!(synth_params(&app).get("osc1_wave"), Some(&0.0));
+        assert_eq!(synth_params(&app).get("cutoff"), None);
+        let _ = app.update(Message::Undo);
+        assert!((synth_params(&app)["cutoff"] - 0.45).abs() < 1e-6);
+        for _ in 0..2 {
+            let _ = app.update(Message::Undo);
+        }
+        assert_eq!(synth_params(&app), before, "every step undone");
+    }
+
+    // A right press on a synth knob opens the automation menu over the knobs, in the
+    // instrument window rather than over a panel of the main one, where the press was, for
+    // the knob's parameter at its value (the cutoff at 1, its top). Esc in the window closes the
+    // menu, the window staying; the menu's row makes the parameter's automation clip, after
+    // which the knob shows its automation's dot, and a controller link its own. Esc then
+    // closes the window.
+    #[test]
+    fn a_synth_knobs_right_press_opens_its_automation_menu_over_the_knobs() {
+        let (mut app, _player) = synth_app(Host::offline());
+        let id = app.instrument_window.expect("open");
+        synth_knob(&mut app, 17, true, false);
+        let target = AutomationTarget::InstrumentParam {
+            channel: ChannelId(1),
+            key: "cutoff".into(),
+        };
+        let menu = app.automate.as_ref().expect("the knob's menu");
+        assert_eq!(
+            (&menu.target, menu.value, menu.at),
+            (&target, 1.0, Point::new(750.0, 50.0))
+        );
+        assert!(app.instrument_automate_menu_view(0.0).is_some());
+        assert!(
+            app.automate_menu_view(crate::ui::panels::Panel::Rack)
+                .is_none(),
+            "not in the main window"
+        );
+        let _ = app.update(Message::Escape(id));
+        assert!(app.automate.is_none(), "Esc: the menu first");
+        assert_eq!(app.instrument_on(), Some(ChannelId(1)));
+        synth_knob(&mut app, 17, true, false);
+        let _ = app.update(Message::AutomateChosen);
+        let project = app.session.project();
+        assert!(project.automation.of_target(&target).is_some(), "its clip");
+        app.read_automation();
+        app.commit(Edit::SetMidiLink {
+            target: target.clone(),
+            link: Some(dawsome_engine::project::Controller {
+                cc: 74,
+                channel: None,
+            }),
+        });
+        let marks = |app: &App| {
+            let synth = app.instrument_shown().and_then(|shown| shown.synth);
+            let knobs = synth.expect("a synth's").knobs;
+            (knobs[17].automated, knobs[17].linked, knobs[18].automated)
+        };
+        assert_eq!(marks(&app), (true, true, false));
+        let _ = app.update(Message::Escape(id));
+        assert_eq!(app.instrument_on(), None, "then the window");
+    }
+
+    // Saw Lead picked from the list is one undo step, "Load preset", after which the
+    // channel's map is exactly the file's (assets/synth-presets/saw-lead.json: nine keys; the
+    // sine's osc1_wave gone, so the first oscillator is the default saw) and the list shows
+    // Saw Lead picked; Undo gives back the sine's map, which no preset sounds as. The list:
+    // the factory's eight, in the factory's order (none of the user's: no folder).
+    #[test]
+    fn a_preset_loads_as_one_undo_step_and_undo_gives_the_old_sound_back() {
+        let (mut app, _player) = synth_app(Host::offline());
+        let before = synth_params(&app);
+        let (names, current) = preset_list(&app);
+        assert_eq!(
+            names,
+            [
+                "Init",
+                "Saw Lead",
+                "Square Bass",
+                "Sub",
+                "Pad",
+                "Pluck",
+                "Keys",
+                "Brass"
+            ]
+        );
+        assert_eq!(current, None, "the sine is no preset");
+        let lead = PresetChoice {
+            name: "Saw Lead".into(),
+            factory: true,
+        };
+        preset(&mut app, PresetMessage::Load(lead));
+        let file = include_str!("../../../../assets/synth-presets/saw-lead.json");
+        let want = synth_presets::parse(file).expect("parses").params;
+        assert_eq!(synth_params(&app), want);
+        assert_eq!(want.len(), 9);
+        let history = app.session.history();
+        assert_eq!(
+            (history.undo_len(), history.undo_name()),
+            (1, Some("Load preset"))
+        );
+        assert_eq!(preset_list(&app).1.as_deref(), Some("Saw Lead"));
+        let _ = app.update(Message::Undo);
+        assert_eq!(synth_params(&app), before);
+        assert_eq!(preset_list(&app).1, None);
+        preset(
+            &mut app,
+            PresetMessage::Load(PresetChoice {
+                name: "Init".into(),
+                factory: true,
+            }),
+        );
+        assert!(synth_params(&app).is_empty(), "Init: every default");
+        assert_eq!(preset_list(&app).1.as_deref(), Some("Init"));
+    }
+
+    // Save preset… through a temp data folder: a name of nothing it keeps and a factory
+    // preset's name are refused in the window, saying why; "My Lead/1" saves as "My Lead1",
+    // its file holding the sound's values off their defaults (the sine's wave), listed after
+    // the factory's and shown picked. Saved again under that name, the window asks first:
+    // Cancel keeps the file, Replace writes the sound now (its cutoff at 0.5). A new app over
+    // another synth channel (the defaults) lists it, and loads it as the same sound. Esc closes
+    // the name box before the window.
+    #[test]
+    fn a_saved_preset_loads_into_another_synth_as_the_same_sound() {
+        let dir = std::env::temp_dir().join(format!(
+            "dawsome-synth-window-presets-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = || Host {
+            synth_presets: Some(dir.clone()),
+            ..Host::offline()
+        };
+        let (mut app, _player) = synth_app(host());
+        let id = app.instrument_window.expect("open");
+        let naming = |app: &App| app.instrument.as_ref().and_then(|open| open.naming.clone());
+        let typed = |app: &mut App, name: &str| {
+            preset(app, PresetMessage::Save);
+            preset(app, PresetMessage::Named(name.to_owned()));
+            preset(app, PresetMessage::Submit);
+        };
+        typed(&mut app, "?!");
+        assert!(
+            matches!(
+                naming(&app),
+                Some(Naming::Typing {
+                    problem: Some(_),
+                    ..
+                })
+            ),
+            "nothing kept"
+        );
+        let _ = app.update(Message::Escape(id));
+        assert_eq!(naming(&app), None, "Esc closes the name box");
+        assert_eq!(
+            app.instrument_on(),
+            Some(ChannelId(1)),
+            "and not the window"
+        );
+        typed(&mut app, "saw LEAD");
+        assert!(
+            matches!(
+                naming(&app),
+                Some(Naming::Typing {
+                    problem: Some(_),
+                    ..
+                })
+            ),
+            "a factory preset's name"
+        );
+        preset(&mut app, PresetMessage::Named("My Lead/1".to_owned()));
+        preset(&mut app, PresetMessage::Submit);
+        assert_eq!(naming(&app), None, "saved");
+        let file = dir.join("My Lead1.json");
+        let saved = synth_presets::parse(&std::fs::read_to_string(&file).expect("its file"));
+        let saved = saved.expect("a preset");
+        assert_eq!(saved.name, "My Lead1");
+        assert_eq!(
+            saved.params,
+            BTreeMap::from([("osc1_wave".to_owned(), 0.0)])
+        );
+        let (names, current) = preset_list(&app);
+        assert_eq!(names.last().map(String::as_str), Some("My Lead1"));
+        assert_eq!(names.len(), 9);
+        assert_eq!(current.as_deref(), Some("My Lead1"));
+        app.commit(Edit::SetChannelParam {
+            channel: ChannelId(1),
+            key: "cutoff".into(),
+            value: Some(0.5),
+        });
+        typed(&mut app, "My Lead1");
+        assert_eq!(
+            naming(&app),
+            Some(Naming::Replacing {
+                name: "My Lead1".into()
+            })
+        );
+        preset(&mut app, PresetMessage::Cancel);
+        let kept = synth_presets::parse(&std::fs::read_to_string(&file).expect("its file"));
+        assert_eq!(
+            kept.expect("a preset").params.len(),
+            1,
+            "cancel keeps the file"
+        );
+        typed(&mut app, "My Lead1");
+        preset(&mut app, PresetMessage::Replace);
+        assert_eq!(naming(&app), None);
+        let replaced = synth_presets::parse(&std::fs::read_to_string(&file).expect("its file"));
+        let replaced = replaced.expect("a preset").params;
+        assert_eq!(replaced.get("cutoff"), Some(&0.5));
+        let sound = synth_params(&app);
+
+        let mut project: Project = project_file::open(Path::new(SYNTH)).expect("opens").project;
+        project
+            .channels
+            .insert(ChannelId(1), Channel::synth("Another"));
+        let (mut other, _player) = app_hosted(project, Path::new(SYNTH), host());
+        let _ = other.update(Message::OpenInstrument(ChannelId(1)));
+        assert_eq!(preset_list(&other).1.as_deref(), Some("Init"));
+        let mine = PresetChoice {
+            name: "My Lead1".into(),
+            factory: false,
+        };
+        preset(&mut other, PresetMessage::Load(mine));
+        assert_eq!(synth_params(&other), sound, "the same sound");
+        std::fs::remove_dir_all(&dir).expect("cleans up");
+    }
+
+    // Opened on a synth, the window takes the size that shows its whole booth (924 × 516,
+    // `synth_window_size`) and is laid out for it at once; made smaller by hand it stays so
+    // while it shows the synth. Shown on a sampler it keeps the size it has; back on the synth
+    // it grows to show the booth again.
+    #[test]
+    fn the_window_grows_to_show_the_synths_headings_once_a_showing() {
+        let path = Path::new(SYNTH);
+        let mut project: Project = project_file::open(path).expect("opens").project;
+        project
+            .channels
+            .insert(ChannelId(2), Channel::sampler("snare", "impulse.wav"));
+        project.next_channel_id = ChannelId(3);
+        let (mut app, _player) = app_hosted(project, path, Host::offline());
+        let _ = app.update(Message::OpenInstrument(ChannelId(2)));
+        assert_eq!(
+            app.instrument_layout_width(),
+            560.0,
+            "a sampler's first size"
+        );
+        let id = app.instrument_window.expect("open");
+        let _ = app.update(Message::Windowed(
+            id,
+            WindowChange::Opened {
+                size: crate::ui::instrument_window::WINDOW_SIZE,
+                position: None,
+            },
+        ));
+        let _ = app.update(Message::OpenInstrument(ChannelId(1)));
+        assert_eq!(app.instrument_layout_width(), 924.0, "grown for the synth");
+        let smaller = iced::Size::new(700.0, 500.0);
+        let _ = app.update(Message::Windowed(id, WindowChange::Resized(smaller)));
+        let _ = app.update(Message::ChannelSelected(ChannelId(1)));
+        assert_eq!(
+            app.instrument_layout_width(),
+            700.0,
+            "made smaller, it stays"
+        );
+        let _ = app.update(Message::OpenInstrument(ChannelId(2)));
+        assert_eq!(app.instrument_layout_width(), 700.0, "a sampler keeps it");
+        let _ = app.update(Message::OpenInstrument(ChannelId(1)));
+        assert_eq!(app.instrument_layout_width(), 924.0, "the synth again");
     }
 
     // Esc in the instrument window closes it

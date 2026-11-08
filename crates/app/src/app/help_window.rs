@@ -114,6 +114,7 @@ impl App {
                     self.help.place.size(PopOut::Help),
                     self.help.place.position(),
                     level,
+                    self.zoom(),
                 );
                 let (id, opened) = window::open(settings);
                 self.help.window = Some(id);
@@ -146,7 +147,7 @@ impl App {
 
     /// Keeps the Help window's place in the settings for its next opening.
     pub(super) fn remember_help_place(&mut self) {
-        let place = Some(self.help.place);
+        let place = Some(self.help.place.system(self.zoom()));
         if self.settings.help_window != place {
             self.settings.help_window = place;
             self.save_settings();
@@ -251,7 +252,7 @@ mod tests {
         (app.help.open, app.help.window.is_some())
     }
 
-    // H1, H2, H5: the toolbar's Help button, right of File and Edit, opens the Help window (a click on
+    // The toolbar's Help button, right of File and Edit, opens the Help window (a click on
     // it through the window's widgets), lit while it is open, and a second click closes it;
     // F1 typed in the main window does the same, with the typing keyboard on as a new window has
     // it (F1 is no key of its notes). The window is one of its own, titled the main window's
@@ -333,7 +334,7 @@ mod tests {
         assert_eq!((app.help.window, app.settings_window), (None, settings));
     }
 
-    // H2, H5: it opens on the first section; each entry of the contents shows its section, from
+    // It opens on the first section; each entry of the contents shows its section, from
     // its heading (the page snaps back to its top), and the page's foot leads to the sections
     // either side; a section past the last changes nothing. The page's title is the entry's
     // title, so every entry reaches its heading.
@@ -343,7 +344,7 @@ mod tests {
         let _ = app.update(Message::ToggleHelp);
         assert_eq!(app.help.section, 0, "it opens on the first section");
         let count = app.help.guide.sections.len();
-        assert_eq!(count, 14);
+        assert_eq!(count, 15);
         for section in (0..count).rev() {
             let task = app.help_message(HelpMessage::Show(section));
             assert_eq!(task.units(), 1, "the page scrolls back to its top");
@@ -360,10 +361,11 @@ mod tests {
         assert_eq!(app.help.section, 3, "it opens again where it was left");
     }
 
-    // H3: the guide's sections in the spec's order, each opening with words saying what its
-    // subject is before any heading, list or picture.
+    // The guide's sections in order, Dawsome Synth's page after the one on
+    // adding an instrument, each opening with words saying what its subject is before any
+    // heading, list or picture.
     #[test]
-    fn the_guide_has_its_fourteen_sections_in_order() {
+    fn the_guide_has_its_fifteen_sections_in_order() {
         let guide = Guide::shipped();
         let titles: Vec<&str> = guide
             .sections
@@ -376,6 +378,7 @@ mod tests {
                 "What Dawsome does",
                 "The main window",
                 "Adding an instrument",
+                "Dawsome Synth",
                 "Editing a sound",
                 "Playing notes",
                 "Patterns and the playlist",
@@ -398,7 +401,7 @@ mod tests {
         }
     }
 
-    // H4, H5: every picture the guide names is in the help folder the install ships (its
+    // Every picture the guide names is in the help folder the install ships (its
     // pictures are read from there, not built in), a PNG the window can read, no wider than
     // the page has room for in the window's first size.
     #[test]
@@ -419,7 +422,7 @@ mod tests {
         }
     }
 
-    // H4: with no help folder (an install without it), a section's pictures are none and its
+    // With no help folder (an install without it), a section's pictures are none and its
     // page shows their captions alone; nothing fails.
     #[test]
     fn a_missing_picture_leaves_its_caption() {

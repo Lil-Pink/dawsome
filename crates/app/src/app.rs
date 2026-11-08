@@ -26,6 +26,7 @@ mod interchange;
 mod key_input;
 mod landing;
 mod latency;
+mod layout_dump;
 mod library;
 mod library_preview;
 mod midi_files;
@@ -37,14 +38,18 @@ mod patterns;
 mod plugins;
 mod recording;
 mod rehearse;
+mod reset;
 mod roll_edits;
+mod roll_player;
 mod sample_editor;
 mod settings_window;
+mod theming;
 mod typing;
 #[cfg(test)]
 mod vst3_tests;
 #[cfg(test)]
 mod widget_events;
+mod zooming;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -84,6 +89,7 @@ use crate::ui::arranger::{self, Arranger, PlaylistMessage};
 use crate::ui::browser::{self, BrowserMessage, Nav};
 use crate::ui::callout::CalloutMessage;
 use crate::ui::dialog::{self, FileMenu};
+use crate::ui::fonts::size;
 use crate::ui::layout;
 use crate::ui::mixer::{MixerPanel, RENAME_INPUT as MIXER_RENAME_INPUT};
 use crate::ui::mixer_layout;
@@ -159,9 +165,6 @@ const SWING_DRAG_PIXELS: f32 = 4.0;
 /// How much slower a mixer control moves with Shift held.
 const FINE_DRAG: f32 = 0.1;
 
-/// The hint bar's text size.
-const HINT_TEXT_SIZE: f32 = 12.0;
-
 /// Tempo steps in milli-BPM: whole BPM, or 0.001 BPM with Shift held.
 const TEMPO_STEP: u32 = 1000;
 
@@ -191,6 +194,12 @@ pub enum Message {
     Stop,
     /// Space: play when stopped, stop when playing.
     TogglePlay,
+    /// The piano roll strip's Play / Stop: the roll's channel of its pattern, or Stop.
+    RollPlayStop,
+    /// Shift+Space: the roll's Play / Stop, while the roll has the keys.
+    RollPlayStopKey,
+    /// The piano roll strip's Loop: its Play loops the pattern, or plays it once.
+    ToggleRollLoop,
     Undo,
     Redo,
     StepClicked {
@@ -225,6 +234,8 @@ pub enum Message {
     ToggleLoop,
     /// F5, F6, F7: show or hide a panel.
     TogglePanel(Panel),
+    /// The pop-out button on a stacked panel's header: the panel into its own window.
+    PopOutPanel(Panel),
     /// Something the piano roll's canvases reported.
     Roll(RollMessage),
     /// Something the playlist's canvases or header reported.
@@ -278,8 +289,24 @@ pub enum Message {
     ToggleHelp,
     /// Something the Help window reported.
     Help(crate::ui::help_window::HelpMessage),
-    /// The window's device pixels per logical pixel.
+    /// The system's display scale for the main window, its device pixels per the system's
+    /// logical pixel (without the app's zoom, which the toolkit multiplies on top of it).
     ScaleFactor(f32),
+    /// A key or the Settings stepper zoomed every window a stop larger or smaller, or back to
+    /// 100 % ([`crate::zoom`]).
+    Zoom(crate::zoom::Step),
+    /// The toolbar's "Zoom 125 %" notice has shown its two seconds.
+    ZoomNoticeDue,
+    /// Settings' "Reset to defaults", pressed once, has waited its three seconds for a second
+    /// press.
+    ResetArmedDue,
+    /// A pop-out window that just opened `size` big has a monitor of `monitor` (logical pixels
+    /// both): it is made to fit when larger.
+    PopOutMonitor {
+        window: window::Id,
+        size: Size,
+        monitor: Option<Size>,
+    },
     /// The main window as the window system names it, from the toolkit once it is open: what
     /// the pointer is asked about when a file is dropped.
     MainNative(Option<dawsome_host_common::window::WindowId>),
@@ -378,7 +405,9 @@ pub enum Message {
     Callout(CalloutMessage),
     /// A window reported its new scale factor, size or place: the main window's become
     /// [`Message::ScaleFactor`] and [`Message::WindowResized`]; the pop-out windows' (the
-    /// instrument window's, the Settings window's) are kept for their next opening.
+    /// instrument window's, the Settings window's) are kept for their next opening. A position
+    /// moved is turned into the system's logical pixels first (the toolkit gives it divided by
+    /// the zoom too, and opens a window at a position in the system's).
     Windowed(window::Id, WindowChange),
     /// A window's close button: the main window's asks about unsaved changes, then closes the
     /// app; a pop-out window's closes it.
@@ -530,6 +559,9 @@ pub struct App {
     mode: PlayMode,
     /// Play was asked for and Stop was not; the playhead timer runs while this or `playing`.
     transport_on: bool,
+    /// The transport plays the piano roll's channel of its pattern (the roll's Play), not the
+    /// toolbar's mode, which waits in `mode` ([`roll_player`]).
+    roll_plays: bool,
     /// Whether the player was playing, as last read.
     playing: bool,
     /// The play position as last read, `None` while stopped.
@@ -576,6 +608,7 @@ pub struct App {
     /// roll's keys edit nothing.
     search_typing: bool,
     /// The piano roll's drawn grid and lane; cleared on every message that could change them.
+    roll_ruler_cache: canvas::Cache,
     roll_grid_cache: canvas::Cache,
     roll_lane_cache: canvas::Cache,
     /// The playlist's view, snap, selection, gesture in progress and rename.
@@ -690,8 +723,19 @@ pub struct App {
     /// The panels the make-room rule closed, by the panel whose opening closed them: closing
     /// that one by hand brings them back.
     displaced: panels::Displaced,
-    /// The window's device pixels per logical pixel, 1 until the window reports it.
-    scale_factor: f32,
+    /// The system's display scale for the main window (its device pixels per the system's
+    /// logical pixel, without the app's zoom: what the toolkit reports), 1 until the window
+    /// reports it. [`App::device_scale`] is what the window draws at.
+    os_scale: f32,
+    /// The toolbar's notice of the zoom just set ("Zoom 125 %"), and when it was set: it shows
+    /// for two seconds (`zooming::ZOOM_NOTICE`).
+    zoom_notice: Option<(crate::zoom::Zoom, Instant)>,
+    /// When Settings' "Reset to defaults" was pressed, while it waits for a second press
+    /// (`reset::RESET_ARMED`, or until the pointer leaves it).
+    reset_armed: Option<Instant>,
+    /// When the Settings window's zoom value was last pressed: a second press soon after sets
+    /// 100 %.
+    zoom_pressed: Option<Instant>,
     headless: headless::Runner,
     /// The plugin whose window a scripted run opens once the app's window is open.
     scripted_plugin: Option<ProcessorOwner>,
@@ -734,6 +778,8 @@ pub struct App {
     keys: crate::keys::Keys,
     /// The Settings window's page.
     settings_page: crate::ui::settings_layout::SettingsPage,
+    /// The colour wheel's target, pick and hex box in Settings.
+    color_edit: theming::ColorEdit,
     /// The action the Keys page waits for a new chord for, after a click on its row.
     rebinding: Option<crate::keys::Action>,
     /// The first-run note saying the computer keyboard plays notes, until it is put away:
@@ -825,11 +871,37 @@ impl App {
             settings.midi_inputs = crate::settings::MidiInputs::All;
         }
         browse.library.folded = settings.library_folded();
+        // A scripted run's zoom (`--zoom`), held for the run alone: a scripted run saves no
+        // settings.
+        if let Some(zoom) = script.zoom {
+            settings.set_zoom(zoom);
+        }
+        // Its theme (`--theme`), accent (`--accent`) and notes' colour (`--note-color`)
+        // likewise; every window draws in them from the first frame.
+        if let Some(theme) = script.theme {
+            settings.set_theme(theme);
+        }
+        if let Some(accent) = script.accent {
+            settings.set_accent(Some(accent));
+        }
+        if let Some(color) = script.note_color {
+            settings.set_note_color(Some(color));
+        }
+        crate::ui::palette::set_theme(settings.theme());
+        crate::ui::palette::set_accent(settings.accent());
+        // The pop-out windows' places in the windows' own pixels, as the settings keep them in
+        // the system's.
+        let zoom = settings.zoom();
+        let kept =
+            |place: Option<crate::settings::WindowPlace>| place.map(|kept| kept.zoomed(zoom));
         let first = crate::settings::WindowPlace::first;
-        let instrument_place = (settings.instrument_window)
+        let instrument_place = kept(settings.instrument_window)
             .unwrap_or_else(|| first(crate::desktop::PopOut::Instrument));
-        let settings_place =
-            (settings.settings_window).unwrap_or_else(|| first(crate::desktop::PopOut::Settings));
+        // Its position alone: the size is the main window's share as it opens.
+        let settings_place = crate::settings::WindowPlace::of(
+            crate::desktop::PopOut::Settings.first_size(),
+            settings.settings_window.and_then(|kept| kept.point()),
+        );
         let typing = typing::Typing::new(settings.keyboard_plays_notes(), settings.note_layout());
         let keys = settings.keys();
         let waiting = waiting_note(&settings);
@@ -842,7 +914,7 @@ impl App {
             patterns: patterns::PatternUi::default(),
             selected_channel: project.channels.keys().next().copied(),
             roll: Roll::new(step, piano_layout::grid_size_alone(window_size))
-                .with_lane_height(settings.lane_height()),
+                .with_zoom(settings.roll_zoom()),
             clipboard: None,
             quantize_form: None,
             live_notes: crate::ui::live_notes::LiveNotes::default(),
@@ -851,7 +923,8 @@ impl App {
             live_wake: None,
             live_lost: 0,
             search_typing: false,
-            arranger: Arranger::new(project.ppq, tracks_size, settings.playlist_lanes()),
+            arranger: Arranger::new(project.ppq, tracks_size, settings.playlist_lanes())
+                .with_zoom(settings.playlist_zoom()),
             session,
             audio,
             mode: if song {
@@ -860,6 +933,7 @@ impl App {
                 PlayMode::Pattern
             },
             transport_on: false,
+            roll_plays: false,
             playing: false,
             playhead: None,
             drag: None,
@@ -872,6 +946,7 @@ impl App {
             rack_cache: canvas::Cache::new(),
             takes_open: false,
             panels,
+            roll_ruler_cache: canvas::Cache::new(),
             roll_grid_cache: canvas::Cache::new(),
             roll_lane_cache: canvas::Cache::new(),
             ruler_cache: canvas::Cache::new(),
@@ -899,11 +974,11 @@ impl App {
             instrument_caches: crate::ui::instrument_window::Caches::new(),
             settings_window: None,
             settings_place,
-            help: help_window::Help::new(settings.help_window, crate::help::folder()),
-            params: param_window::ParamWindow::new(settings.params_window),
-            panel_windows: panel_windows::PanelWindows::new(&settings),
+            help: help_window::Help::new(kept(settings.help_window), crate::help::folder()),
+            params: param_window::ParamWindow::new(kept(settings.params_window)),
+            panel_windows: panel_windows::PanelWindows::new(&settings, zoom),
             sample_editor: None,
-            editor: sample_editor::EditorWindow::new(settings.sample_editor_window),
+            editor: sample_editor::EditorWindow::new(kept(settings.sample_editor_window)),
             channel_rename: None,
             note_preview: None,
             adder_dump: None,
@@ -921,7 +996,10 @@ impl App {
             listed_outputs: Ok(Vec::new()),
             panel_use: PanelUse::default(),
             displaced: panels::Displaced::default(),
-            scale_factor: 1.0,
+            os_scale: 1.0,
+            zoom_notice: None,
+            reset_armed: None,
+            zoom_pressed: None,
             headless: headless::Runner::new(script.clone(), Arc::clone(&script_failed)),
             scripted_plugin: script.open_plugin,
             params_dump: script.dump_params.clone(),
@@ -942,6 +1020,7 @@ impl App {
             typing,
             keys,
             settings_page: crate::ui::settings_layout::SettingsPage::General,
+            color_edit: theming::ColorEdit::default(),
             rebinding: None,
             callout,
             callout_note,
@@ -992,6 +1071,7 @@ impl App {
             }
             Err(problem) => app.notice = Some(problem),
         }
+        app.show_unknown_theme();
         app.show_plugin_notices();
         app.sync_live_inputs(true);
         let focus = app.start_plugins(&script, &script_failed);
@@ -1009,6 +1089,16 @@ impl App {
         app.startup_recovery(&start);
         if script.play {
             app.play();
+        }
+        // Straight to the roll, as its chooser's message reaches it: `update` would also sync
+        // the pop-out windows, whose opening task this start has not handed on yet.
+        if let Some(mode) = script.roll_scale {
+            let target = Target::of(app.session.project(), app.pattern, app.selected_channel);
+            let chosen = RollMessage::ScaleSelected(mode);
+            let _ = app.roll.update(chosen, target.as_ref(), app.modifiers);
+        }
+        if script.play_roll {
+            app.roll_play_stop();
         }
         if let Some(path) = &script.rehearse {
             app.start_rehearsal(path);
@@ -1028,6 +1118,7 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let fit = self.fit_opened_pop_out(&message);
         let task = self.handle(message);
         // Why after every message: the focus moves wherever a panel is opened or pressed, and
         // the panel that has it is the one used last.
@@ -1054,7 +1145,7 @@ impl App {
         // windows follow that state here, in one place; on an input channel the instrument
         // window lists the input devices for its picker.
         let listing = self.list_inputs_for_window();
-        Task::batch([task, self.sync_pop_outs(), listing])
+        Task::batch([task, fit, self.sync_pop_outs(), listing])
     }
 
     /// The main window is the one with `id`: the app's scripted runs and window rules are
@@ -1135,6 +1226,16 @@ impl App {
     /// their Esc closes them); the main window's become the messages they always were. `None`
     /// when taken. A window that is none of these (a pop-out window closing) is passed over.
     fn window_message(&mut self, message: Message) -> Option<Message> {
+        let message = match message {
+            Message::Windowed(id, WindowChange::Moved(at)) => {
+                let zoom = self.zoom().factor();
+                Message::Windowed(
+                    id,
+                    WindowChange::Moved(Point::new(at.x * zoom, at.y * zoom)),
+                )
+            }
+            other => other,
+        };
         let instrument = self.instrument_window;
         let settings = self.settings_window;
         let help = self.help.window;
@@ -1264,7 +1365,7 @@ impl App {
             }
             // As its X: whatever the main window has up, a dialog too.
             Message::Escape(id) if instrument == Some(id) => {
-                self.close_instrument();
+                self.escape_instrument();
                 None
             }
             Message::Escape(id) if settings == Some(id) => {
@@ -1436,6 +1537,10 @@ impl App {
             Message::Stop => self.stop(),
             Message::TogglePlay if self.transport_on => self.stop(),
             Message::TogglePlay => self.play(),
+            Message::RollPlayStop => self.roll_play_stop(),
+            Message::RollPlayStopKey if self.roll_has_keys() => self.roll_play_stop(),
+            Message::RollPlayStopKey => {}
+            Message::ToggleRollLoop => self.toggle_roll_loop(),
             // A take of notes is one undo step once it stops; stepping through the history
             // under it would pull edits out from under the notes it is writing.
             Message::Undo | Message::Redo if self.recording.taking_notes() => {
@@ -1576,6 +1681,7 @@ impl App {
                 self.make_room_for(panel);
                 return self.panel_opened(panel);
             }
+            Message::PopOutPanel(panel) => self.pop_out_by_button(panel),
             Message::Playlist(message) => return self.playlist_message(message),
             Message::ClipLink(link) => self.clip_link(link),
             Message::Mixer(message) => return self.mixer_message(message),
@@ -1594,13 +1700,13 @@ impl App {
                 let target =
                     Target::of(self.session.project(), self.pattern, self.selected_channel);
                 let preview = self.note_to_preview(&message, target.as_ref());
-                let lane_let_go = message == RollMessage::HandleReleased;
+                let zoom = self.roll.view.zoom;
                 let commit = self.roll.update(message, target.as_ref(), self.modifiers);
                 if let Some(commit) = commit {
                     self.commit_notes(commit);
                 }
-                if lane_let_go {
-                    self.settings.set_lane_height(self.roll.lane_height());
+                if self.roll.view.zoom != zoom {
+                    self.settings.set_roll_zoom(self.roll.view.zoom);
                     self.save_settings();
                 }
                 if let Some((key, velocity)) = preview {
@@ -1677,9 +1783,29 @@ impl App {
             }
             Message::ToggleHelp => self.toggle_help(),
             Message::Help(message) => return self.help_message(message),
-            Message::ScaleFactor(factor) => self.scale_factor = factor,
+            Message::ScaleFactor(factor) => self.os_scale = factor,
+            Message::Zoom(step) => return self.zoom_by(step),
+            Message::ResetArmedDue => self.reset_armed_due(),
+            Message::ZoomNoticeDue => {
+                if self
+                    .zoom_notice
+                    .is_some_and(|(_, at)| at.elapsed() >= zooming::ZOOM_NOTICE)
+                {
+                    self.zoom_notice = None;
+                }
+            }
+            Message::PopOutMonitor {
+                window,
+                size,
+                monitor,
+            } => return Self::fit_pop_out(window, size, monitor),
             Message::MainNative(native) => self.main_native = native,
             Message::Headless(message) => {
+                if let headless::Message::Captured(shot) = &message {
+                    if let Err(problem) = self.dump_layout(shot) {
+                        return self.headless.fail(&problem).map(Message::Headless);
+                    }
+                }
                 let windows = headless::Windows {
                     main: self.main_window,
                     instrument: self.instrument_window,
@@ -1812,7 +1938,7 @@ impl App {
             Message::WindowUnfocused => {}
             Message::LinkChosen => self.link_chosen(),
             Message::ControllerTick => self.poll_controllers(),
-            Message::Settings(message) => self.settings_message(message),
+            Message::Settings(message) => return self.settings_message(message),
             Message::PortsTick => self.list_ports(),
             Message::NotePreviewTick => self.note_preview_tick(),
             Message::ToggleNotePreview => self.toggle_note_preview(),
@@ -1832,11 +1958,13 @@ impl App {
                 self.save_settings();
             }
             Message::Hover(crate::ui::hint::HoverMessage::Over(hover)) => {
+                self.reset_hover(Some(&hover));
                 self.hover = Some(hover);
             }
             Message::Hover(crate::ui::hint::HoverMessage::Left(left)) => {
                 if self.hover.as_ref() == Some(&left) {
                     self.hover = None;
+                    self.reset_hover(None);
                 }
             }
             Message::OpenInstrument(channel) => {
@@ -1845,8 +1973,9 @@ impl App {
             }
             Message::Instrument(message) => {
                 self.live_wake = Some(Instant::now());
-                self.instrument_message(message);
+                let task = self.instrument_message(message);
                 self.read_player_events();
+                return task;
             }
             Message::Channel(command) => return self.channel_command(command),
             // Sorted out by `window_message` before anything else.
@@ -1878,7 +2007,8 @@ impl App {
                 .rename
                 .as_ref()
                 .map(|(_, typed)| typed.as_str()),
-            mode: self.mode,
+            // Neither side lit while the roll's player has the transport.
+            mode: (!self.roll_plays).then_some(self.mode),
             loop_on: project.playlist.loop_range.map(|range| range.on),
             position: self.playhead.unwrap_or(Ticks(0)),
             ppq: project.ppq,
@@ -1886,6 +2016,10 @@ impl App {
             audio_problem: self.audio_problem.as_deref(),
             retry_audio: self.retries_audio(),
             notice: self.notice.as_deref(),
+            zoomed: self
+                .zoom_notice
+                .filter(|(_, at)| at.elapsed() < zooming::ZOOM_NOTICE)
+                .map(|(zoom, _)| zoom),
             recording: self.recording_words(),
             menu_open: self.files.menu,
             edit_menu_open: self.edit_menu,
@@ -1961,7 +2095,7 @@ impl App {
         let mut layers = vec![window.into()];
         if let Some(press) = self.browse.press.as_ref().filter(|press| press.dragging) {
             // The dragged file's name follows the cursor, clear of it so it takes no events.
-            let ghost = container(text(press.name.clone()).size(12))
+            let ghost = container(text(press.name.clone()).size(size::LABEL))
                 .padding([2, 6])
                 .style(style::name_box);
             layers.push(pin(ghost).x(press.at.x + 14.0).y(press.at.y + 10.0).into());
@@ -2035,7 +2169,7 @@ impl App {
         crate::ui::callout::view(anchor, self.window_size.width, self.callout_lines(), keys)
     }
 
-    /// What the first-run note points at, where the toolbar lays it out at its scale, and
+    /// What the first-run note points at, where the toolbar lays it out, and
     /// whether it offers the Keys settings: the keyboard switch, or Record.
     fn callout_anchor(&self) -> (iced::Rectangle, bool) {
         match self.callout_note {
@@ -2150,15 +2284,16 @@ impl App {
     /// the playlist, the piano roll and the mixer, each as tall as
     /// [`panels::stack_heights`] says, each under another with the divider over it on its top
     /// edge ([`App::divider_view`]). The last takes whatever the whole pixels above it leave.
-    /// When the area is too short for every panel's least height, each shows at its least and
-    /// the stack scrolls ([`panels::fits`]).
+    /// When the area is too short for every panel's least height, the piano roll gives way
+    /// first, and when even that is too short each shows at its least and the stack scrolls
+    /// ([`panels::shows_whole`]).
     fn panels_view(&self, area: Size) -> Element<'_, Message> {
         let stacked: Vec<Panel> = self.panels.stacked().collect();
         if stacked.is_empty() {
             return well(space().into()).height(Fill).into();
         }
         let rack_content = self.rack_content();
-        let fits = panels::fits(&stacked, rack_content, area.height);
+        let fits = panels::shows_whole(&stacked, rack_content, area.height);
         let heights = panels::stack_heights(
             &stacked,
             rack_content,
@@ -2314,7 +2449,7 @@ impl App {
             project: self.session.project(),
             arranger: &self.arranger,
             marker: self.playlist_marker(),
-            scale_factor: self.scale_factor,
+            scale_factor: self.device_scale(),
             ruler_cache: &self.ruler_cache,
             tracks_cache: &self.tracks_cache,
             files: &self.looks.files,
@@ -2326,6 +2461,7 @@ impl App {
             follow: self.settings.follows(Panel::Playlist),
             menu_foot: self.menu_foot(Panel::Playlist),
             link: self.selection_link(),
+            docked: !self.panels.popped.has(Panel::Playlist),
         }
         .view()
     }
@@ -2366,22 +2502,29 @@ impl App {
             automated: &self.automated,
             menu: self.automate_menu_view(Panel::Mixer),
             menu_foot: self.menu_foot(Panel::Mixer),
+            docked: !self.panels.popped.has(Panel::Mixer),
         }
         .view()
     }
 
     /// The song position the playlist shows: in song mode, the playhead while playing and the
-    /// play-from tick while stopped; none in pattern mode.
+    /// play-from tick while stopped; none in pattern mode or while the roll's player plays
+    /// (its playhead is a pattern's tick, as in pattern mode).
     fn playlist_marker(&self) -> Option<Ticks> {
-        (self.mode == PlayMode::Song).then(|| self.playhead.unwrap_or(self.song_marker))
+        self.plays_song()
+            .then(|| self.playhead.unwrap_or(self.song_marker))
     }
 
-    /// The rack canvas's size: every channel row, every step of the pattern, and the row of
-    /// the add button.
+    /// Whether the transport plays the song: song mode, the roll's player not playing.
+    fn plays_song(&self) -> bool {
+        self.mode == PlayMode::Song && !self.roll_plays
+    }
+
+    /// The rack canvas's size: every channel row and every step of the pattern.
     fn rack_size(&self) -> Size {
         let project = self.session.project();
         let steps = step_grid::step_count(project, self.pattern);
-        let size = layout::rack_canvas_size(self.rack_rows().len(), steps);
+        let size = layout::rack_size(self.rack_rows().len(), steps);
         // A sampler without a sound says so right of its steps.
         let hint = project
             .channels
@@ -2400,6 +2543,17 @@ impl App {
         let header = canvas(self.rack_header())
             .width(Fill)
             .height(layout::RACK_HEADER_HEIGHT);
+        // Docked, the header ends with the pop-out button, on the header's own ground with the
+        // strips' side padding after it.
+        let header: Element<'_, Message> = if self.panels.popped.has(Panel::Rack) {
+            header.into()
+        } else {
+            container(row![header, crate::ui::pop_out::button(Panel::Rack)].align_y(iced::Center))
+                .padding(iced::Padding::ZERO.right(crate::ui::pop_out::STRIP_RIGHT))
+                .height(layout::RACK_HEADER_HEIGHT)
+                .style(style::strip)
+                .into()
+        };
         let rack = mouse_area(column![header, self.rack_view()])
             .on_enter(Message::Media(MediaMessage::RackHover(true)))
             .on_exit(Message::Media(MediaMessage::RackHover(false)));
@@ -2481,8 +2635,15 @@ impl App {
         let menu = self
             .automate_menu_view(Panel::Rack)
             .or_else(|| self.sampler_menu_view());
-        let mut layers: Vec<Element<'_, Message>> = vec![rack.into()];
-        layers.extend(menu);
+        // The open menu's place first, under the rows: it takes no room and draws nothing in
+        // the view (its menu is an overlay, `menu::floating`). Why first: as a later layer of
+        // the stack it opened an empty layer clipped to the rows, and with the GPU renderer,
+        // when the rows fit the panel (no scroll bar), the overlay came out clipped there too,
+        // the last row's menu cut at the rack's foot under the panel below (found when the rack
+        // lost its "+" row and p5_gain's five rows came to fit; the software renderer drew it
+        // whole).
+        let mut layers: Vec<Element<'_, Message>> = menu.into_iter().collect();
+        layers.push(rack.into());
         layers.extend(self.channel_rename_view());
         // A MIDI device held from the Library: which row it is over, outlined.
         if self.browse.dragging_device() {
@@ -2543,8 +2704,10 @@ impl App {
             modifiers: self.modifiers,
             playhead: self.playhead,
             origin: self.roll_origin(),
+            ruler_cache: &self.roll_ruler_cache,
             grid_cache: &self.roll_grid_cache,
             lane_cache: &self.roll_lane_cache,
+            scale_factor: self.device_scale(),
             preview: self.settings.preview_notes(),
             follow: self.settings.follows(Panel::PianoRoll),
             clipboard: self.clipboard.is_some(),
@@ -2552,6 +2715,9 @@ impl App {
             live: &self.live_notes,
             recording_notes: self.recording.taking_notes(),
             quantize: self.quantize_form,
+            docked: !self.panels.popped.has(Panel::PianoRoll),
+            note_color: self.settings.note_color(),
+            player: self.roll_player(),
         }
     }
 
@@ -2703,7 +2869,8 @@ impl App {
         ])
     }
 
-    /// Plays; while Record is armed, records a take instead.
+    /// Plays; while Record is armed, records a take instead. While the roll's player plays,
+    /// the toolbar's mode takes the transport back from its start.
     fn play(&mut self) {
         // The measurement plays clicks of its own; Stop ends it.
         if self.measuring_latency() {
@@ -2711,6 +2878,14 @@ impl App {
         }
         // A device chosen in Settings since the stream opened plays from now.
         self.apply_output_choice();
+        if self.roll_plays {
+            if !self.recording.armed {
+                self.leave_roll_player();
+                return;
+            }
+            // A take starts from a stopped transport: a playing player refuses Record.
+            self.stop();
+        }
         if self.recording.armed {
             if !self.recording.recording() {
                 self.transport_on = self.start_take();
@@ -2730,6 +2905,7 @@ impl App {
         let note_end = self.note_take_end();
         let result = self.session.send(Control::Stop);
         self.report(result);
+        self.leave_roll_player();
         self.forget_live_notes();
         self.finish_take();
         if let Some(tick) = note_end {
@@ -2748,7 +2924,12 @@ impl App {
         }
         self.poll_latency();
         self.session.flush();
+        let was_playing = self.playing;
         self.playing = self.session.playing();
+        // The roll's pattern played once to its end, where the transport stopped by itself.
+        if self.roll_plays && was_playing && !self.playing {
+            self.roll_played_out();
+        }
         // The playhead too, read after the events. Before the views follow: a song take grows
         // its pattern to hold the playhead as it hears the player (found in use: the roll
         // followed the old length, a bar short, and jumped back at every bar), the same
@@ -2820,6 +3001,7 @@ impl App {
             let target = Target::of(self.session.project(), self.pattern, self.selected_channel);
             let at = Ticks(tick.0 - self.roll_origin().0);
             if self.roll.follow(target.as_ref(), at) {
+                self.roll_ruler_cache.clear();
                 self.roll_grid_cache.clear();
                 self.roll_lane_cache.clear();
             }
@@ -3117,21 +3299,19 @@ impl App {
     }
 
     /// Switches the play mode: the next plan plays the selected pattern or the arrangement,
-    /// and the playhead goes to tick 0 for a pattern or to the song marker for the song.
+    /// and the playhead goes to tick 0 for a pattern or to the song marker for the song. While
+    /// the roll's player plays, either side of the switch takes the transport back from it.
     fn select_mode(&mut self, mode: PlayMode) {
-        if mode == self.mode {
+        if mode == self.mode && !self.roll_plays {
             return;
         }
         self.keep_take("Take kept: the play mode changed");
         self.mode = mode;
+        self.roll_plays = false;
         self.send_mode();
         // After the mode is sent, so the plan the edit publishes, the newest, plays the new mode.
         self.reshape_selected_for_mode();
-        let from = match mode {
-            PlayMode::Pattern => Ticks(0),
-            PlayMode::Song => self.song_marker,
-        };
-        let result = self.session.send(Control::Seek(from));
+        let result = self.session.send(Control::Seek(self.mode_start()));
         self.report(result);
     }
 
@@ -3150,12 +3330,13 @@ impl App {
             self.focus = Panel::Playlist;
         }
         let project = self.session.project();
-        let lanes = self.arranger.lanes();
+        let (lanes, zoom) = (self.arranger.lanes(), self.arranger.grid.zoom);
         let command = self
             .arranger
             .update(message, project, self.pattern, self.modifiers);
-        if self.arranger.lanes() != lanes {
+        if (self.arranger.lanes(), self.arranger.grid.zoom) != (lanes, zoom) {
             self.settings.set_playlist_lanes(self.arranger.lanes());
+            self.settings.set_playlist_zoom(self.arranger.grid.zoom);
             self.save_settings();
         }
         match command {
@@ -3180,21 +3361,36 @@ impl App {
     /// returns there; in pattern mode the marker waits for the switch to song mode.
     fn move_song_marker(&mut self, tick: Ticks) {
         self.song_marker = tick;
-        if self.mode == PlayMode::Song {
+        if self.plays_song() {
             let result = self.session.send(Control::Seek(tick));
             self.report(result);
         }
     }
 
-    /// Plays the selected pattern or the arrangement from the next plan on.
+    /// Plays the selected pattern or the arrangement from the next plan on, or what the roll
+    /// shows while its player plays: that stops when the roll's channel or pattern is gone.
     fn send_mode(&mut self) {
+        if self.roll_plays && self.roll_target().is_none() {
+            self.stop();
+            return;
+        }
         let result = self.session.set_mode(self.plan_mode());
         self.after_edit(result);
     }
 
     /// Drops what the piano roll, the playlist and the mixer have drawn, so they draw the
     /// document again.
+    /// Every drawing the app keeps, the chassis's too, which only its size redraws otherwise:
+    /// what a new theme repaints.
+    fn clear_every_cache(&mut self) {
+        self.clear_panel_caches();
+        self.rack_cache.clear();
+        self.browse.cache.clear();
+        self.instrument_caches.chassis.clear();
+    }
+
     fn clear_panel_caches(&mut self) {
+        self.roll_ruler_cache.clear();
         self.roll_grid_cache.clear();
         self.roll_lane_cache.clear();
         self.ruler_cache.clear();
@@ -3281,7 +3477,12 @@ impl App {
         // The Library's device rows say where those ports' notes go: the selected channel.
         self.browse.cache.clear();
         // Live notes play the selected channel.
-        self.session.set_live_channel(channel)
+        let live = self.session.set_live_channel(channel);
+        // The roll's player plays the channel the roll shows.
+        if self.roll_plays {
+            self.send_mode();
+        }
+        live
     }
 
     /// Keeps the selection on a channel that exists: when an edit or an undo took the selected
@@ -3385,6 +3586,7 @@ impl App {
         match self.mixer.update(message, &context) {
             Some(MixerCommand::Edit(edit)) => self.commit(edit),
             Some(MixerCommand::Drag(control)) => self.start_drag(DragTarget::Mixer(control)),
+            Some(MixerCommand::PopOut) => self.pop_out_by_button(Panel::Mixer),
             Some(MixerCommand::FocusRename) => {
                 let id = Id::new(MIXER_RENAME_INPUT);
                 return operation::focus(id.clone()).chain(operation::select_all(id));
@@ -3524,7 +3726,7 @@ impl App {
             .id(Id::new(CHANNEL_RENAME_INPUT))
             .on_input(|typed| Message::Channel(ChannelCommand::RenameEdited(typed)))
             .on_submit(Message::Channel(ChannelCommand::RenameSubmitted))
-            .size(13)
+            .size(size::BODY)
             .padding([4, 6])
             .width(rect.width + 60.0);
         Some(pin(input).x(rect.x).y(rect.y).into())
@@ -3570,6 +3772,9 @@ impl App {
             takes_open: self.takes_open,
             link: self.selection_link(),
             latencies: self.plugin_latencies(),
+            roll_player: self.roll_player(),
+            roll_snap: self.roll.snap,
+            draw_length: self.roll.draw_length(),
         }
     }
 
@@ -3615,13 +3820,13 @@ impl App {
     fn hint_bar(&self) -> Element<'_, Message> {
         let words = self.hint_words();
         let line = responsive(move |size| {
-            let shown = crate::ui::text_fit::fit_width(&words, size.width, HINT_TEXT_SIZE)
+            let shown = crate::ui::text_fit::fit_width(&words, size.width, size::LABEL)
                 .map(std::borrow::Cow::into_owned)
                 .unwrap_or_default();
             container(
                 text(shown)
-                    .size(HINT_TEXT_SIZE)
-                    .color(style::TEXT_DIM)
+                    .size(size::LABEL)
+                    .color(style::palette().text_secondary)
                     .wrapping(iced::widget::text::Wrapping::None),
             )
             .height(Fill)
@@ -3669,7 +3874,8 @@ impl App {
     /// The window's layout now, as the settings keep it for the next start: the panels open,
     /// the size when not maximized, and whether it is.
     fn window_layout(&self) -> crate::settings::WindowLayout {
-        crate::settings::WindowLayout::of(self.panels, self.restored_size, self.maximized)
+        let restored = self.restored_size * self.zoom().factor();
+        crate::settings::WindowLayout::of(self.panels, restored, self.maximized)
     }
 
     /// Keeps the window's layout in the settings for the next start, and the pop-out windows'
@@ -3677,24 +3883,25 @@ impl App {
     /// one) keeps nothing.
     fn save_window_layout(&mut self) {
         let layout = Some(self.window_layout());
+        let zoom = self.zoom();
         let place = match self.instrument_window {
-            Some(_) => Some(self.instrument_place),
+            Some(_) => Some(self.instrument_place.system(zoom)),
             None => self.settings.instrument_window,
         };
         let settings_place = match self.settings_window {
-            Some(_) => Some(self.settings_place),
+            Some(_) => self.settings_place_kept(),
             None => self.settings.settings_window,
         };
         let help_place = match self.help.window {
-            Some(_) => Some(self.help.place),
+            Some(_) => Some(self.help.place.system(zoom)),
             None => self.settings.help_window,
         };
         let params_place = match self.params.window {
-            Some(_) => Some(self.params.place),
+            Some(_) => Some(self.params.place.system(zoom)),
             None => self.settings.params_window,
         };
         let editor_place = match self.editor.window {
-            Some(_) => Some(self.editor.place),
+            Some(_) => Some(self.editor.place.system(zoom)),
             None => self.settings.sample_editor_window,
         };
         let panel_places = self.keep_panel_places();
@@ -3759,6 +3966,10 @@ fn closes_menus(message: &Message) -> bool {
                     | SampleEditorMessage::Copied { .. }
             )
             | Message::ScaleFactor(_)
+            | Message::Zoom(_)
+            | Message::ZoomNoticeDue
+            | Message::ResetArmedDue
+            | Message::PopOutMonitor { .. }
             | Message::MainNative(_)
             | Message::MonitorSized(_)
             | Message::WindowResized(_)
@@ -3928,7 +4139,7 @@ mod tests {
     use crate::project_file;
     use crate::ui::clip_gesture::ClipSnap;
     use crate::ui::step_grid::StepGrid;
-    use dawsome_engine::project::{ChannelKind, TrackId};
+    use dawsome_engine::project::{ChannelKind, Track, TrackId};
 
     const F1: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -4250,7 +4461,7 @@ mod tests {
         app.session.project().patterns[&PatternId(1)].swing_tenths
     }
 
-    // Swing (spec swing.md §5, §7): the rack header's knob, dragged right from F1's straight 500,
+    // Swing: the rack header's knob, dragged right from F1's straight 500,
     // goes 1 % (10 tenths) per 4 px from the first move: 0, 32 and 40 px give 500, 580 and 600,
     // each move applied live (a plan sent: the pattern recompiles) with no undo step until the
     // release, which leaves one. Left past the stop holds at 500.
@@ -4998,23 +5209,24 @@ mod tests {
         let (mut app, _player) = p3_app();
         grid_drag(&mut app, at(78.0, 114.0), at(112.0, 114.0));
         assert_eq!(
-            app.roll.draw_length,
+            app.roll.draw_length(),
             Ticks(96),
             "a resize sets the draw length"
         );
         one_undo_restores_p3_roll(&mut app, "p3_b_resize.json");
     }
 
-    // (c) Press A's stem in the lane at y 20 (value 88), release at y 32: velocity 64/128.
+    // (c) Press A's stem in the lane at y 10 (value 88), release at y 16: velocity 64/128.
     // (Pins moved: the lane is 64 px by default, two velocity steps a pixel,
-    // so y 40 and 64 of the 128 px lane are y 20 and 32 now; the answers are the same.)
+    // so y 40 and 64 of the 128 px lane were y 20 and 32; the lane is 32 px now, four steps a
+    // pixel, so y 10 and 16, the drag between at 17.5 (58) as at 35; the answers are the same.)
     #[test]
     fn p3_c_dragging_a_stem_sets_the_velocity() {
         let (mut app, _player) = p3_app();
-        roll(&mut app, RollMessage::LanePressed(at(50.0, 20.0)));
+        roll(&mut app, RollMessage::LanePressed(at(50.0, 10.0)));
         assert_eq!(app.roll.dragged_velocity(), Some(88));
-        roll(&mut app, RollMessage::LaneDragged(at(50.0, 35.0)));
-        roll(&mut app, RollMessage::LaneReleased(at(50.0, 32.0)));
+        roll(&mut app, RollMessage::LaneDragged(at(50.0, 17.5)));
+        roll(&mut app, RollMessage::LaneReleased(at(50.0, 16.0)));
         assert_eq!(app.roll.dragged_velocity(), None);
         one_undo_restores_p3_roll(&mut app, "p3_c_velocity.json");
     }
@@ -5142,15 +5354,15 @@ mod tests {
 
     // B clicked, then A's unselected stem dragged as in (c): A alone takes the value and
     // becomes the selection, as a press on an unselected note in the grid makes it. (Pins
-    // moved with (c)'s: y 20 and 32 of the 64 px lane.)
+    // moved with (c)'s: y 20 and 32 of the 64 px lane, then y 10 and 16 of the 32 px one.)
     #[test]
     fn p3_dragging_an_unselected_stem_selects_its_note() {
         let (mut app, _player) = p3_app();
         grid_drag(&mut app, at(120.0, 66.0), at(120.0, 66.0));
         let b = BTreeSet::from([(ChannelId(1), Ticks(96), 64)]);
         assert_eq!(app.roll.selection, b);
-        roll(&mut app, RollMessage::LanePressed(at(50.0, 20.0)));
-        roll(&mut app, RollMessage::LaneReleased(at(50.0, 32.0)));
+        roll(&mut app, RollMessage::LanePressed(at(50.0, 10.0)));
+        roll(&mut app, RollMessage::LaneReleased(at(50.0, 16.0)));
         assert_eq!(
             document(&app),
             fixture("p3_c_velocity.json"),
@@ -5160,15 +5372,17 @@ mod tests {
         assert_eq!(app.roll.selection, a);
     }
 
-    // P2 through the playhead timer: p3_roll's one-bar pattern zoomed to 64 px a step shows 357
+    // Through the playhead timer: p3_roll's one-bar pattern zoomed to 64 px a step shows 357
     // of its 384 ticks (952 px at 0.375 ticks a pixel). Playing, the view stays put until the
-    // playhead passes tick 357, then jumps to start at it (a bar is wider than the view); when
-    // the pattern wraps it jumps back to 0. With Follow switched off (written to the settings),
-    // the view stays where it is.
+    // playhead passes tick 357, then jumps to start at the beat holding it, 288 (a bar is wider
+    // than the view, and the view starts on a whole cell, as the playlist's does), so the
+    // playhead stays in view; when the pattern wraps it jumps back to 0. With Follow switched
+    // off (written to the settings), the view stays where it is. (Pin moved: the view started
+    // at the playhead's own tick before it landed on beats.)
     #[test]
     fn the_piano_roll_follows_the_playhead_a_page_at_a_time() {
         let (mut app, mut player) = p3_app();
-        app.roll.view.zoom = 8;
+        app.roll.view.zoom = 64.0;
         let _ = app.update(Message::Play);
         let mut jumped = None;
         let mut wrapped = false;
@@ -5181,7 +5395,7 @@ mod tests {
             match jumped {
                 None if scroll != Ticks(0) => {
                     assert!((357..384).contains(&at), "jumped at tick {at}");
-                    assert_eq!(scroll, Ticks(at), "the view starts at the playhead");
+                    assert_eq!(scroll, Ticks(288), "the view starts at the playhead's beat");
                     jumped = Some(scroll);
                 }
                 None => assert!(at < 357, "the playhead left the view at {at} unfollowed"),
@@ -5202,7 +5416,7 @@ mod tests {
         }
     }
 
-    // P6 through the window's messages, by hand on p15_long_song's two-bar pattern (its steps
+    // Through the window's messages, by hand on p15_long_song's two-bar pattern (its steps
     // reach 1012 px past x 222): in rows 1000 px wide 778 px show, so the bar asks for at most
     // 234 px and the rack's content grows by the bar's 10 px; 1400 px wide they fit, the scroll
     // goes back to 0 and the bar goes; a pattern made one bar long (508 px of steps) fits 1000
@@ -5288,7 +5502,7 @@ mod tests {
     #[test]
     fn a_bar_held_when_its_panel_closes_is_let_go_of() {
         let (mut app, _player) = p3_app();
-        app.roll.view.zoom = 8;
+        app.roll.view.zoom = 64.0;
         let held = crate::ui::scroll::BarMessage::To {
             offset: 0.0,
             held: true,
@@ -5302,7 +5516,7 @@ mod tests {
             "the roll follows"
         );
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
-        app.arranger.grid.zoom = crate::ui::playlist_layout::ZOOM_LEVELS.len() - 1;
+        app.arranger.grid.zoom = crate::ui::playlist_layout::ZOOM.max;
         let _ = app.update(Message::Playlist(PlaylistMessage::Bar(held)));
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
@@ -5320,18 +5534,22 @@ mod tests {
     // playlist alone in a 1000 x 560 window, the hint bar off: the tracks canvas reports
     // 560 − 64 − 24 − 28 − 10 = 434 px (426 under the 72 px toolbar), the bar's 10 px under it; at 256 px a bar its 880 px
     // timeline shows 1320 ticks of the 9 bars (3456 ticks) the bar reaches, so a press in the
-    // trough right of the thumb (the bar's middle row, y 555) pages the view to 1320; a press
-    // where the bar was, at the header's right end, moves nothing.
+    // trough right of the thumb (the bar's middle row, y 555) pages the view to 1320, which
+    // lands on the nearest beat (96 ticks: 13.75 beats, so 14), 1344; a press where the bar
+    // was, at the header's right end, moves nothing. The bar's rail is the panel's whole width:
+    // from 1344 its thumb is 1320 / 3456 of 1000 px, 381.94, from 1344 / 2136 of the 618.06 px
+    // of travel, x 388.89, so a press at x 60 under the track headers (the well's, before the
+    // rail ran there) pages back to 1344 − 1320 = 24, which lands on the beat at 0.
     #[test]
     fn the_playlists_time_bar_is_at_its_foot() {
-        use crate::ui::playlist_layout::{HEADER_HEIGHT, TIME_BAR_HEIGHT, ZOOM_LEVELS};
+        use crate::ui::playlist_layout::{HEADER_HEIGHT, TIME_BAR_HEIGHT, ZOOM};
         let (mut app, _player) = app_on(&Path::new(FIXTURES).join("p20_five_clips.json"));
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
         let _ = app.update(Message::TogglePanel(Panel::Rack));
         let _ = app.update(Message::WindowResized(Size::new(1000.0, 560.0)));
         app.hints_flag = Some(false);
         assert!(app.panels.playlist && !app.panels.rack && !app.panels.piano_roll);
-        app.arranger.grid.zoom = ZOOM_LEVELS.len() - 1;
+        app.arranger.grid.zoom = ZOOM.max;
         let mut window = widget_events::Window::new(&app);
         window.mouse(
             &mut app,
@@ -5350,7 +5568,10 @@ mod tests {
         );
         let foot = Point::new(990.0, 560.0 - TIME_BAR_HEIGHT / 2.0);
         window.click(&mut app, foot);
-        assert_eq!(app.arranger.grid.scroll, Ticks(1320), "a page on");
+        assert_eq!(app.arranger.grid.scroll, Ticks(1344), "a page on, landed");
+        let under_headers = Point::new(60.0, 560.0 - TIME_BAR_HEIGHT / 2.0);
+        window.click(&mut app, under_headers);
+        assert_eq!(app.arranger.grid.scroll, Ticks(0), "a page back, landed");
     }
 
     // Undo of a move drops the moved note from the selection: it no longer exists.
@@ -5501,7 +5722,9 @@ mod tests {
     }
 
     // Stretch to fit (by hand in clip_gesture's tests): an Alt drag of track 2's unstretched clip
-    // (x 120..376, y 33..65: its 44100-frame file, then silence to the end of four bars) from its
+    // (x 120..376, y 51..101 in the 50 px lanes its 8 tracks are fitted to, read at y 81; it was
+    // y 48..95 in 47 px lanes, read at 49, and 65..129 in 64 px ones: its 44100-frame file, then
+    // silence to the end of four bars) from its
     // right edge back by two bars ends it on bar 3 (tick 768, 176400 samples) and time-stretches
     // its file to fill it: 44100 · 176400 / 44100 = 176400 frames, four times, one undo step that
     // gives the document back. With the Beat snap, dragged to x 168 (tick 300, the nearest beat
@@ -5533,12 +5756,12 @@ mod tests {
                 pitch: 0,
             })
         };
-        tracks_drag(&mut app, (374.0, 49.0), (246.0, 49.0));
+        tracks_drag(&mut app, (374.0, 81.0), (246.0, 81.0));
         assert_eq!(stretched(&app), (Ticks(768), of(176_400), 0));
         let _ = app.update(Message::Undo);
         assert_eq!(app.session.project(), &before);
         playlist(&mut app, PlaylistMessage::SnapSelected(ClipSnap::Beat));
-        tracks_drag(&mut app, (374.0, 49.0), (168.0, 49.0));
+        tracks_drag(&mut app, (374.0, 81.0), (168.0, 81.0));
         assert_eq!(stretched(&app), (Ticks(288), of(66_150), 0));
         let p9 = Project::load_json(include_str!("../../../tests/fixtures/p9_stretch.json"))
             .expect("p9_stretch loads");
@@ -5742,12 +5965,53 @@ mod tests {
         assert_eq!(document(&app), fixture("p4_two_clips.json"));
     }
 
-    // A body drag of 64 px right and 33 px down moves clip 1 to bar 2 on track 2; a right-edge
+    // The piano roll's divider dragged as far up as it goes leaves the playlist its least, 180
+    // px: 118 px of tracks under its header, ruler and scroll bar, where the 8 tracks' fitted
+    // lanes are at their 32 px floor (floor((118 − 24 − 1) / 8) − 1 = 10 is under it): 3 rows of
+    // 32 whole (98 px; a 4th takes 131), where a 4th was drawn cut to 19 px before. Those 19 px
+    // (y 99..118) show the well, so with pattern 2 as the brush a press there places nothing and
+    // a press on track 4's light mutes nothing; the same presses on row 3 (y 66..98) place clip
+    // 3 on track 3 at bar 4 (x 330 is tick 1260, floored to 1152) and mute track 3. (For an
+    // afternoon the floor was 64 px: 1 row, the 2nd cut to 53 px, and these presses on rows 1
+    // and 2.)
+    #[test]
+    fn a_track_row_the_area_would_cut_takes_no_press() {
+        let (mut app, _player) = p4_app("p4_two_clips.json");
+        let _ = app.update(Message::PatternSelected(PatternId(2)));
+        playlist(
+            &mut app,
+            PlaylistMessage::TracksResized(Size::new(1000.0, 118.0)),
+        );
+        assert_eq!(
+            (app.arranger.grid.lane, app.arranger.grid.rows()),
+            (32.0, 3)
+        );
+        tracks_press(&mut app, (330.0, 105.0), mouse::Button::Left, false);
+        tracks_press(&mut app, (10.0, 115.0), mouse::Button::Left, false);
+        assert_eq!(document(&app), fixture("p4_two_clips.json"));
+        tracks_press(&mut app, (330.0, 80.0), mouse::Button::Left, false);
+        tracks_press(&mut app, (10.0, 82.0), mouse::Button::Left, false);
+        let saved = document(&app);
+        assert!(saved.contains(&clip_json(3, 3, 1152, 384, 2)), "{saved}");
+        assert!(
+            saved.contains(r#"{"id":3,"name":"Track 3","mute":true}"#),
+            "{saved}"
+        );
+        assert!(
+            saved.contains(r#"{"id":4,"name":"Track 4","mute":false}"#),
+            "{saved}"
+        );
+    }
+
+    // A body drag of 64 px right and 65 px down, to y 81 in track 2's lane (51..101 in the 50 px
+    // lanes the 8 tracks are fitted to; 33 px down to y 49 in 47 px lanes before, and 65 px to
+    // 81 in 64 px ones), moves clip 1 to bar 2 on track 2; a right-edge
     // drag (press 3 px inside, x 181) of 128 px stretches it to 1152 ticks. One undo step each.
     #[test]
     fn p4_dragging_moves_a_clip_and_its_right_edge_resizes_it() {
         let (mut app, _player) = p4_app("p4_two_clips.json");
-        tracks_drag(&mut app, (140.0, 16.0), (204.0, 49.0));
+        assert_eq!(app.arranger.grid.lane, 50.0);
+        tracks_drag(&mut app, (140.0, 16.0), (204.0, 81.0));
         assert!(document(&app).contains(&clip_json(1, 2, 384, 384, 1)));
         assert_eq!(app.arranger.selection, BTreeSet::from([ClipId(1)]));
         assert_eq!(app.session.history().undo_len(), 1);
@@ -5759,7 +6023,9 @@ mod tests {
         assert_eq!(document(&app), fixture("p4_two_clips.json"));
     }
 
-    // A Ctrl box over both clips selects them; Ctrl+B copies them one selection length (0..1152)
+    // A Ctrl box over both clips selects them, drawn from track 2's empty lane (y 80 in its
+    // 51..101 in the fitted 50 px lanes; y 50 was in its 48..95 in 47 px lanes, and y 100 in its
+    // 65..129 in 64 px ones) up into track 1; Ctrl+B copies them one selection length (0..1152)
     // later, to 1152 and 1920, as clips 3 and 4, and selects the copies; a right press on copy 4 (x
     // 450) deletes the selection it is in. Undo walks back through both steps; redo brings the
     // copies back.
@@ -5767,7 +6033,7 @@ mod tests {
     fn p4_box_select_duplicate_and_delete_walk_the_history() {
         let (mut app, _player) = p4_app("p4_two_clips.json");
         let _ = app.update(Message::ModifiersChanged(Modifiers::CTRL));
-        tracks_drag(&mut app, (150.0, 50.0), (300.0, 10.0));
+        tracks_drag(&mut app, (150.0, 80.0), (300.0, 10.0));
         let _ = app.update(Message::ModifiersChanged(Modifiers::empty()));
         assert_eq!(
             app.arranger.selection,
@@ -5891,9 +6157,11 @@ mod tests {
     }
 
     // The light of track 1 (x 10, y 16) mutes it; a double press on its name and Enter renames
-    // it; Esc while renaming track 2 leaves it as it was; the "+ Track" button under track 8
-    // adds track 9. (The button is found where the fitted lanes put it, under
-    // row 8; it was y 270..290 under 32 px lanes.)
+    // it; Esc while renaming track 2 (its name at y 81, in its 51..101 of the 50 px lanes the 8
+    // tracks are fitted to; y 49 in 47 px lanes) leaves it as it was; the "+ Track" button under
+    // track 8 adds track 9: right under its lane, y 8 · 51 = 408..432. (Pins moved: under row 8
+    // of the 47 px lanes, y 384 + 6 .. 414; y 270..290 under 32 px lanes; for an afternoon at
+    // 390..414, the tracks scrolled two rows down in 64 px lanes.)
     #[test]
     fn p4_track_headers_mute_rename_and_add_tracks() {
         let (mut app, _player) = p4_app("p4_two_clips.json");
@@ -5903,42 +6171,66 @@ mod tests {
         playlist(&mut app, PlaylistMessage::RenameEdited("Drums".into()));
         playlist(&mut app, PlaylistMessage::RenameSubmitted);
         assert!(document(&app).contains(r#"{"id":1,"name":"Drums","mute":true}"#));
-        tracks_press(&mut app, (60.0, 49.0), mouse::Button::Left, true);
+        tracks_press(&mut app, (60.0, 81.0), mouse::Button::Left, true);
         playlist(&mut app, PlaylistMessage::RenameEdited("Bass".into()));
         let _ = app.update(Message::ClearSelection);
         assert_eq!(app.arranger.rename, None);
         assert!(document(&app).contains(r#"{"id":2,"name":"Track 2","mute":false}"#));
-        let add = crate::ui::playlist_layout::add_track_rect(&app.arranger.grid, 8).center();
+        assert!(document(&app).contains(r#"{"id":1,"name":"Drums","mute":true}"#));
+        let add = crate::ui::playlist_layout::add_track_rect(&app.arranger.grid, 8);
+        assert_eq!((add.y, add.height), (408.0, 24.0));
+        let add = add.center();
         tracks_press(&mut app, (add.x, add.y), mouse::Button::Left, false);
         assert!(document(&app).contains(r#"{"id":9,"name":"Track 9","mute":false}"#));
         assert_eq!(app.session.history().undo_len(), 3);
     }
 
-    // The lanes fit the tracks. A new document's 8 tracks and the "+ Track" row
-    // in a 436 px track area are 9 rows of 48 px: 47 px lanes; with a track added, 10 rows of
-    // 43: 42. Alt+wheel up steps to 48 and keeps it (adding a track leaves it 48) and the
-    // settings keep it; the header's Fit fits again (11 rows of 39: 38) and the settings forget
-    // it. In a 300 px area 11 rows would be 27 px: the lanes keep 32 and the tracks scroll.
+    // The lanes fit the tracks, the "+ Track" row taking its own 24 px and a gap, the tracks
+    // sharing the rest, floor(share) − 1, kept to 32..106. In a 700 px track area 8 tracks share
+    // 700 − 25 = 675 px: floor(84.375) − 1 = 83 px lanes, the "+ Track" row 8 · 84 = 672..696;
+    // with a track added, floor(75) − 1 = 74. Alt+wheel up steps to 85 and keeps it (adding a
+    // track leaves it 85) and the settings keep it; at 85 the area holds 8 rows whole
+    // (8 · 86 − 1 = 687; 9 take 773), so the 9th track's row and the "+ Track" row under it
+    // show, and the button takes a press, once the tracks are scrolled two rows down (the
+    // button 7 · 86 = 602..626). The header's Fit fits again (10 tracks: floor(67.5) − 1 = 66)
+    // and the settings forget it. In a 300 px area 10 tracks would share 275 px, 26 each: the
+    // lanes keep the floor, 32, and the tracks scroll. (Pins moved: 47, 42, 48, 38 and 32 in a
+    // 436 px area while the "+ Track" row took a lane's share, height / (tracks + 1); the area
+    // is 700 px since an afternoon when 64 was the fitted lanes' floor, which held 436's 8
+    // tracks at 64, and the 300 px area's lanes were 64.)
     #[test]
     fn the_playlist_lanes_fit_the_tracks_until_a_height_is_chosen() {
         use crate::ui::playlist_layout::{add_track_rect, Lanes};
-        let (mut app, _player) = app_with(project_file::new_document(), Path::new(""));
+        // Eight tracks, as the numbers above were worked out for (a new document has six).
+        let mut document = project_file::new_document();
+        for number in 7..=8 {
+            let id = document.playlist.next_track_id;
+            document
+                .playlist
+                .tracks
+                .insert(id, Track::named(format!("Track {number}")));
+            document.playlist.next_track_id = TrackId(id.0 + 1);
+        }
+        let (mut app, _player) = app_with(document, Path::new(""));
         let _ = app.update(Message::TogglePanel(Panel::Playlist));
         playlist(
             &mut app,
-            PlaylistMessage::TracksResized(Size::new(1000.0, 436.0)),
+            PlaylistMessage::TracksResized(Size::new(1000.0, 700.0)),
         );
         assert_eq!(app.session.project().playlist.tracks.len(), 8);
         assert_eq!(app.arranger.lanes(), Lanes::Fit);
-        assert_eq!(app.arranger.grid.lane, 47.0);
+        assert_eq!(app.arranger.grid.lane, 83.0);
         let add = |app: &mut App| {
-            let tracks = app.session.project().playlist.tracks.len();
-            let at = add_track_rect(&app.arranger.grid, tracks).center();
+            let grid = app.arranger.grid;
+            let below = app.session.project().playlist.tracks.len() - grid.top;
+            assert!(grid.shows_add_track(below), "the + Track row shows");
+            let at = add_track_rect(&grid, below).center();
             tracks_press(app, (at.x, at.y), mouse::Button::Left, false);
         };
+        assert_eq!(add_track_rect(&app.arranger.grid, 8).y, 672.0);
         add(&mut app);
         assert_eq!(app.session.project().playlist.tracks.len(), 9);
-        assert_eq!(app.arranger.grid.lane, 42.0);
+        assert_eq!(app.arranger.grid.lane, 74.0);
         app.modifiers = Modifiers::ALT;
         playlist(
             &mut app,
@@ -5948,13 +6240,28 @@ mod tests {
             },
         );
         app.modifiers = Modifiers::empty();
-        assert_eq!(app.arranger.lanes(), Lanes::Fixed(48.0));
-        assert_eq!(app.settings.playlist_lanes(), Lanes::Fixed(48.0));
+        assert_eq!(app.arranger.lanes(), Lanes::Fixed(85.0));
+        assert_eq!(app.settings.playlist_lanes(), Lanes::Fixed(85.0));
+        assert_eq!(app.arranger.grid.rows(), 8);
+        assert!(!app.arranger.grid.shows(8), "the 9th track's row is cut");
+        assert!(!app.arranger.grid.shows_add_track(9), "under the 9th track");
+        for _ in 0..2 {
+            playlist(
+                &mut app,
+                PlaylistMessage::TracksScrolled {
+                    at: at(300.0, 20.0),
+                    delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+                },
+            );
+        }
+        assert_eq!(app.arranger.grid.top, 2);
+        assert_eq!(add_track_rect(&app.arranger.grid, 7).y, 602.0);
         add(&mut app);
-        assert_eq!(app.arranger.grid.lane, 48.0, "a height chosen stays");
+        assert_eq!(app.session.project().playlist.tracks.len(), 10);
+        assert_eq!(app.arranger.grid.lane, 85.0, "a height chosen stays");
         playlist(&mut app, PlaylistMessage::ToggleFit);
         assert_eq!(app.arranger.lanes(), Lanes::Fit);
-        assert_eq!(app.arranger.grid.lane, 38.0);
+        assert_eq!(app.arranger.grid.lane, 66.0);
         assert_eq!(app.settings.playlist_lanes(), Lanes::Fit);
         playlist(
             &mut app,
@@ -5964,6 +6271,206 @@ mod tests {
         // The Fit switch off keeps the height the lanes have.
         playlist(&mut app, PlaylistMessage::ToggleFit);
         assert_eq!(app.arranger.lanes(), Lanes::Fixed(32.0));
+    }
+
+    // "+ Track" as words alone, drawn by the real window: the new document's six tracks in the
+    // playlist alone at 1000 × 560 (no hint bar), the words centred under the last track in the
+    // secondary text's tone on the tracks' ground, no face (the control's corner, 2 px in, is the
+    // ground 4 px left of it); the pointer over them lights them in the text's tone and names
+    // the control to the hint bar, and a press across the words and 8 px either side adds a
+    // track while one just past that adds none.
+    #[test]
+    fn the_add_track_words_rest_quiet_and_light_under_the_pointer() {
+        use crate::ui::hint::Hover;
+        use crate::ui::layout::TOOLBAR_HEIGHT;
+        use crate::ui::playlist_layout::{add_track_rect, tracks_rect, HeaderHit};
+        let (mut app, _player) = app_with(project_file::new_document(), Path::new(""));
+        app.hints_flag = Some(false);
+        let _ = app.update(Message::WindowResized(Size::new(1000.0, 560.0)));
+        app.panels = Panels {
+            playlist: true,
+            ..Panels::NONE
+        };
+        let mut window = widget_events::Window::new(&app);
+        let origin = tracks_rect(iced::Rectangle::new(
+            Point::new(0.0, TOOLBAR_HEIGHT),
+            Size::new(1000.0, 560.0 - TOOLBAR_HEIGHT),
+        ))
+        .position();
+        let moved = |window: &mut widget_events::Window, app: &mut App, at: Point| {
+            let position = at;
+            window.mouse(
+                app,
+                mouse::Event::CursorMoved { position },
+                mouse::Cursor::Available(position),
+            )
+        };
+        // The first move reports the tracks' size, which lays the lanes out.
+        let _ = moved(&mut window, &mut app, Point::new(500.0, 300.0));
+        let grid = app.arranger.grid;
+        let tracks = app.session.project().playlist.tracks.len();
+        assert_eq!(tracks, 6);
+        assert!(grid.shows_add_track(tracks), "the row shows under the six");
+        let add = add_track_rect(&grid, tracks) + iced::Vector::new(origin.x, origin.y);
+        let palette = crate::ui::style::palette();
+        let count = |window: &mut widget_events::Window, app: &App, color: iced::Color| {
+            let shot = window.snapshot(app);
+            let width = shot.size.width as usize;
+            let near = |pixel: &[u8]| {
+                let [r, g, b, _] = color.into_rgba8();
+                [r, g, b]
+                    .iter()
+                    .zip(pixel)
+                    .all(|(wanted, &value)| value.abs_diff(*wanted) <= 16)
+            };
+            let rows = add.y as usize..(add.y + add.height) as usize;
+            let columns = add.x as usize..(add.x + add.width) as usize;
+            rows.flat_map(|y| columns.clone().map(move |x| (y * width + x) * 4))
+                .filter(|&at| near(&shot.rgba[at..at + 3]))
+                .count()
+        };
+        let pixel = |window: &mut widget_events::Window, app: &App, at: Point| {
+            let shot = window.snapshot(app);
+            let offset = (at.y as usize * shot.size.width as usize + at.x as usize) * 4;
+            [
+                shot.rgba[offset],
+                shot.rgba[offset + 1],
+                shot.rgba[offset + 2],
+            ]
+        };
+        let corner = Point::new(add.x + 2.0, add.y + 2.0);
+        let beside = Point::new(add.x - 4.0, add.y + 2.0);
+        assert_eq!(
+            pixel(&mut window, &app, corner),
+            pixel(&mut window, &app, beside),
+            "no face"
+        );
+        let resting = (
+            count(&mut window, &app, palette.text_secondary),
+            count(&mut window, &app, palette.text),
+        );
+        let _ = moved(&mut window, &mut app, add.center());
+        assert_eq!(
+            app.hover,
+            Some(Hover::Track(HeaderHit::AddTrack)),
+            "the hint bar names it"
+        );
+        let lit = (
+            count(&mut window, &app, palette.text_secondary),
+            count(&mut window, &app, palette.text),
+        );
+        println!("+ Track at {add:?}: resting {resting:?}, lit {lit:?}");
+        assert!(resting.0 > 5 && resting.1 == 0, "quiet: {resting:?}");
+        // Lit, its strokes reach the text's tone (their edges still pass the secondary's).
+        assert!(lit.1 > 5, "lit: {lit:?}");
+        let _ = moved(
+            &mut window,
+            &mut app,
+            Point::new(add.x - 1.0, add.center_y()),
+        );
+        let _ = window.click(&mut app, Point::new(add.x - 1.0, add.center_y()));
+        assert_eq!(
+            app.session.project().playlist.tracks.len(),
+            6,
+            "past its left"
+        );
+        let _ = window.click(&mut app, Point::new(add.x + 1.0, add.center_y()));
+        assert_eq!(
+            app.session.project().playlist.tracks.len(),
+            7,
+            "inside its left"
+        );
+    }
+
+    // "+ Instrument…" as words alone under the rack's rows, drawn by the real window, as
+    // "+ Track" is: the new document's one channel in the rack alone at 1000 × 560 (no hint
+    // bar), the words in the add row (rack y 46..70, 8 + 38) from the name boxes' x, 28, in the
+    // secondary text's tone on the rack's ground, no face (the control's corner, 2 px in, is the
+    // ground, as 4 px left of it is); the pointer over them lights them in the text's tone and
+    // names the control to the hint bar, and a press 1 px inside the left edge opens the
+    // instrument picker while one 1 px outside it opens nothing.
+    #[test]
+    fn the_add_instrument_words_rest_quiet_and_light_under_the_pointer() {
+        use crate::ui::hint::Hover;
+        use crate::ui::layout::{add_instrument_rect, rack_in_window};
+        let (mut app, _player) = app_with(project_file::new_document(), Path::new(""));
+        app.hints_flag = Some(false);
+        let _ = app.update(Message::WindowResized(Size::new(1000.0, 560.0)));
+        app.panels = Panels {
+            rack: true,
+            ..Panels::NONE
+        };
+        let mut window = widget_events::Window::new(&app);
+        let moved = |window: &mut widget_events::Window, app: &mut App, at: Point| {
+            let position = at;
+            window.mouse(
+                app,
+                mouse::Event::CursorMoved { position },
+                mouse::Cursor::Available(position),
+            )
+        };
+        let _ = moved(&mut window, &mut app, Point::new(500.0, 400.0));
+        assert_eq!(app.rack_rows().len(), 1);
+        let rect = add_instrument_rect(1);
+        let add = iced::Rectangle::new(rack_in_window(rect.position()), rect.size());
+        assert_eq!((add.x, add.y, add.height), (28.0, 134.0, 24.0));
+        let palette = crate::ui::style::palette();
+        let near = |pixel: [u8; 3], color: iced::Color| {
+            let [r, g, b, _] = color.into_rgba8();
+            [r, g, b]
+                .iter()
+                .zip(pixel)
+                .all(|(wanted, value)| value.abs_diff(*wanted) <= 16)
+        };
+        let pixel = |window: &mut widget_events::Window, app: &App, at: Point| {
+            let shot = window.snapshot(app);
+            let offset = (at.y as usize * shot.size.width as usize + at.x as usize) * 4;
+            [
+                shot.rgba[offset],
+                shot.rgba[offset + 1],
+                shot.rgba[offset + 2],
+            ]
+        };
+        let count = |window: &mut widget_events::Window, app: &App, color: iced::Color| {
+            let shot = window.snapshot(app);
+            let width = shot.size.width as usize;
+            let rows = add.y as usize..(add.y + add.height) as usize;
+            let columns = add.x as usize..(add.x + add.width) as usize;
+            rows.flat_map(|y| columns.clone().map(move |x| (y * width + x) * 4))
+                .filter(|&at| near([shot.rgba[at], shot.rgba[at + 1], shot.rgba[at + 2]], color))
+                .count()
+        };
+        let corner = pixel(&mut window, &app, Point::new(add.x + 2.0, add.y + 2.0));
+        let beside = pixel(&mut window, &app, Point::new(add.x - 4.0, add.y + 2.0));
+        assert_eq!(corner, beside, "no face");
+        assert!(near(corner, palette.bg), "the rack's ground: {corner:02X?}");
+        let resting = (
+            count(&mut window, &app, palette.text_secondary),
+            count(&mut window, &app, palette.text),
+        );
+        let _ = moved(&mut window, &mut app, add.center());
+        assert_eq!(app.hover, Some(Hover::RackAdd), "the hint bar names it");
+        let lit = (
+            count(&mut window, &app, palette.text_secondary),
+            count(&mut window, &app, palette.text),
+        );
+        println!("+ Instrument… at {add:?}: resting {resting:?}, lit {lit:?}");
+        assert!(resting.0 > 5 && resting.1 == 0, "quiet: {resting:?}");
+        // Lit, its strokes reach the text's tone (their edges still pass the secondary's).
+        assert!(lit.1 > 5, "lit: {lit:?}");
+        let outside = Point::new(add.x - 1.0, add.center_y());
+        let _ = moved(&mut window, &mut app, outside);
+        let _ = window.click(&mut app, outside);
+        assert!(app.picker.is_none(), "past its left");
+        let inside = Point::new(add.x + 1.0, add.center_y());
+        let _ = moved(&mut window, &mut app, inside);
+        let _ = window.click(&mut app, inside);
+        assert!(
+            app.picker
+                .as_ref()
+                .is_some_and(|picker| picker.target == PickerTarget::AddInstrument),
+            "inside its left"
+        );
     }
 
     // Delete and Ctrl+B act on the panel last opened or pressed: with the playlist and the
@@ -6080,6 +6587,7 @@ mod tests {
 
     use dawsome_engine::project::{EffectId, InsertId};
 
+    use crate::ui::knob_block;
     use crate::ui::mixer_layout::{self as mix, strip_left};
     use crate::ui::mixer_state::{effect_values, Menu};
 
@@ -6652,7 +7160,7 @@ mod tests {
     // = 86. Each of its rows, clicked there, sends its place in the menu. At 1000 x 400 (the
     // hint bar's top at 378) it is taller than the 378 − 70 = 308 px below the mixer's top, so
     // it ends on the hint bar's top all the same, from 378 − 372 = 6, over the toolbar, and all
-    // fourteen rows click (A.8 of the effects spec: menus never scroll). (Pins moved: the menu
+    // fourteen rows click (menus never scroll). (Pins moved: the menu
     // opened under insert 12's tenth slot, at x 812 = 1000 − 188, before the slots became
     // blocks; at 400 px it used to be pinned at the mixer's top, 70, and ran past the
     // window's foot to 442, its last two rows cut off.)
@@ -6696,7 +7204,7 @@ mod tests {
     #[test]
     fn an_effects_knob_drags_its_value() {
         let (mut app, _player) = p5_app("p5_delay_sync.json");
-        let knob = mix::knob_rect(mix::knob_cell(blocks(&app)[0], 4, 2)).center();
+        let knob = knob_block::knob_rect(knob_block::knob_cell(blocks(&app)[0], 4, 2)).center();
         let plans = app.session.plans_sent();
         left_click(&mut app, knob);
         let _ = app.update(Message::DragMoved(500.0));
@@ -6716,7 +7224,7 @@ mod tests {
     fn a_choice_steps_through_its_values() {
         let (mut app, _player) = p5_app("p5_delay_sync.json");
         add_effect(&mut app, 6);
-        let button = mix::choice_rect(mix::knob_cell(blocks(&app)[1], 3, 0)).center();
+        let button = knob_block::choice_rect(knob_block::knob_cell(blocks(&app)[1], 3, 0)).center();
         let kind = |app: &App| {
             let effect = &insert_of(app, 1).effects[1];
             effect_values(effect, app.session.registry()).expect("values")[0]
@@ -6740,18 +7248,22 @@ mod tests {
     // first block, by whole lines, and the wheel reaches the rest and comes back (the bug: the
     // first two blocks showed cut to their foot, out of reach). The case: a new
     // document (16 inserts) in a 1920 x 1080 window with the Library open and the hint bar, the
-    // mixer at its default 225 px: its canvas from window (300, 1080 - 22 - 225 + 6 = 839),
-    // 1620 x 219; its blocks' view x 1074..1606 (right of insert 16's strip, 12 + 62 x 16 + 60 +
-    // 4 = 1068, 6 in; 14 short of 1620), y 52..217 (165 px, less than two lines: 84 + 6 + 84).
+    // mixer at its default 235 px: its canvas from window (300, 1080 - 22 - 235 + 6 = 829),
+    // 1620 x 229; its blocks' view x 1074..1606 (right of insert 16's strip, 12 + 62 x 16 + 60 +
+    // 4 = 1068, 6 in; 14 short of 1620), y 28..227 (199 px: two lines of four knobs, 84 + 6 +
+    // 84, but not one of them over the EQ's 142).
     // Insert 1 gets the delay, the reverb (4 knobs each: 252 x 84) and the EQ (10 knobs, two
-    // rows: 312 x 142). The first line holds the delay at 1074 and the reverb at 1332; the
-    // second, at 52 + 84 + 6 = 142, the EQ and the add tile (192 x 84) at 1392. The EQ's head
-    // (142..164) shows from the top, so the lines stay there, and the tile, cut at the view's
-    // foot (its top 75 px), takes a press there, as it did after the reverb (at 1074, 142).
-    // Before, each add scrolled to the lines' end, 284 - 217 = 67 after the EQ: the first line
-    // at -15..69, 17 px of ground with neither head nor knob drawn. Then a press on the delay's
-    // light switches it on, and the wheel goes down 48, then 67 (the EQ whole at 75..217), and
-    // back up 19, then 0.
+    // rows: 312 x 142), each through the add tile pressed at its middle (42 px down): the tile
+    // at 1074, 28 first, at 1332, 28 after the delay, at 1074, 118 after the reverb. The first
+    // line holds the delay at 1074 and the reverb at 1332; the second, at 28 + 84 + 6 = 118,
+    // the EQ and the add tile (192 x 84) at 1392. The EQ's head (118..140) shows from the top,
+    // so the lines stay there, and the tile shows whole, down to 202.
+    // Before, each add scrolled to the lines' end, 284 - 217 = 67 after the EQ (with the blocks
+    // at 52): the first line at -15..69, 17 px of ground with neither head nor knob drawn. Then
+    // a press on the delay's light switches it on, and the wheel goes down a notch (48) to the
+    // lines' end, 260 - 227 = 33 (the EQ whole at 85..227), and holds there a notch on; back up
+    // a notch to the top, 0, and holds there. (Pins moved with the blocks up from 52 to 28: the
+    // lines' end was 57, so the wheel stopped at 48, then 57, and on the way back at 9.)
     #[test]
     fn three_effects_added_at_the_default_height_show_from_the_first_block() {
         let (mut app, _player) = app_with(project_file::new_document(), Path::new(""));
@@ -6762,24 +7274,24 @@ mod tests {
         let _ = app.update(Message::TogglePanel(Panel::Mixer));
         assert_eq!(app.mixer_panel_height(), mix::DEFAULT_HEIGHT);
         let mut window = widget_events::Window::new(&app);
-        let at = |x: f32, y: f32| Point::new(300.0 + x, 839.0 + y);
+        let at = |x: f32, y: f32| Point::new(300.0 + x, 829.0 + y);
         // A move off the desk has it report its size; a press on insert 1's strip selects it.
         let off = mouse::Cursor::Available(Point::new(5.0, 5.0));
         let moved = mouse::Event::CursorMoved {
             position: Point::new(5.0, 5.0),
         };
         let _ = window.mouse(&mut app, moved, off);
-        assert_eq!(app.mixer.size(), Size::new(1620.0, 219.0));
+        assert_eq!(app.mixer.size(), Size::new(1620.0, 229.0));
         let _ = window.click(&mut app, at(strip_left(InsertId(1), 0.0) + 30.0, 40.0));
         assert_eq!(app.mixer.selected, InsertId(1));
         let rect =
             |x, y, width, height| iced::Rectangle::new(Point::new(x, y), Size::new(width, height));
         // The add menu's rows, from 0: 1 the delay, 2 the reverb, 0 the EQ; each tile pressed
-        // where it shows (the third one in its top 75 px).
+        // where it shows (the third one whole, under the delay and the reverb).
         for (tile, row) in [
-            (at(1170.0, 94.0), 1),
-            (at(1428.0, 94.0), 2),
-            (at(1170.0, 175.0), 0),
+            (at(1170.0, 70.0), 1),
+            (at(1428.0, 70.0), 2),
+            (at(1170.0, 160.0), 0),
         ] {
             let pressed = window.click(&mut app, tile);
             assert_eq!(app.mixer.menu, Some(Menu::Add), "{tile:?}: {pressed:?}");
@@ -6799,12 +7311,12 @@ mod tests {
             .collect();
         assert_eq!(names, ["dawsome.delay", "dawsome.reverb", "dawsome.eq3"]);
         let first_line = [
-            rect(1074.0, 52.0, 252.0, 84.0),
-            rect(1332.0, 52.0, 252.0, 84.0),
+            rect(1074.0, 28.0, 252.0, 84.0),
+            rect(1332.0, 28.0, 252.0, 84.0),
         ];
         let second_line = [
-            rect(1074.0, 142.0, 312.0, 142.0),
-            rect(1392.0, 142.0, 192.0, 84.0),
+            rect(1074.0, 118.0, 312.0, 142.0),
+            rect(1392.0, 118.0, 192.0, 84.0),
         ];
         let shown = |scroll: f32| -> Vec<iced::Rectangle> {
             first_line
@@ -6824,7 +7336,7 @@ mod tests {
             "the delay's light took the press"
         );
         let over = at(1500.0, 120.0);
-        for (lines, scroll) in [(-1.0, 48.0), (-1.0, 67.0), (1.0, 19.0), (1.0, 0.0)] {
+        for (lines, scroll) in [(-1.0, 33.0), (-1.0, 33.0), (1.0, 0.0), (1.0, 0.0)] {
             let _ = window.wheel(&mut app, over, lines);
             assert_eq!(blocks(&app), shown(scroll), "the wheel {lines}");
         }
@@ -6867,7 +7379,7 @@ mod tests {
         );
         wheel(&mut app, -1.0);
         let filter = blocks(&app)[3];
-        let button = mix::choice_rect(mix::knob_cell(filter, 3, 0)).center();
+        let button = knob_block::choice_rect(knob_block::knob_cell(filter, 3, 0)).center();
         left_click(&mut app, button);
         let kind = &insert_of(&app, 1).effects[3].processor.params["type"];
         assert_eq!(*kind, 1.0, "the press found the filter's type");
@@ -6881,11 +7393,12 @@ mod tests {
     fn the_header_and_ctrl_l_route_the_selected_channel() {
         let (mut app, _player) = p5_app("p5_gain.json");
         let channel_insert = |app: &App| app.session.project().channels[&ChannelId(1)].insert;
-        left_click(&mut app, mix::route_up_rect().center());
+        let width = app.mixer.size().width;
+        left_click(&mut app, mix::route_up_rect(width).center());
         assert_eq!(channel_insert(&app), InsertId(4));
         assert_eq!(app.mixer.selected, InsertId(4));
-        left_click(&mut app, mix::route_down_rect().center());
-        left_click(&mut app, mix::route_down_rect().center());
+        left_click(&mut app, mix::route_down_rect(width).center());
+        left_click(&mut app, mix::route_down_rect(width).center());
         assert_eq!(channel_insert(&app), InsertId(2));
         left_click(&mut app, strip_point(9, 30.0, 300.0));
         let _ = app.update(Message::RouteToSelectedInsert);
@@ -7659,7 +8172,8 @@ mod tests {
     // C3: a click on the tempo (a press let go of where it was, the tempo unchanged) opens its
     // box with the tempo in it; Enter applies what is typed, one undo step; a tempo out of range
     // is refused with a notice and the box stays; Esc closes it unchanged; a drag still drags
-    // and opens nothing.
+    // and opens nothing. (Pin moved: the box opened on "120.000" while the readout showed three
+    // decimals; it opens on what the readout shows, "120.0".)
     #[test]
     fn a_click_on_the_tempo_types_it() {
         let (mut app, _player) = f1_app();
@@ -7668,7 +8182,7 @@ mod tests {
             let _ = app.update(Message::DragEnded);
         };
         click(&mut app);
-        assert_eq!(app.tempo_edit.as_deref(), Some("120.000"));
+        assert_eq!(app.tempo_edit.as_deref(), Some("120.0"));
         let _ = app.update(Message::TempoEdited("87.5".into()));
         let _ = app.update(Message::TempoSubmitted);
         assert_eq!(app.session.project().tempo, MilliBpm(87_500));
@@ -7715,7 +8229,7 @@ mod tests {
         assert_eq!(metronome(&app), [true, false]);
     }
 
-    // B4: the Edit menu names the steps Undo and Redo take. F1: a step switched on ("Step"),
+    // The Edit menu names the steps Undo and Redo take. F1: a step switched on ("Step"),
     // a volume knob dragged ("Channel volume", the whole drag one step), the channel cloned
     // ("Clone channel"); Undo from the menu takes the clone back and closes the menu, Redo then
     // names it. Before any step Undo is dim ("Undo", nothing to send). Esc closes the menu, and
@@ -7767,7 +8281,7 @@ mod tests {
         assert!(app.edit_menu && !app.files.menu);
     }
 
-    // B2: in a 1000 × 605 window (541 px under the toolbar) F1's rack (70 px least), the
+    // In a 1000 × 605 window (541 px under the toolbar) F1's rack (70 px least), the
     // playlist (180) and the piano roll (230 under them) fit; the mixer (225) opened then does
     // not, so the most recently used of the others stay while they fit beside it: the roll and
     // the rack (449 and 525 px), not the playlist (705, or 635 beside the roll and the mixer),
@@ -7873,7 +8387,7 @@ mod tests {
 
     // A stray digit is undone by the same digit. F1 at 1000 x 605 with the rack,
     // the playlist and the piano roll open and the keyboard on: 4, a finger reaching past E and
-    // R, opens the mixer, which closes the playlist to make room (B2); 4 again closes the mixer
+    // R, opens the mixer, which closes the playlist to make room; 4 again closes the mixer
     // and brings the playlist back, and the notice says so. A panel opened by hand meanwhile
     // stays as it is (here 2 reopens the playlist, which closes the roll; 4 then closes the
     // mixer alone, and 2 again brings the roll back), and one with no room left stays closed
@@ -7961,7 +8475,8 @@ mod tests {
         let _ = app.update(Message::WindowMaximized(true));
         let _ = app.update(Message::File(FileMessage::CloseRequested));
         let saved = crate::settings::Settings::load(Some(&file));
-        let start = crate::settings::start_window(saved.window.as_ref());
+        let start =
+            crate::settings::start_window(saved.window.as_ref(), crate::zoom::Zoom::DEFAULT);
         let mut panels = Panels::default();
         panels.set(Panel::Browser, true);
         panels.set(Panel::Mixer, true);
@@ -8192,7 +8707,7 @@ mod tests {
         app_hosted(project, Path::new(F1), host)
     }
 
-    // 6d K4: on a first start the keyboard's note waits for the window's first frame, then
+    // On a first start the keyboard's note waits for the window's first frame, then
     // shows; Got it puts it away for good, written to the settings. The
     // note over Record ("Arm, press Space, play") shows next, its Got it puts it away too, so
     // the next start shows none.
@@ -8269,7 +8784,7 @@ mod tests {
         assert_eq!(scripted.callout, Some(Callout::Due));
     }
 
-    // 6d review 7: the note's first line names the keys of the layout saved: the piano row's on
+    // The note's first line names the keys of the layout saved: the piano row's on
     // a first start, the two rows' when the settings file chose them (Z X C V white, S D G H J
     // black, Q W E R an octave up, the octave moved by the buttons beside the switch).
     #[test]
@@ -8396,38 +8911,38 @@ mod tests {
         );
     }
 
-    // Toolbar scale: at 1920 px, a full screen's 2259 px and 4510 px the controls have
-    // grown to the most (1.6), and each takes its click where the toolbar's spread lays it out:
-    // the middle of Play, Record, the Audio side of the switch beside it, the mixer's panel
-    // button, the keyboard switch, File and Edit each publishes what that control does, and
-    // the cursor coming onto the mixer's button tells the hint bar so; a click in a gap, between
-    // the keyboard's group and the line after it, publishes nothing. The first-run notes ring
-    // the grown keyboard switch and Record, and a click in the middle of Record's ring arms it.
-    // At 2259 and 4510 px the groups stand left, 45 px apart, and at each width a
-    // click in the notices' cell past their text and Retry, halfway from there to File (the first
-    // of the menus), publishes nothing too.
+    // At 1920 px, a full screen's 2259 px and 4510 px the controls keep their size (the toolbar
+    // scale retired), the groups up to the keyboard stand left 45 px apart, the panel buttons
+    // 45 px left of File, and each takes its click where the toolbar's spread lays it out: the
+    // middle of Play, Record, the Audio side of the switch beside it, the mixer's panel button,
+    // the keyboard switch, File and Edit each publishes what that control does, and the cursor
+    // coming onto the mixer's button tells the hint bar so; a click in a gap, between the
+    // keyboard's group and the line after it, publishes nothing. The first-run notes ring the
+    // keyboard switch and Record, and a click in the middle of Record's ring arms it. At each
+    // width a click in the notices' cell past their text and Retry, halfway from there to the
+    // panel buttons (which stand beside the menus now; it was halfway to File), publishes
+    // nothing too.
     #[test]
-    fn the_grown_toolbars_controls_take_their_clicks_where_it_lays_them_out() {
+    fn a_wide_toolbars_controls_take_their_clicks_where_it_lays_them_out() {
         use crate::ui::hint::{Hover, HoverMessage, Tool};
         use crate::ui::toolbar::{panel_button_rects, retry_edit_file_and_help, Group};
         for width in [1920.0, 2259.0, 4510.0] {
             let (mut app, _player) = f1_app();
             let _ = app.update(Message::WindowResized(Size::new(width, 560.0)));
             let spread = app.toolbar().spread();
-            assert_eq!(spread.sizes().scale, 1.6, "{width} px");
             let y = layout::TOOLBAR_HEIGHT / 2.0;
-            // At 0.9 of the size: 38 → 61 px buttons (were 42 → 67),
-            // the Audio row y 23..37 (9 + 14; was 26..42), 16 + 2 × 6 px panel buttons (were
-            // 19 + 2 × 6).
-            let play = spread.left(Group::Transport).expect("shown") + 61.0 / 2.0;
+            // 38 px transport buttons, the Audio row y 23..37 (9 + 14), 11 + 2 × 7 px panel
+            // buttons (were 61, 28 and 16 + 2 × 6 at the toolbar scale's most, 1.6; then
+            // 11 + 2 × 4 until the 24 px targets).
+            let play = spread.left(Group::Transport).expect("shown") + 38.0 / 2.0;
             let record = spread.record_button();
-            assert_eq!(record.width, 61.0, "the grown Record");
+            assert_eq!(record.width, 38.0, "Record");
             let audio = Point::new(spread.take_column_x() + 20.0, 30.0);
             let (_, mixer) = panel_button_rects(&spread)
                 .into_iter()
                 .find(|&(panel, _)| panel == Panel::Mixer)
                 .expect("the panel buttons show");
-            assert_eq!(mixer.width, 28.0, "the grown panel button");
+            assert_eq!(mixer.width, 25.0, "the panel button");
             let switch = spread.keyboard_switch();
             let [_, edit, file, help] = retry_edit_file_and_help(&spread);
             let menus_start = file.start;
@@ -8471,20 +8986,16 @@ mod tests {
             let gap = Point::new(keyboard_end + 10.0, y);
             let published = window.click(&mut app, gap);
             assert!(published.is_empty(), "{width} px, the gap: {published:?}");
-            let panels_end = spread.span(Group::Panels).expect("shown").end;
-            // At 1920 px the notices of a window with no audio device and Retry leave the gaps
-            // less than that to share.
-            if width > 2000.0 {
-                assert_eq!(
-                    keyboard_end + 45.0,
-                    spread.left(Group::Panels).expect("shown"),
-                    "{width} px: the groups 45 px apart"
-                );
-            }
+            let panels = spread.span(Group::Panels).expect("shown");
+            assert_eq!(
+                panels.end + 45.0,
+                menus_start,
+                "{width} px: the panel buttons 45 px left of File"
+            );
             let notices_end = spread
                 .span(Group::Status)
-                .map_or(panels_end, |status| status.end);
-            let cell = Point::new((notices_end + menus_start) / 2.0, y);
+                .map_or(keyboard_end, |status| status.end);
+            let cell = Point::new((notices_end + panels.start) / 2.0, y);
             let published = window.click(&mut app, cell);
             assert!(published.is_empty(), "{width} px, the cell: {published:?}");
             let hovered = window.mouse(
@@ -8522,7 +9033,7 @@ mod tests {
         }
     }
 
-    // Toolbar scale: F1's window (or the project DAWSOME_UI_PROJECT names: a pattern's long
+    // F1's window (or the project DAWSOME_UI_PROJECT names: a pattern's long
     // name) drawn offscreen at each width DAWSOME_UI_WIDTHS names (880, 1000, 1400, 1920, 2259,
     // 2560 and 4510 by default), 160 px tall, into DAWSOME_UI_OUT as toolbar_<width>.png with no
     // notice and toolbar_<width>_notice.png with a long one. Why: the app fits its window to its
@@ -8538,6 +9049,9 @@ mod tests {
             Some(project) => app_on(Path::new(&project)),
             None => f1_app(),
         };
+        // In Graphite, the probes' set, as the scripted runs' --theme graphite: an app starts in
+        // the default, Slate.
+        crate::ui::palette::set_theme(crate::ui::palette::ThemeId::Graphite);
         for width in widths.split(',') {
             let width: f32 = width.trim().parse().expect("a width");
             let _ = app.update(Message::WindowResized(Size::new(width, 160.0)));

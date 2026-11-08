@@ -105,7 +105,7 @@ def channel(cid, name, kind="sampler", sample="impulse.wav"):
             "mute": False}
 
 
-def tracks(n=8): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, n + 1)]
+def tracks(n=6): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, n + 1)]
 
 
 def project(sr, channels, patterns, playlist=None):
@@ -207,7 +207,7 @@ EMPTY_CALLS = 400
 
 
 def song_playlist(sr_clips):
-    return {"next_track_id": 9, "next_clip_id": len(sr_clips) + 1, "tracks": tracks(),
+    return {"next_track_id": 7, "next_clip_id": len(sr_clips) + 1, "tracks": tracks(),
             "clips": sr_clips}
 
 
@@ -349,7 +349,7 @@ def capture_docs():
     start = (C_SONG_MARKER + BAR // 2) // BAR * BAR
     song["patterns"].append({"id": 2, "name": "Keys take 2", "length_bars": bars, "kind": "take",
                              "notes": notes})
-    pl = {"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(),
+    pl = {"next_track_id": 7, "next_clip_id": 2, "tracks": tracks(),
           "clips": [{"id": 1, "track": 1, "start": start, "length": bars * BAR,
                      "kind": "pattern", "pattern": 2}]}
     song["playlist"] = pl

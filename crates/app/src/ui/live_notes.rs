@@ -138,14 +138,14 @@ pub fn bars(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::piano_layout::DEFAULT_ZOOM;
+    use crate::ui::piano_layout::ZOOM;
 
     /// p3_roll's view: top key 69, 16 px a step of 24 ticks (1.5 ticks a pixel), no scroll.
     fn view() -> View {
         View {
             top: 69,
             scroll: Ticks(0),
-            zoom: DEFAULT_ZOOM,
+            zoom: ZOOM.default,
             step: Ticks(24),
             rows: crate::ui::piano_layout::Rows::ALL,
         }

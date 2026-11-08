@@ -7,39 +7,47 @@
 //! outlines over it every frame.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use dawsome_engine::edit::copies;
 use dawsome_engine::project::{
     Automation, AutomationId, ChannelId, Clip, ClipId, ClipItem, Curve, LoopRange, Project,
-    StretchMode, TrackId,
+    StretchMode, TrackId, STRETCH_PITCH_RANGE,
 };
 use dawsome_engine::time::{self, Ticks};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::canvas::{self, Cache, Event, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::{button, column, container, pin, row, space, stack, text, text_input, Id};
-use iced::{mouse, window, Center, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::{
+    mouse, window, Center, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector,
+};
 
 use crate::app::{ClipLink, MediaMessage, Message, SelectionLink};
+use crate::ui::add_words::{self, Look};
 use crate::ui::arranger::{Arranger, PlaylistMessage, Preview, CURVE_MENU};
 use crate::ui::clip_gesture::ClipSnap;
 use crate::ui::clips::{self, FileLook, FileLooks};
+use crate::ui::fonts::size;
+use crate::ui::grid_rules::{
+    self, device_line, first_at_or_after, NUMBER_BAND_HEIGHT, STRONG_COMPANION_ALPHA,
+};
 use crate::ui::hint::{
     hover_area, hover_change, link_tip, with_tip, ClipControl, ClipRow, Hover, MenuRow,
     PlaylistTool, Pointer, TrackRow,
 };
 use crate::ui::menu;
-use crate::ui::panels::Panel;
+use crate::ui::panels::{Panel, TITLE_GAP};
 use crate::ui::playlist_layout::{
     self, ClipPart, Grid, HeaderHit, Lanes, ARM_CENTER_X, ARM_RADIUS, AUTOMATION_LINE,
-    HANDLE_RADIUS, HEADER_HEIGHT, LABEL_INSET, LABEL_SIZE, LED_RADIUS, MARKER_WIDTH,
-    MIN_BEAT_SPACING, NAME_SIZE, NAME_X, NOTE_MARK_WIDTH, NUMBER_BAND_HEIGHT, POINT_RADIUS,
-    RULER_HEIGHT, SELECTED_OUTLINE, TIME_BAR_HEIGHT, TITLE_HEIGHT, TITLE_SIZE, TRACK_HEADER_WIDTH,
-    ZOOM_LEVELS,
+    HANDLE_RADIUS, HEADER_HEIGHT, LED_RADIUS, MARKER_WIDTH, NAME_X, NOTE_MARK_WIDTH, POINT_RADIUS,
+    RULER_HEIGHT, SELECTED_OUTLINE, TIME_BAR_HEIGHT, TITLE_HEIGHT, TRACK_HEADER_WIDTH, ZOOM,
 };
+use crate::ui::pop_out;
+use crate::ui::rack::draw_mute_light;
 use crate::ui::scroll::Scrollbar;
 use crate::ui::style;
-use crate::ui::text_fit::{fit_width, text_width};
+use crate::ui::text_fit::{fit_width, text_width, widest};
 
 /// The text box a track name is edited in.
 pub const RENAME_INPUT: &str = "playlist-track-rename";
@@ -64,10 +72,6 @@ pub const LINK_CELL_WIDTH: f32 = LINK_ICON + 12.0;
 /// Two presses at most this far apart in time and space are a double press.
 const DOUBLE_PRESS_TIME: Duration = Duration::from_millis(400);
 const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
-
-/// Pixels a bar number needs per digit, plus a margin, so labels never run into each other.
-const LABEL_DIGIT_WIDTH: f32 = 7.0;
-const LABEL_MARGIN: f32 = 6.0;
 
 /// The tallest note mark in a clip, and the padding around the marks.
 const NOTE_MARK_MAX_HEIGHT: f32 = 4.0;
@@ -103,6 +107,9 @@ pub struct Playlist<'a> {
     /// How the selected pattern clips share their patterns, while the header's link control
     /// shows: at least one of them shares its pattern or plays a copy.
     pub link: Option<SelectionLink>,
+    /// Whether the playlist is in the stack, where its header ends with the pop-out button
+    /// ([`crate::ui::pop_out`]); in its own window it is not.
+    pub docked: bool,
 }
 
 /// What the header's properties strip shows of an audio clip: how its file is fitted to it
@@ -168,28 +175,27 @@ impl<'a> Playlist<'a> {
         stack([panel.into(), drops.into()]).into()
     }
 
-    /// The timeline's scroll bar at the panel's foot, under the lanes as the piano roll's is
-    /// under its grid; under the track headers its row is the well.
+    /// The timeline's scroll bar at the panel's foot, as the piano roll's is under its grid: its
+    /// rail the panel's whole width, under the track headers too, so the thumb starts at the
+    /// panel's left edge at the song's start and ends at its right edge at the farthest scroll.
+    /// Why not from the lanes' edge: a thumb 120 px in at the start read as already scrolled.
     fn time_bar(&self) -> Element<'a, Message> {
-        let bar = canvas::Canvas::new(Scrollbar {
+        canvas::Canvas::new(Scrollbar {
             span: self.arranger.span(self.project),
             message: |message| Message::Playlist(PlaylistMessage::Bar(message)),
         })
         .width(Fill)
-        .height(TIME_BAR_HEIGHT);
-        let under_headers = container(space())
-            .width(TRACK_HEADER_WIDTH)
-            .height(TIME_BAR_HEIGHT)
-            .style(style::rack_well);
-        row![under_headers, bar].into()
+        .height(TIME_BAR_HEIGHT)
+        .into()
     }
 
-    /// "Playlist", the snap choices, the zoom buttons, the Follow and Fit switches, the link
-    /// control's cell right of Fit, and an audio clip's properties.
+    /// "Playlist", then [`TITLE_GAP`] on the snap choices, the zoom buttons, the Follow and Fit
+    /// switches, the link control's cell right of Fit, an audio clip's properties, each 12 px
+    /// apart, and, docked, the pop-out button at the right end.
     fn header(&self) -> Element<'a, Message> {
         let snap = self.arranger.snap;
         let snaps = ClipSnap::ALL.map(|choice| {
-            let face = button(text(choice.to_string()).size(11))
+            let face = button(text(choice.to_string()).size(size::LABEL))
                 .padding([2, 8])
                 .style(style::tool_button(choice == snap))
                 .on_press(Message::Playlist(PlaylistMessage::SnapSelected(choice)));
@@ -197,25 +203,24 @@ impl<'a> Playlist<'a> {
         });
         let zoom = self.arranger.grid.zoom;
         let zoom_button = |label, message, enabled: bool| {
-            button(text(label).size(11))
+            button(text(label).size(size::LABEL))
                 .padding([2, 8])
                 .style(style::tool_button(false))
                 .on_press_maybe(enabled.then_some(Message::Playlist(message)))
         };
         let mut content = row![
-            text("Playlist").size(12),
             row(snaps).spacing(2),
             row![
                 hover_area(
                     with_tip(
-                        zoom_button("−", PlaylistMessage::ZoomOut, zoom > 0),
+                        zoom_button("−", PlaylistMessage::ZoomOut, zoom > ZOOM.min),
                         "Zoom out \u{b7} Ctrl+wheel"
                     ),
                     Hover::PlaylistTool(PlaylistTool::ZoomOut)
                 ),
                 hover_area(
                     with_tip(
-                        zoom_button("+", PlaylistMessage::ZoomIn, zoom + 1 < ZOOM_LEVELS.len()),
+                        zoom_button("+", PlaylistMessage::ZoomIn, zoom < ZOOM.max),
                         "Zoom in \u{b7} Ctrl+wheel"
                     ),
                     Hover::PlaylistTool(PlaylistTool::ZoomIn)
@@ -225,7 +230,7 @@ impl<'a> Playlist<'a> {
         ]
         .spacing(12)
         .align_y(Center);
-        let follow = button(text("Follow").size(11))
+        let follow = button(text("Follow").size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(self.follow))
             .on_press(Message::ToggleFollow(Panel::Playlist));
@@ -234,7 +239,7 @@ impl<'a> Playlist<'a> {
             Hover::PlaylistTool(PlaylistTool::Follow),
         ));
         let fitted = self.arranger.lanes() == Lanes::Fit;
-        let fit = button(text("Fit").size(11))
+        let fit = button(text("Fit").size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(fitted))
             .on_press(Message::Playlist(PlaylistMessage::ToggleFit));
@@ -247,6 +252,14 @@ impl<'a> Playlist<'a> {
         if let Some(properties) = self.properties {
             content = content.push(properties_strip(properties));
         }
+        if self.docked {
+            content = content
+                .push(space().width(Fill))
+                .push(pop_out::button(Panel::Playlist));
+        }
+        let content = row![text("Playlist").size(size::PANEL_TITLE), content]
+            .spacing(TITLE_GAP)
+            .align_y(Center);
         container(content)
             .padding([0, 12])
             .width(Fill)
@@ -311,7 +324,7 @@ impl<'a> Playlist<'a> {
             .into_iter()
             .map(|(row, label, acts)| {
                 let pressed = acts.then_some(Message::Playlist(PlaylistMessage::ClipMenu(row)));
-                let label = fit_width(&label, CLIP_ROW_ROOM, menu::TEXT_SIZE)
+                let label = fit_width(&label, CLIP_ROW_ROOM, size::BODY)
                     .map(|fitted| fitted.into_owned())
                     .unwrap_or_default();
                 hover_area(menu::row(label, pressed), Hover::Menu(MenuRow::Clip(row)))
@@ -338,7 +351,7 @@ impl<'a> Playlist<'a> {
             .id(Id::new(RENAME_INPUT))
             .on_input(|name| Message::Playlist(PlaylistMessage::RenameEdited(name)))
             .on_submit(Message::Playlist(PlaylistMessage::RenameSubmitted))
-            .size(NAME_SIZE)
+            .size(size::LABEL)
             .padding([3, 4])
             .width(TRACK_HEADER_WIDTH - NAME_X);
         Some(pin(input).x(NAME_X - 4.0).y(top + 5.0).into())
@@ -418,7 +431,7 @@ impl canvas::Program<Message> for ChainIcon {
                     Size::new(9.0, 4.5),
                     2.25.into(),
                 );
-                frame.stroke(&link, line(style::TEXT, 1.6));
+                frame.stroke(&link, line(style::palette().text, 1.6));
             });
         }
         if self.unlinked {
@@ -443,25 +456,39 @@ pub fn link_badge(count: usize) -> Option<String> {
     (count > 1).then(|| format!("\u{d7}{count}"))
 }
 
+/// The pitch readout's words for a time-stretched clip `semitones` up or down.
+fn pitch_words(semitones: i8) -> String {
+    match semitones {
+        0 => "0 st".to_owned(),
+        up if up > 0 => format!("+{up} st"),
+        down => format!("\u{2212}{} st", down.unsigned_abs()),
+    }
+}
+
+/// The room the pitch readout keeps between − and +: its widest value's over the stretch's
+/// range, so + stays put as the pitch steps (the type scale's digits are proportional).
+fn pitch_width() -> f32 {
+    static WIDTH: OnceLock<f32> = OnceLock::new();
+    *WIDTH.get_or_init(|| widest(STRETCH_PITCH_RANGE.map(pitch_words), size::DENSE))
+}
+
 /// An audio clip's properties in the header: Stretch "None / Resample / Stretch", the pitch
 /// stepper (for a time-stretch), the length in percent of the file's, and a close button.
 fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
     let send = |message| Message::Playlist(message);
     let small = |control: ClipControl, label: String, lit: bool, message: Message| {
-        let face = button(text(label).size(11))
+        let face = button(text(label).size(size::LABEL))
             .padding([2, 8])
             .style(style::tool_button(lit))
             .on_press(message);
         hover_area(face, Hover::ClipControl(control))
     };
     let stretched = properties.mode == Some(StretchMode::Stretch);
-    let pitch = match properties.pitch {
-        0 => "0 st".to_owned(),
-        up if up > 0 => format!("+{up} st"),
-        down => format!("\u{2212}{} st", down.unsigned_abs()),
-    };
+    let pitch = pitch_words(properties.pitch);
     let mut modes = row![].spacing(2);
-    let mut pitches = row![text("Pitch").size(11)].spacing(4).align_y(Center);
+    let mut pitches = row![text("Pitch").size(size::LABEL)]
+        .spacing(4)
+        .align_y(Center);
     let mut close = None;
     // Every control comes from the list the hint table's test walks.
     for control in ClipControl::ALL {
@@ -486,7 +513,12 @@ fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
                     false,
                     send(PlaylistMessage::ClipPitch(-1)),
                 );
-                pitches = pitches.push(step).push(text(pitch.clone()).size(11));
+                pitches = pitches.push(step).push(
+                    text(pitch.clone())
+                        .size(size::DENSE)
+                        .width(pitch_width())
+                        .align_x(Horizontal::Right),
+                );
             }
             ClipControl::PitchUp => {
                 pitches = pitches.push(small(
@@ -506,14 +538,14 @@ fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
             }
         }
     }
-    let mut strip = row![text("Stretch").size(11), modes]
+    let mut strip = row![text("Stretch").size(size::LABEL), modes]
         .spacing(6)
         .align_y(Center);
     if stretched {
         strip = strip.push(pitches);
     }
     if let Some(percent) = properties.percent {
-        strip = strip.push(text(format!("Length {percent}%")).size(11));
+        strip = strip.push(text(format!("Length {percent}%")).size(size::LABEL));
     }
     strip.push(close).into()
 }
@@ -532,7 +564,7 @@ struct Ruler<'a> {
 impl Ruler<'_> {
     fn draw_body(&self, frame: &mut Frame) {
         let size = frame.size();
-        frame.fill_rectangle(Point::ORIGIN, size, style::RACK_WELL);
+        frame.fill_rectangle(Point::ORIGIN, size, style::palette().bg);
         if let Some(range) = &self.loop_shown {
             if let Some((left, right)) =
                 visible_span(&self.grid, range.start, range.end, size.width)
@@ -550,25 +582,7 @@ impl Ruler<'_> {
             }
         }
         let bars: Vec<(i64, f32)> = playlist_layout::visible_bars(&self.grid, size.width).collect();
-        let every = label_interval(&self.grid, bars.last().map_or(1, |&(number, _)| number));
-        for (number, x) in bars {
-            let (line, width) = device_line(x, self.scale_factor);
-            frame.fill_rectangle(
-                Point::new(line, NUMBER_BAND_HEIGHT - 4.0),
-                Size::new(width, 4.0),
-                style::LANE_BAR_LINE,
-            );
-            if (number - 1) % every == 0 {
-                frame.fill_text(Text {
-                    content: number.to_string(),
-                    position: Point::new(x + LABEL_INSET, NUMBER_BAND_HEIGHT / 2.0),
-                    color: style::TEXT,
-                    size: LABEL_SIZE.into(),
-                    align_y: Vertical::Center,
-                    ..Text::default()
-                });
-            }
-        }
+        grid_rules::draw_bar_numbers(frame, &bars, self.grid.px_per_bar(), self.scale_factor);
     }
 }
 
@@ -591,14 +605,14 @@ struct ClipAt {
 fn draw_gain(frame: &mut Frame, rect: Rectangle, shown: Rectangle, gain: f32) {
     let end = rect.x + rect.width - 3.0;
     let words = clips::gain_text(gain);
-    let Some(fitted) = fit_width(&words, end - shown.x, TITLE_SIZE) else {
+    let Some(fitted) = fit_width(&words, end - shown.x, size::TINY) else {
         return;
     };
     frame.fill_text(Text {
         content: fitted.into_owned(),
         position: Point::new(end, rect.y + TITLE_HEIGHT / 2.0),
         color: style::CLIP_TITLE_TEXT,
-        size: TITLE_SIZE.into(),
+        size: size::TINY.into(),
         align_x: Horizontal::Right.into(),
         align_y: Vertical::Center,
         ..Text::default()
@@ -666,36 +680,6 @@ pub fn automation_handles(
         .collect()
 }
 
-/// Every how many bars a number is written, so that numbers up to `largest` fit between their
-/// lines: every bar when there is room, else every 2nd, 4th, ...
-fn label_interval(grid: &Grid, largest: i64) -> i64 {
-    let digits = largest.max(1).to_string().len() as f32;
-    let needed = digits * LABEL_DIGIT_WIDTH + LABEL_MARGIN;
-    let mut every = 1;
-    while (every as f32) * grid.px_per_bar() < needed {
-        every *= 2;
-    }
-    every
-}
-
-/// A 1 px line at logical x, as drawn: its left edge moved down onto a device pixel, and one
-/// device pixel per whole scale step wide (2 at scale 1.7), so it covers whole pixels.
-///
-/// Why: lines a logical pixel wide at a fractional scale straddle device pixels, and the
-/// renderer's multisampling then blends them into the lane color, lighter or darker from line
-/// to line. Lines on whole device pixels look the same everywhere, in the window and in a
-/// screenshot.
-fn device_line(x: f32, scale_factor: f32) -> (f32, f32) {
-    let scale = if scale_factor > 0.0 {
-        scale_factor
-    } else {
-        1.0
-    };
-    let left = (x * scale).floor() / scale;
-    let width = scale.round().max(1.0) / scale;
-    (left, width)
-}
-
 /// Where a note mark for a note at `x` starts so that all of it lies in its clip's `body` (from
 /// right of the clip's start line to where the next clip's start line begins).
 ///
@@ -704,6 +688,19 @@ fn device_line(x: f32, scale_factor: f32) -> (f32, f32) {
 /// lane's color, the mark read as a note outside the clip, or as the end of the clip before.
 fn mark_left(x: f32, body: (f32, f32)) -> f32 {
     x.min(body.1 - NOTE_MARK_WIDTH).max(body.0)
+}
+
+/// Where the mark of a note from `x` to `end_x` lies, its left edge and width: a bar from the
+/// note's start to its end, at least [`NOTE_MARK_WIDTH`] wide (a step hit's, or a note shorter
+/// than that at the zoom), starting where [`mark_left`] puts it, cut at the clip's `body` end
+/// (a note running past the clip's end, on any pass) and to the visible `span`; none when
+/// nothing of it shows. Why bars: a mark at each note's start alone made a recorded take read
+/// as scattered dots, not the notes played as the piano roll shows them.
+fn mark_span(x: f32, end_x: f32, body: (f32, f32), span: (f32, f32)) -> Option<(f32, f32)> {
+    let left = mark_left(x, body);
+    let right = end_x.min(body.1).max(left + NOTE_MARK_WIDTH);
+    let (left, right) = (left.max(span.0), right.min(span.1));
+    (left < right).then_some((left, right - left))
 }
 
 /// The visible x span of ticks `start..end` on a canvas `width` wide, right of the headers.
@@ -754,6 +751,9 @@ impl canvas::Program<Message> for Ruler<'_> {
                 .map(local)
                 .or(state.last)
                 .map(|at| send(PlaylistMessage::RulerReleased(at))),
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) => cursor
+                .position_in(bounds)
+                .map(|at| send(PlaylistMessage::RulerScrolled { at, delta: *delta }).and_capture()),
             _ => None,
         }
     }
@@ -780,7 +780,7 @@ impl canvas::Program<Message> for Ruler<'_> {
                     path.line_to(Point::new(x, MARKER_WIDTH));
                     path.close();
                 });
-                overlay.fill(&triangle, style::ACCENT);
+                overlay.fill(&triangle, style::accent());
             }
         }
         vec![body, overlay.into_geometry()]
@@ -907,7 +907,7 @@ impl Tracks<'_> {
         if let Some((clip, part)) = self.arranger.clip_under(self.project, at) {
             return Some(Hover::Clip { clip, part });
         }
-        let index = usize::try_from(self.grid().track_index_at(at.y)).ok()?;
+        let index = self.grid().shown_index_at(at.y)?;
         (index < tracks).then_some(Hover::Lane)
     }
 
@@ -915,55 +915,58 @@ impl Tracks<'_> {
         &self.arranger.grid
     }
 
-    /// The tracks from the top row down, with their rows.
+    /// The tracks from the top row down, with their rows: those in the rows shown whole.
     fn shown_tracks(
         &self,
-        height: f32,
     ) -> impl Iterator<Item = (usize, TrackId, &dawsome_engine::project::Track)> {
-        let rows = self.grid().visible_rows(height);
         self.project
             .playlist
             .tracks
             .iter()
             .skip(self.grid().top)
-            .take(rows)
+            .take(self.grid().rows())
             .enumerate()
             .map(|(row, (&id, track))| (row, id, track))
     }
 
-    /// Where the lanes end: under the last visible track, at most the canvas's height.
+    /// Where the lanes end: under the last track shown, at most the canvas's height.
     fn lanes_bottom(&self, height: f32) -> f32 {
-        let rows = self
+        let below = self
             .project
             .playlist
             .tracks
             .len()
             .saturating_sub(self.grid().top);
+        let rows = below.min(self.grid().rows());
         (self.grid().row_top(rows) - playlist_layout::LANE_GAP).clamp(0.0, height)
     }
 
     fn draw_body(&self, frame: &mut Frame, origin_y: f32) {
         let size = frame.size();
         let grid = self.grid();
-        frame.fill_rectangle(Point::ORIGIN, size, style::RACK_WELL);
-        let tracks: Vec<_> = self.shown_tracks(size.height).collect();
+        frame.fill_rectangle(Point::ORIGIN, size, style::palette().bg);
+        let tracks: Vec<_> = self.shown_tracks().collect();
+        let tops: Vec<f32> = tracks.iter().map(|&(row, ..)| grid.row_top(row)).collect();
         let lane_width = (size.width - TRACK_HEADER_WIDTH).max(0.0);
+        for &top in &tops {
+            frame.fill_rectangle(
+                Point::new(TRACK_HEADER_WIDTH, top),
+                Size::new(lane_width, grid.lane),
+                style::palette().lane,
+            );
+        }
+        self.draw_shading(frame, &tops, size.width);
+        // Over the shading: the loop range's lanes keep its tint whole.
         let tint = self
             .loop_shown
             .filter(|range| range.on)
             .and_then(|range| visible_span(grid, range.start, range.end, size.width));
-        for &(row, _, _) in &tracks {
-            let top = grid.row_top(row);
-            frame.fill_rectangle(
-                Point::new(TRACK_HEADER_WIDTH, top),
-                Size::new(lane_width, grid.lane),
-                style::LANE,
-            );
-            if let Some((left, right)) = tint {
+        if let Some((left, right)) = tint {
+            for &top in &tops {
                 frame.fill_rectangle(
                     Point::new(left, top),
                     Size::new(right - left, grid.lane),
-                    style::LOOP_TINT,
+                    style::palette().loop_tint,
                 );
             }
         }
@@ -1006,27 +1009,72 @@ impl Tracks<'_> {
         self.draw_headers(frame, &tracks);
     }
 
-    /// A line at every bar, and at every beat when beats are far enough apart: 1 px wide,
-    /// through every lane.
+    /// The shaded bars ([`playlist_layout::shaded_spans`]) in the lanes whose tops are `tops`,
+    /// as one path. Their edges are moved onto the device pixels the bar lines start on, so the
+    /// lines cover them and no blended pixel shows beside a line.
+    fn draw_shading(&self, frame: &mut Frame, tops: &[f32], width: f32) {
+        let grid = self.grid();
+        let on_line = |x: f32| device_line(x, self.scale_factor).0;
+        let spans: Vec<(f32, f32)> = playlist_layout::shaded_spans(grid, width)
+            .map(|(left, right)| (on_line(left), on_line(right)))
+            .collect();
+        if spans.is_empty() || tops.is_empty() {
+            return;
+        }
+        let shading = Path::new(|path| {
+            for &top in tops {
+                for &(left, right) in &spans {
+                    path.rectangle(Point::new(left, top), Size::new(right - left, grid.lane));
+                }
+            }
+        });
+        frame.fill(&shading, style::palette().lane_alt);
+    }
+
+    /// The lines through every lane, 1 px on whole device pixels: the beat lines at the
+    /// strength the zoom gives them ([`grid_rules::beat_alpha`]; none while it is 0), then
+    /// a line at every bar, the one starting every four bars ([`grid_rules::strong`]) in
+    /// the brighter `bar_line` ([`crate::ui::palette::Palette::bar_line`]) with a fainter one right of it.
     fn draw_lines(&self, frame: &mut Frame, size: Size) {
         let grid = self.grid();
         let bottom = self.lanes_bottom(size.height);
-        let beat = grid.beat().0;
-        let bar = grid.bar.0.max(1);
-        let beats_shown = grid.px_per_bar() / 4.0 >= MIN_BEAT_SPACING;
-        let unit = if beats_shown { beat } else { bar };
-        let first = (grid.scroll.0 + unit - 1).div_euclid(unit) * unit;
+        let (beat, bar) = (grid.beat().0, grid.bar.0.max(1));
         let last = grid.tick_at(size.width).0;
-        let mut tick = first;
-        while tick <= last {
-            let color = if tick % bar == 0 {
-                style::LANE_BAR_LINE
-            } else {
-                style::LANE_BEAT_LINE
+        let snapped = |tick: i64| device_line(grid.x_of(Ticks(tick)), self.scale_factor);
+        let mut fill = |left: f32, width: f32, color: Color| {
+            frame.fill_rectangle(Point::new(left, 0.0), Size::new(width, bottom), color);
+        };
+        let alpha = grid_rules::beat_alpha(grid.px_per_bar());
+        if alpha > 0.0 {
+            let color = Color {
+                a: alpha,
+                ..style::palette().lane_beat_line
             };
-            let (line, width) = device_line(grid.x_of(Ticks(tick)), self.scale_factor);
-            frame.fill_rectangle(Point::new(line, 0.0), Size::new(width, bottom), color);
-            tick += unit;
+            let mut tick = first_at_or_after(grid.scroll.0, beat);
+            while tick <= last {
+                if tick % bar != 0 {
+                    let (left, width) = snapped(tick);
+                    fill(left, width, color);
+                }
+                tick += beat;
+            }
+        }
+        let companion = Color {
+            a: STRONG_COMPANION_ALPHA,
+            ..style::palette().bar_line
+        };
+        let mut tick = first_at_or_after(grid.scroll.0, bar);
+        while tick <= last {
+            let (left, width) = snapped(tick);
+            if grid_rules::strong(tick / bar) {
+                fill(left, width, style::palette().bar_line);
+                // On the device pixels right after the line's: snapped again, the sum could
+                // floor back onto the line's last pixel.
+                fill(left + width, width, companion);
+            } else {
+                fill(left, width, style::palette().lane_bar_line);
+            }
+            tick += bar;
         }
     }
 
@@ -1096,7 +1144,7 @@ impl Tracks<'_> {
             frame.fill_rectangle(
                 Point::new(line, top),
                 Size::new(width, lane),
-                style::BUTTON_EDGE,
+                style::palette().button_edge,
             );
         }
         // Why the title and the gain are cut as well as clipped: the software renderer draws a
@@ -1107,7 +1155,7 @@ impl Tracks<'_> {
         // the name is cut before it.
         let end = rect.x + rect.width - 3.0;
         let badge = link_badge(shares)
-            .map(|badge| (text_width(&badge, TITLE_SIZE), badge))
+            .map(|badge| (text_width(&badge, size::TINY), badge))
             .filter(|(width, _)| end - width >= at.x);
         if let Some((width, badge)) = badge {
             room = room.min(end - width - BADGE_GAP - at.x);
@@ -1116,7 +1164,7 @@ impl Tracks<'_> {
                     content: badge,
                     position: Point::new(end, top + TITLE_HEIGHT / 2.0),
                     color: style::CLIP_TITLE_TEXT,
-                    size: TITLE_SIZE.into(),
+                    size: size::TINY.into(),
                     align_x: Horizontal::Right.into(),
                     align_y: Vertical::Center,
                     ..Text::default()
@@ -1125,14 +1173,14 @@ impl Tracks<'_> {
         }
         let shown = name
             .as_deref()
-            .and_then(|name| fit_width(name, room, TITLE_SIZE));
+            .and_then(|name| fit_width(name, room, size::TINY));
         if let Some(shown) = shown {
             frame.with_clip(title_rect, |frame| {
                 frame.fill_text(Text {
                     content: shown.into_owned(),
                     position: at,
                     color: style::CLIP_TITLE_TEXT,
-                    size: TITLE_SIZE.into(),
+                    size: size::TINY.into(),
                     align_y: Vertical::Center,
                     ..Text::default()
                 });
@@ -1166,7 +1214,7 @@ impl Tracks<'_> {
                 Point::new(rect.x + inset, top + inset),
                 Size::new(rect.width - SELECTED_OUTLINE, lane - SELECTED_OUTLINE),
                 Stroke::default()
-                    .with_color(style::ACCENT)
+                    .with_color(style::accent())
                     .with_width(SELECTED_OUTLINE),
             );
         }
@@ -1183,7 +1231,9 @@ impl Tracks<'_> {
     }
 
     /// An audio channel's clip body color and title: its file's name; "(missing) name" and
-    /// the missing body when the file cannot be read; "loading…" while it loads.
+    /// the missing body when the file cannot be read; "loading…" while it loads. The body is the
+    /// theme's ([`crate::ui::palette::Palette::audio_clip_body`]), a shade lighter on Gilt's
+    /// lanes.
     fn audio_look(&self, channel: ChannelId) -> (iced::Color, String) {
         let Some(channel) = self.project.channels.get(&channel) else {
             return (style::AUDIO_MISSING, "(missing)".to_owned());
@@ -1192,10 +1242,11 @@ impl Tracks<'_> {
             || channel.name.clone(),
             |name| name.to_string_lossy().into_owned(),
         );
+        let body = style::palette().audio_clip_body;
         match clips::look_of(self.files, channel) {
             Some(FileLook::Missing) => (style::AUDIO_MISSING, format!("(missing) {name}")),
-            Some(FileLook::Loading) | None => (style::AUDIO_BODY, "loading\u{2026}".to_owned()),
-            Some(FileLook::Ready(_)) => (style::AUDIO_BODY, name),
+            Some(FileLook::Loading) | None => (body, "loading\u{2026}".to_owned()),
+            Some(FileLook::Ready(_)) => (body, name),
         }
     }
 
@@ -1332,7 +1383,7 @@ impl Tracks<'_> {
         }
         let points = automation_points(grid, clip, automation, body);
         for (_, at) in points.into_iter().filter(|&(_, at)| shown(at)) {
-            frame.fill(&Path::circle(at, POINT_RADIUS + 1.0), style::RACK_WELL);
+            frame.fill(&Path::circle(at, POINT_RADIUS + 1.0), style::palette().bg);
             frame.fill(&Path::circle(at, POINT_RADIUS), style::AUTOMATION_LINE);
         }
     }
@@ -1391,7 +1442,8 @@ impl Tracks<'_> {
         let (line, line_width) = device_line(rect.x, self.scale_factor);
         let (next_line, _) = device_line(rect.x + rect.width, self.scale_factor);
         let body = (line + line_width, next_line);
-        let first_pass = (visible_from - base).div_euclid(length);
+        // From the pass before the first in view: a note of it may run into the view.
+        let first_pass = (visible_from - base).div_euclid(length) - 1;
         let last_pass = (visible_to - base).div_euclid(length);
         for pass in first_pass..=last_pass {
             for note in &notes {
@@ -1400,9 +1452,10 @@ impl Tracks<'_> {
                     continue;
                 }
                 let x = grid.x_of(Ticks(tick));
-                if !(span.0..span.1).contains(&x) {
+                let end_x = grid.x_of(Ticks(tick.saturating_add(note.length.0)));
+                let Some((left, width)) = mark_span(x, end_x, body, span) else {
                     continue;
-                }
+                };
                 let line = (
                     rack.get(&note.channel).copied().unwrap_or(0),
                     std::cmp::Reverse(note.key),
@@ -1414,8 +1467,8 @@ impl Tracks<'_> {
                     + index as f32 * pitch
                     + (pitch - height) / 2.0;
                 frame.fill_rectangle(
-                    Point::new(mark_left(x, body), y),
-                    Size::new(NOTE_MARK_WIDTH, height),
+                    Point::new(left, y),
+                    Size::new(width, height),
                     style::CLIP_NOTE,
                 );
             }
@@ -1434,16 +1487,13 @@ impl Tracks<'_> {
             frame.fill_rectangle(
                 Point::new(0.0, top),
                 Size::new(TRACK_HEADER_WIDTH, grid.lane),
-                style::PANEL,
+                style::palette().panel,
             );
-            let led = if track.mute {
-                style::TRACK_LED_OFF
-            } else {
-                style::TRACK_LED_ON
-            };
-            frame.fill(
-                &Path::circle(playlist_layout::led_center(grid, row), LED_RADIUS),
-                led,
+            draw_mute_light(
+                frame,
+                playlist_layout::led_center(grid, row),
+                LED_RADIUS,
+                (!track.mute).then_some(style::TRACK_LED_ON),
             );
             // The Record button's own two colors, so the light reads as part of recording.
             let arm = if self.armed == Some(id) {
@@ -1464,40 +1514,41 @@ impl Tracks<'_> {
             );
             // Why cut as well as clipped: the software renderer draws a clipped frame's text
             // whole, over the arm button and into the lane.
-            let Some(shown) = fit_width(&track.name, name.width, NAME_SIZE) else {
+            let Some(shown) = fit_width(&track.name, name.width, size::LABEL) else {
                 continue;
             };
             frame.with_clip(name, |frame| {
                 frame.fill_text(Text {
                     content: shown.into_owned(),
                     position: Point::new(NAME_X, top + grid.lane / 2.0),
-                    color: style::TEXT,
-                    size: NAME_SIZE.into(),
+                    color: style::palette().text,
+                    size: size::LABEL.into(),
                     align_y: Vertical::Center,
                     ..Text::default()
                 });
             });
         }
-        let below = self
-            .project
-            .playlist
-            .tracks
-            .len()
-            .saturating_sub(self.grid().top);
-        let button = playlist_layout::add_track_rect(grid, below);
-        if button.y < frame.height() {
-            let room = self.project.playlist.tracks.len() < dawsome_engine::project::MAX_TRACKS;
-            frame.fill_rectangle(button.position(), button.size(), style::BUTTON);
-            frame.fill_text(Text {
-                content: "+ Track".into(),
-                position: button.center(),
-                color: if room { style::TEXT } else { style::TEXT_DIM },
-                size: NAME_SIZE.into(),
-                align_x: Horizontal::Center.into(),
-                align_y: Vertical::Center,
-                ..Text::default()
-            });
+    }
+
+    /// The "+ Track" words under the last track, while their row shows ([`add_words`]): lit
+    /// under the pointer, disabled at the most tracks. Drawn over the cached body, as the
+    /// pointer lights them.
+    fn draw_add_track(&self, frame: &mut Frame, hover: Option<&Hover>) {
+        let grid = self.grid();
+        let tracks = self.project.playlist.tracks.len();
+        let below = tracks.saturating_sub(grid.top);
+        if !grid.shows_add_track(below) {
+            return;
         }
+        let look = if tracks >= dawsome_engine::project::MAX_TRACKS {
+            Look::Disabled
+        } else if hover == Some(&Hover::Track(HeaderHit::AddTrack)) {
+            Look::Lit
+        } else {
+            Look::Resting
+        };
+        let rect = playlist_layout::add_track_rect(grid, below);
+        add_words::draw(frame, playlist_layout::ADD_TRACK_LABEL, rect, look);
     }
 }
 
@@ -1572,7 +1623,7 @@ impl canvas::Program<Message> for Tracks<'_> {
 
     fn draw(
         &self,
-        _state: &TracksState,
+        state: &TracksState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -1582,6 +1633,7 @@ impl canvas::Program<Message> for Tracks<'_> {
             self.draw_body(frame, bounds.y)
         });
         let mut overlay = Frame::new(renderer, bounds.size());
+        self.draw_add_track(&mut overlay, state.hover.as_ref());
         let grid = self.grid();
         let bottom = self.lanes_bottom(bounds.height);
         if let Some(tick) = self.marker {
@@ -1591,11 +1643,13 @@ impl canvas::Program<Message> for Tracks<'_> {
                 overlay.fill_rectangle(
                     Point::new(line, 0.0),
                     Size::new(width, bottom),
-                    style::ACCENT,
+                    style::accent(),
                 );
             }
         }
-        let outline = Stroke::default().with_color(style::ACCENT).with_width(1.0);
+        let outline = Stroke::default()
+            .with_color(style::accent())
+            .with_width(1.0);
         match &self.preview {
             Some(Preview::Clips(targets)) => {
                 for &(start, end, index) in targets {
@@ -1674,13 +1728,16 @@ impl canvas::Program<Message> for Tracks<'_> {
 mod tests {
     use super::*;
 
-    fn grid(zoom: usize) -> Grid {
+    /// The grid at `zoom` pixels per bar, its 13 rows those a 434 px track area holds whole (the
+    /// playlist alone in a 1000 x 560 window).
+    fn grid(zoom: f32) -> Grid {
         Grid {
             scroll: Ticks(0),
             zoom,
             bar: Ticks(384),
             top: 0,
             lane: playlist_layout::LANE_HEIGHT,
+            area: 434.0,
         }
     }
 
@@ -1688,12 +1745,14 @@ mod tests {
     // 2nd at 16. Five digits need 41 px: every bar at 64, every 2nd at 32, every 4th at 16.
     #[test]
     fn bar_numbers_thin_out_when_they_would_collide() {
-        assert_eq!(label_interval(&grid(2), 13), 1);
-        assert_eq!(label_interval(&grid(1), 13), 1);
-        assert_eq!(label_interval(&grid(0), 13), 2);
-        assert_eq!(label_interval(&grid(2), 10_000), 1);
-        assert_eq!(label_interval(&grid(1), 10_000), 2);
-        assert_eq!(label_interval(&grid(0), 10_000), 4);
+        let every =
+            |zoom: f32, largest| grid_rules::label_interval(grid(zoom).px_per_bar(), largest);
+        assert_eq!(every(64.0, 13), 1);
+        assert_eq!(every(32.0, 13), 1);
+        assert_eq!(every(16.0, 13), 2);
+        assert_eq!(every(64.0, 10_000), 1);
+        assert_eq!(every(32.0, 10_000), 2);
+        assert_eq!(every(16.0, 10_000), 4);
     }
 
     // A clip from x 248 to 312 at scale 1: its start line is pixel 248, so its body runs from
@@ -1701,7 +1760,8 @@ mod tests {
     // mid-clip where it lies, one at 311.5 (its last ticks, zoomed out) from 310, ending at 312.
     // At 1.7 a clip from 184 to 248: its line is device pixels 312-313 (183.53 to 184.71
     // logical), the next clip's starts on pixel 421 (247.65), so a first-tick note starts at
-    // 184.71 and a last-tick one at 245.65, two logical pixels before 247.65.
+    // 184.71 and a last-tick one at 245.65, two logical pixels before 247.65. Each mark a bar
+    // from its note's start to its end, cut at the clip's end and to the view.
     #[test]
     fn note_marks_stay_inside_their_clip() {
         let body = (249.0, 312.0);
@@ -1715,6 +1775,46 @@ mod tests {
         assert!((body.1 - 421.0 / 1.7).abs() < 1e-4, "{body:?}");
         assert_eq!(mark_left(184.0, body), body.0);
         assert_eq!(mark_left(247.9, body), body.1 - 2.0);
+
+        // The marks as bars, by hand, at 64 px a bar (a tick 1/6 px; tick t at x 120 + t / 6),
+        // a one-bar pattern's clip at ticks 768..1152 (x 248..312, its body 249..312 at scale
+        // 1), every pixel of it in view (120..1000): a short note (tick 0, 6 long: x 248..249)
+        // its least width from the body's start, 249..251; a long one (tick 96, 144 long: x
+        // 264..288) 24 px wide; one crossing the clip's end (tick 336, 96 long: x 304..320) cut
+        // at the end, 304..312. Scrolled so the view starts at 270, the long one's visible part
+        // alone, 270..288; with the view ending at 300, the crossing one not at all.
+        let body = (249.0, 312.0);
+        let view = (120.0, 1000.0);
+        let x = |tick: f32| 120.0 + tick / 6.0;
+        let mark = |start: f32, length: f32, view| {
+            mark_span(x(768.0 + start), x(768.0 + start + length), body, view)
+        };
+        assert_eq!(mark(0.0, 6.0, view), Some((249.0, 2.0)), "the short one");
+        assert_eq!(mark(96.0, 144.0, view), Some((264.0, 24.0)), "the long one");
+        assert_eq!(
+            mark(336.0, 96.0, view),
+            Some((304.0, 8.0)),
+            "the crossing one"
+        );
+        assert_eq!(
+            mark(0.0, 0.0, view),
+            Some((249.0, 2.0)),
+            "a step hit, as before"
+        );
+        assert_eq!(mark(96.0, 144.0, (270.0, 1000.0)), Some((270.0, 18.0)));
+        assert_eq!(mark(336.0, 96.0, (120.0, 300.0)), None);
+        // The clip two passes long (ticks 768..1536, x 248..376): the crossing note's first pass
+        // (tick 1104, x 304..320) whole, its second (tick 1488, x 368..384) cut at the clip's
+        // end, 368..376.
+        let body = (249.0, 376.0);
+        let pass = |pass: f32| {
+            let start = 768.0 + 384.0 * pass + 336.0;
+            mark_span(x(start), x(start + 96.0), body, view)
+        };
+        assert_eq!(
+            [pass(0.0), pass(1.0)],
+            [Some((304.0, 16.0)), Some((368.0, 8.0))]
+        );
     }
 
     // At scale 1 a line is the logical pixel itself; at 1.7, x 184 is device pixel 312.8, so
@@ -1727,11 +1827,19 @@ mod tests {
         assert!(left <= 184.0 && (left + width) * 1.7 >= 184.0 * 1.7 + 1.0);
         assert_eq!(device_line(10.0, 2.0), (10.0, 1.0));
         assert_eq!(device_line(10.0, 0.0), (10.0, 1.0), "no scale reported yet");
+        // Known answer at the system's 1.0 times a zoom of 125 %: x 10.3 is device pixel
+        // 12.875, so the line starts on pixel 12, 12 / 1.25 = 9.6, one device pixel wide,
+        // 1 / 1.25 = 0.8.
+        let (left, width) = device_line(10.3, 1.25);
+        assert!(
+            (left - 9.6).abs() < 1e-5 && (width - 0.8).abs() < 1e-6,
+            "{left} {width}"
+        );
     }
 
     #[test]
     fn spans_are_clipped_to_the_timeline() {
-        let grid = grid(2);
+        let grid = grid(64.0);
         assert_eq!(
             visible_span(&grid, Ticks(384), Ticks(768), 1000.0),
             Some((184.0, 248.0))

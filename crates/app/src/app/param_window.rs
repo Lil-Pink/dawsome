@@ -17,6 +17,7 @@ use dawsome_engine::project::ProcessorOwner;
 use iced::widget::operation::{self, AbsoluteOffset};
 use iced::{window, Element, Size, Task};
 
+use super::automate::Over;
 use super::instrument::pop_out_level;
 use super::{App, DragTarget, Message, WindowChange};
 use crate::desktop::{self, PopOut};
@@ -96,6 +97,7 @@ impl App {
                     self.params.place.size(PopOut::Params),
                     self.params.place.position(),
                     level,
+                    self.zoom(),
                 );
                 let (id, opened) = window::open(settings);
                 self.params.window = Some(id);
@@ -134,7 +136,7 @@ impl App {
 
     /// Keeps the parameter window's place in the settings for its next opening.
     pub(super) fn remember_param_place(&mut self) {
-        let place = Some(self.params.place);
+        let place = Some(self.params.place.system(self.zoom()));
         if self.settings.params_window != place {
             self.settings.params_window = place;
             self.save_settings();
@@ -149,7 +151,11 @@ impl App {
     /// Esc in the parameter window: the automation menu open over its list first, else the
     /// window.
     pub(super) fn escape_params(&mut self) {
-        if self.automate.as_ref().is_some_and(|menu| menu.over_params) {
+        if self
+            .automate
+            .as_ref()
+            .is_some_and(|menu| menu.over == Over::Params)
+        {
             self.automate = None;
         } else {
             self.close_params();
@@ -168,7 +174,11 @@ impl App {
                     // The rows coming into view show their values as they are now.
                     self.refresh_panel();
                     // The menu over a row belongs to that row, which the scroll moves.
-                    if self.automate.as_ref().is_some_and(|menu| menu.over_params) {
+                    if self
+                        .automate
+                        .as_ref()
+                        .is_some_and(|menu| menu.over == Over::Params)
+                    {
                         self.automate = None;
                     }
                 }
@@ -517,7 +527,7 @@ mod tests {
         let id = open_from_menu(&mut app);
         let _ = app.update(Message::Params(ParamMessage::RightPressed(0)));
         let menu = app.automate.as_ref().expect("the row's menu");
-        assert!(menu.over_params);
+        assert_eq!(menu.over, Over::Params);
         assert_eq!(
             Some(menu.at),
             app.panel.as_ref().and_then(|panel| panel.menu_at(0))
@@ -692,7 +702,12 @@ mod tests {
             Err(HostError::Missing)
         }
 
-        fn open_editor(&self, _owner: ProcessorOwner, _title: &str) -> Result<Editor, HostError> {
+        fn open_editor(
+            &self,
+            _owner: ProcessorOwner,
+            _title: &str,
+            _scale: f64,
+        ) -> Result<Editor, HostError> {
             Ok(Editor::Generic)
         }
 

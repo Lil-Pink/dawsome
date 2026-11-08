@@ -3,25 +3,26 @@
 # 1. F1 with the rack: probes the centers of the 16 step buttons in row 1 (positions from
 #    crates/app/src/ui/layout.rs): steps 1, 5, 9 and 13 must be lit, the other 12 unlit.
 # 1b. The new document (no --load) with the rack: the Sampler row lights no step, and the rack's
-#    header shows "−", "+", "+ Sampler…" and the bar count holding a number (positions from
+#    header shows "−", "+", "+ Instrument…" and the bar count holding a number (positions from
 #    crates/app/src/ui/layout.rs).
 # 1c. The toolbar's panel buttons (positions from crates/app/src/ui/toolbar.rs, colors of
 #    its palette): on F1's shot (the rack alone) the rack's icon is lit and the other five
-#    are not; with the Library, the rack and the playlist open (a first start's panels) those
-#    three are lit.
-# 1g. The toolbar on F1's shot (1000 px) and on the first start's panels at 1920 px (positions
-#    from crates/app/src/ui/toolbar.rs): inside each group's left edge and across each line
-#    between two groups, what is drawn runs from y 10 to y 62, the groups' one height. Toolbar
-#    scale: at 1920 px every control has grown to the toolbar's most scale (1.6), and the
-#    positions the probes read are the grown ones (the same layout function lays them out).
-# 1h. The toolbar's panel icons grow with it (toolbar scale): 12 px across on F1's shot
-#    (1000 px), 19 px at 1920 px and on F1's toolbar at 2560 px drawn offscreen with the
+#    are not; with the Library, the rack, the playlist and the mixer open (a first start's
+#    panels) those four are lit, its layout dumped and checked (tests/scripts/layout_bounds.py:
+#    at 560 px the stack scrolls 11 px, as ui::panels' first-start test works it out). Both at
+#    1024 px wide: at 1000 the panel buttons fold since File and Edit are as wide as Help.
+# 1g. The toolbar on F1's shot (1000 px) and on the Library, the rack and the playlist at 1920 px
+#    (positions from crates/app/src/ui/toolbar.rs): inside each group's left edge and across
+#    each line between two groups, what is drawn runs from y 9 to y 55, the groups' one height.
+#    At 1920 px the groups stand left, packed (the same layout function lays them out).
+# 1h. The toolbar's panel icons keep their size at any width: 11 px across in 25 px buttons on
+#    F1's shot at 1024 px, at 1920 px and on F1's toolbar at 2560 px drawn offscreen with the
 #    software renderer (app::tests::toolbar_shots). Why offscreen: the app fits its window to
 #    its monitor, and this desk's side screens, where test windows open, are 1920 px wide; the
 #    same 2560 px shot is probed as in 1g too.
 # 1d. The starter document (tests/fixtures/a6_starter.json, what a new window and File → New
 #    start with where the kit can be written) with the kit copied into the data folder and the
-#    rack alone: four rows, each name drawn, no step lit, the add button's row after them.
+#    rack alone: four rows, each name drawn, no step lit, the rack's ground after them.
 # 1e. The empty document's shot (1b): right of the silent Sampler row's steps, its dim hint
 #    "Drag a sound here, or double-click one in the Library".
 # 5b. "+ Instrument…" opened at start (--open-adder) over tests/fixtures/p7_catalogue.json and
@@ -33,8 +34,12 @@
 #    it otherwise): the bar fills the window's last 22 px in the panels' ground, the roll's
 #    velocity lane ending where it starts.
 # 2c. p3_roll with the rack, the playlist, the piano roll and the mixer at 1000x560, too short
-#    for every panel's least height: each shows at its least and the stack scrolls; the roll
-#    keeps its grid of nine rows and its lane where crates/app/src/ui/panels.rs stacks it.
+#    for every panel's least height: the roll gives way to five grid rows, the others show at
+#    their least and the stack scrolls; the roll's grid and lane where
+#    crates/app/src/ui/panels.rs stacks it.
+# 2j. p3_roll with the playlist and the roll at the stack's foot at 1000x418 with the hint bar
+#    on, the roll given way to its least: its whole velocity lane, a stem's middle and foot
+#    included, above the hint bar, and the stack not scrolling.
 # 1f. The instrument window opened at start (--open-instrument channel:1), a window of its own,
 #    shot alone (--screenshot-window instrument): on the test set "Round robin" (a drum: one
 #    pad) and the starter document's Kick 909 (a kit drum: one pad), and on the test set
@@ -47,10 +52,37 @@
 #    picker filling its row to the padding, the Channel picker after the labels' column, Echo
 #    and Close at the right edge above the foot line (positions from
 #    crates/app/src/ui/instrument_window.rs).
+# 1j. Dawsome Synth's instrument window on p33_sine, opened at start and shot alone: its first
+#    size (924x516), its eight headings and the Presets as raised modules where
+#    crates/app/src/ui/synth_panel.rs places them as a booth (two decks and the mixer between),
+#    the chassis between them, a choice's raised key and the strip's LEVEL module under the left
+#    deck (crates/app/src/probe/synth.rs).
 # 2. p3_roll with the piano roll alone: probes notes, ghosts, rows, the bar line, the dimmed
-#    rows past the end, the velocity stems and the C5 label (positions from
-#    crates/app/src/ui/piano_layout.rs, colors as gen_p3_expected.py prints them); and the
-#    scroll bar under the grid, its thumb the view's share at the start.
+#    rows and lines past the end, the key column's black and white keys, the ruler's beat tick,
+#    the velocity stems and the C5 label (positions from crates/app/src/ui/piano_layout.rs,
+#    colors as gen_p3_expected.py prints them); and the scroll bar under the grid, its thumb the
+#    view's share at the start. The shot's layout dumped (--dump-layout) and checked by
+#    tests/scripts/layout_bounds.py.
+# 2s. p3_roll with the Library and the piano roll at 1000x560, the roll docked at 700 px, with
+#    no scale and with --roll-scale minor-pentatonic: each layout dumped and checked by
+#    tests/scripts/layout_bounds.py, and the strip's groups where its constants and its fold
+#    law put them, the Len readout folded, and with the scale Preview and Follow as glyphs too
+#    (crates/app/src/probe/roll_strip.rs).
+# 2t. p3_roll's piano roll popped out (--pop-out piano-roll) in its own window at that window's
+#    least width, 608 px (its place kept 608 wide in a settings file read and not written), shot
+#    alone, with no scale and with --roll-scale minor-pentatonic, then a copy of p3_roll with its
+#    channel renamed "Bass 808 low" (written beside the shots, impulse.wav with it) with the
+#    scale: each layout dumped and checked by tests/scripts/layout_bounds.py (no text cut short
+#    but the name the strip cuts itself: Notes and Loop whole), and the strip folded by its law,
+#    the long name cut to "Bas…", every control inside the window
+#    (crates/app/src/probe/roll_strip.rs).
+# 2r. rp_keys_drums with the rack and the piano roll, the roll's player playing (--play-roll,
+#    no device): the toolbar's Pat and Song both unlit, the roll's Stop lit, and the playhead in
+#    the roll's grid and on the rack's steps at one tick, mid-pass; its layout dump checked by
+#    tests/scripts/layout_bounds.py (crates/app/src/probe/roll_strip.rs).
+# 2k. p33_chord (a chord at tick 0) with the piano roll alone at 64 px a step (its settings
+#    file's zoom): the chord's stems in one column at the lane's left, tick 0's x + 2, and the
+#    lane's ground beside them (crates/app/src/probe/fixes.rs).
 # 2d. The same with --scroll end: the grid past the pattern's end, a bar line where the scroll
 #    puts it, the thumb at the bar's end (crates/app/src/ui/scroll.rs).
 # 2e. p3_roll with the rack alone and a Library sound held over channel 2's header
@@ -75,7 +107,7 @@
 # 2i. p5_gain with the mixer alone at 1000x480, the hint bar on and the add menu of insert 12's
 #    add tile open (--slot-menu insert:12,slot:0): the menu, too tall to flip up, sits on the
 #    hint bar's top, every row whole; and p10_library with the Library alone at
-#    1000x784, the hint bar on and the menu of Port A's row, its last whole row, open
+#    1000x866, the hint bar on and the menu of Port A's row, its last whole row, open
 #    (--library-menu "device:Port A"): the menu flips up at the panel's foot, its row whole
 #    (positions from crates/app/src/ui/menu.rs, ui/mixer_layout.rs, ui/browser.rs and the
 #    Library's rows). Twice, with the renderer the toolkit picks and with the software renderer
@@ -97,8 +129,9 @@
 #    catalogue only: it neither scans nor writes it. Then over tests/fixtures/p27_catalogue.json
 #    (both formats): its rows as gen_p28_expected.py dumps them, and the format column naming
 #    VST3 on the VST3 rows and CLAP on the plugin installed in both.
-# 6. p8_ui at 1000x722 (the starter kit's twelve rows and the plugins' four hint lines above
-#    the tree: 22 px over the 700 it was, for the line where VST3 plugins go) with the Library (its
+# 6. p8_ui at 1000x800 (the starter kit's twelve rows, Dawsome Synth's row and the plugins' four
+#    hint lines above the tree: 44 px over the 700 it was, for the line where VST3 plugins go and
+#    Dawsome Synth's row, then 56 px more for the Library's 24 px rows) with the Library (its
 #    Samples tree on tests/fixtures/browser) and the playlist, its lanes kept at 32 px by a
 #    settings file (a height chosen, as Alt+wheel keeps one): the Library's ground, search well
 #    and tree rows, the saw clip's strip, waveform, body and center line, and the automation
@@ -123,22 +156,36 @@
 #    settings; positions from crates/app/src/ui/settings_layout.rs, colors of the page's
 #    palette): with --midi-ports none, the "MIDI input" title is bright, the line saying no
 #    port was found is dim and no checkbox is ticked; with "Port A,Port B" and a settings file
-#    playing both, their checkboxes are ticked. No MIDI port is ever opened.
-# 8b. The Settings window at its least size, 420 x 240 (a settings file keeping that place,
-#    read and not written), with the two ports playing: its tabs, the first group's boxes, the
-#    foot line and a scroller down its right edge (the page is longer than the window).
+#    playing both, their checkboxes are ticked; with a settings file choosing an output the
+#    machine does not list (shown last, missing), "System default" is unchosen, its mark all the
+#    unticked checkbox's tone, and the chosen mark's dot is the accent. No MIDI port is ever
+#    opened. The window is 720 x
+#    560 (--window-size, which a scripted run's Settings window takes over its share of the
+#    main window's), where the General page stands in one column (two from 800 px, three from
+#    1200).
+# 8c. The Settings window 720 x 900 (--window-size: a scripted run's Settings window takes it
+#    over its share of the main window's; a settings file, read and not written),
+#    its General page whole: "Reset to defaults" its last thing, at the left margin, 132 x 18,
+#    its words bright, the page's ground under it.
+# 8d. The Settings window 1400 x 700 (--window-size; a settings file, read and not
+#    written), with the two ports: its General page in three columns, each headed by its first
+#    section's title in bright text, nothing drawn in the 32 px between two columns; its layout
+#    dumped and checked (tests/scripts/layout_bounds.py).
+# 8b. The Settings window at its least size, 420 x 240 (--window-size; a settings file, read
+#    and not written), with the two ports playing: its three tabs, the first group's boxes,
+#    the foot line and a scroller down its right edge (the page is longer than the window).
 # 9. p9_stretch_ui with the playlist alone: right of the file's name, track 1's stretched clip
 #    names its stretch in the title strip and track 2's unstretched clip holds nothing. The
 #    stretch is kept in a cache dir under the output dir.
 # 10. The Library alone (positions from crates/app/src/ui/browser.rs and the Library's rows,
-#    crates/app/src/ui/library.rs; colors of its palette): p10_library at 1000x844, so all its
+#    crates/app/src/ui/library.rs; colors of its palette): p10_library at 1000x908, so all its
 #    rows show, with tests/fixtures/p7_catalogue.json and two MIDI ports given, a settings file
 #    playing Port A: the section headers at their rows with their counts, Port A's lit tick and
-#    "→ kick", Port B's unlit tick, Port C dim as unplugged; then at 1000x800 a new document
+#    "→ kick", Port B's unlit tick, Port C dim as unplugged; then at 1000x860 a new document
 #    with nothing installed and no port: the empty states, dim, and the Rescan button. Each
 #    shot twice, with the renderer the toolkit picks and with the software renderer forced. No
 #    MIDI port is ever opened, and the settings file is read, not written.
-# 11. The Library alone at 1000x844 (every section header shows) with the four test sets of
+# 11. The Library alone at 1000x908 (every section header shows) with the four test sets of
 #    tests/fixtures/instruments copied into the data folder's instruments/ (positions from
 #    crates/app/src/ui/browser.rs and the Library's rows): the Instruments header counts the
 #    kit and the sets, "Instrument sets" is written dim, and each set's row holds its glyph and
@@ -147,7 +194,7 @@
 #    Pad's row ends in the "playing" mark in the accent and the other sets' rows have none
 #    (positions from crates/app/src/ui/browser.rs and the Library's rows). Twice, with the
 #    renderer the toolkit picks and with the software renderer forced.
-# 13. The Settings window on its Keys page at its first size, 720x560 (--settings-page keys,
+# 13. The Settings window on its Keys page at 720x560 (--window-size, --settings-page keys,
 #    --screenshot-window settings; positions from crates/app/src/ui/keys_page.rs): the piano
 #    row chosen, the drawn keys' faces (a white
 #    and a black note, a control, a key that plays nothing, a key keeping its shortcut). Twice,
@@ -166,10 +213,10 @@
 #    from assets/help as a run from the build folder finds it (positions from
 #    crates/app/src/ui/help_window.rs).
 # 17. VST3 plugin windows (crates/host-vst3/tests/windows.rs, known answers gen_p29_expected.py):
-#    the test module's View class opens its editor embedded in a window of ours (W3), resizes it
-#    from inside its own call (W4), is held by its constraint when the window is resized (W5), is
-#    served by its frame's run loop (W6), hears our focus as XEmbed's messages (W7), closes on every
-#    way out (W8) and twenty times over leaves nothing (W9); then the real plugins' editors
+#    the test module's View class opens its editor embedded in a window of ours, resizes it
+#    from inside its own call, is held by its constraint when the window is resized, is
+#    served by its frame's run loop, hears our focus as XEmbed's messages, closes on every
+#    way out and twenty times over leaves nothing; then the real plugins' editors
 #    (crates/host-vst3/tests/real_windows.rs: Surge XT's VST3, Dexed, JS80P, DPF's 3-Band EQ, LSP's
 #    Limiter Stereo, each skipped with a line when absent) open embedded, map inside ours within
 #    2 s, three times over, and the host goes with one open; and the app (W10) opens the View's
@@ -205,9 +252,45 @@
 #    their values, the selection's shade and its accent edges, and the foot line (positions from
 #    crates/app/src/ui/sample_editor.rs and ui/sample_view.rs). Twice, with the renderer the
 #    toolkit picks and with the software renderer forced.
+# 21. The zoom: F1 with the Library, the rack and the playlist at 100, 125, 150 and 200 %, 1920
+#    x 1080 device pixels each, with the software renderer; each shot's layout dumped
+#    (--dump-layout) and checked by tests/scripts/layout_bounds.py: the zoom asked, no text cut
+#    short, no text over text, nothing outside the window but what scrolls. No pixel is pinned
+#    at these zooms.
+# 22. p4_two_clips with the Library, the playlist and the piano roll at 1000x600, the roll kept
+#    taller than the area (its settings file's "piano_roll" height, as a divider dragged as far
+#    up as it goes leaves it): the playlist at its least shows three rows of tracks whole and
+#    the well under them where a fourth was cut, and down the Library's right edge its seam
+#    (positions from crates/app/src/ui/playlist_layout.rs and ui/grip.rs).
+# 23. The themes: 21's 100 % shot again in each theme but Graphite (--theme: Slate, Gilt, Garnet,
+#    Fjord), each layout dumped, checked as 21's are and the same as 21's at 100 % byte for byte
+#    (a theme moves nothing), and five of the theme's colours probed (the panel, a raised title
+#    row, the playlist's 4-bar line, the toolbar's text, the accent on a lit button;
+#    crates/app/src/probe/theme.rs). Then the synth window in Gilt, kept to look at.
+# 24. An accent of the user's own: 21's 100 % shot again with --accent #3FA7D6 (the probe blue
+#    of tests/fixtures/gen_accent_expected.py), its layout dump the same as 21's at 100 % byte
+#    for byte (an accent moves nothing), the rack's lit button in the blue and Record in its own
+#    colour; then the Settings window on its Theme page with that accent (--settings-page
+#    theme), its swatch the blue, the wheel's hue dot at the blue's hue, and each theme's key
+#    keeping its set's own panel and accent in its swatch (crates/app/src/probe/accent.rs).
+#    Then p3_roll's piano roll with --note-color #E8F04A (the generator's notes' yellow-green):
+#    the lead's notes and stems in it, the kick's ghosts in their own blue. No run writes its
+#    colour.
+# 25. "4K", last, where a 3840 x 2160 monitor is (xrandr --listmonitors; skipped with a line
+#    where none is, as on one-screen machines and CI): F1 with every panel open on that monitor,
+#    on X11 (DAWSOME_WINDOW_SYSTEM=x11), at --window-position its offset and --window-size its
+#    size, both in the desktop's logical pixels, the desktop's scale read from a first run's
+#    layout dump (X11 has one scale for every monitor); its layout dumped and checked by
+#    tests/scripts/layout_bounds.py (nothing cut, nothing outside the window). No pixel is
+#    pinned (at a fractional scale a probed pixel is not stable across desktops); the shot is
+#    kept to look at. Its windows carry the class dawsome-test-4k: a desktop rule that sends
+#    dawsome-test windows to another screen would otherwise move them off that monitor.
 # Every run gets per-user folders of its own under the output dir, so nothing reads or writes
 # the user's settings, caches or data, and its window the application id dawsome-test
-# (DAWSOME_APP_ID), so a window rule of the desktop can tell it from the app's.
+# (DAWSOME_APP_ID), so a window rule of the desktop can tell it from the app's. Every run whose
+# shot is probed passes --theme graphite but the themes' own (23, Gilt's synth window): the
+# probes' colours are Graphite's, and the default theme is Slate (the Help
+# window's pictures, scripts/help-shots.sh, show the default, as a new user sees the app).
 # Usage: scripts/ui-check.sh [output-dir]   (default: <target dir>/ui-check)
 set -euo pipefail
 cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")/.."
@@ -222,25 +305,35 @@ mkdir -p -- "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HO
 
 shot="$out_dir/f1.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/f1_four_on_floor.json \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/f1_four_on_floor.json \
     --screenshot "$shot" --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::f1_screenshot_lights_steps_1_5_9_13 --nocapture
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::fixes::t1_every_toolbar_group_fills_its_cell --nocapture
+# At 1000 px File, Edit and Help as wide as Help fold the panel buttons (they show from
+# 1001.292 px): their probes take F1 at 1024 px.
+shot="$out_dir/f1_1024.png"
+rm -f -- "$shot"
+# No device (--null-output): the probes' spread has no notices, and an output at another rate
+# than the project's puts one up (its resampling note), which folds the panel buttons here.
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/f1_four_on_floor.json \
+    --window-size 1024x560 --null-output --screenshot "$shot" --screenshot-after 800 \
+    --quit-after 4000
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::ease::a1_the_open_panels_button_is_lit_and_the_others_are_not --nocapture
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
-    probe::fixes::t1_every_toolbar_group_fills_its_cell --nocapture
-DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
-    probe::fixes::t3_the_panel_icons_grow_with_the_bar --nocapture
+    probe::fixes::t3_the_panel_icons_keep_their_size --nocapture
 
 shot="$out_dir/t1_toolbar_1920.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --panels browser,rack,playlist --window-size 1920x600 \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --panels browser,rack,playlist --window-size 1920x600 \
     --screenshot "$shot" --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::t1_every_toolbar_group_fills_its_cell --nocapture
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
-    probe::fixes::t3_the_panel_icons_grow_with_the_bar --nocapture
+    probe::fixes::t3_the_panel_icons_keep_their_size --nocapture
 
 offscreen="$out_dir/toolbar-offscreen"
 rm -rf -- "$offscreen"
@@ -251,18 +344,23 @@ shot="$offscreen/toolbar_2560.png"
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::t1_every_toolbar_group_fills_its_cell --nocapture
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
-    probe::fixes::t3_the_panel_icons_grow_with_the_bar --nocapture
+    probe::fixes::t3_the_panel_icons_keep_their_size --nocapture
 
 shot="$out_dir/a1_first_start_panels.png"
-rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --panels browser,rack,playlist --window-size 1000x560 \
-    --screenshot "$shot" --screenshot-after 800 --quit-after 4000
+dump="$out_dir/a1_first_start_panels.json"
+rm -f -- "$shot" "$dump"
+# No device, as the 1024 px shot above: the probe's spread has no notices.
+cargo run -q -p dawsome-app -- --theme graphite \
+    --panels browser,rack,playlist,mixer --window-size 1024x560 --null-output \
+    --screenshot "$shot" --screenshot-after 800 --quit-after 4000 --dump-layout "$dump"
+scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::ease::a1_the_first_start_panels_buttons_are_lit --nocapture
 
 shot="$out_dir/new.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --screenshot "$shot" --screenshot-after 800 --quit-after 4000
+cargo run -q -p dawsome-app -- --theme graphite \
+    --screenshot "$shot" --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::new_document_screenshot_shows_the_rack_header_and_an_unlit_sampler_row \
     --nocapture
@@ -275,7 +373,7 @@ mkdir -p -- "$starter_data/dawsome/starter-kit"
 cp assets/sounds/*.wav "$starter_data/dawsome/starter-kit/"
 shot="$out_dir/a6_starter.png"
 rm -f -- "$shot"
-XDG_DATA_HOME="$starter_data" cargo run -q -p dawsome-app -- \
+XDG_DATA_HOME="$starter_data" cargo run -q -p dawsome-app -- --theme graphite \
     --load tests/fixtures/a6_starter.json --window-size 1000x560 \
     --screenshot "$shot" --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -295,7 +393,8 @@ for backend in picked tiny-skia; do
         probe="${case##* }"
         shot="$out_dir/a4_$fixture$suffix.png"
         rm -f -- "$shot"
-        renderer="$(env "${forced[@]}" XDG_DATA_HOME="$starter_data" cargo run -q -p dawsome-app -- \
+        renderer="$(env "${forced[@]}" XDG_DATA_HOME="$starter_data" cargo run -q -p dawsome-app -- --theme graphite \
+            \
             --load "tests/fixtures/$fixture.json" --window-size 1000x700 \
             --open-instrument channel:1 --screenshot "$shot" --screenshot-window instrument \
             --screenshot-after 1200 --quit-after 4500 --stats | sed -n 's/^renderer: //p')"
@@ -319,7 +418,7 @@ for case in "1000 560" "1920 960"; do
     mkdir -p -- "$midi_out_config/dawsome"
     printf '{"instrument_window":{"width":%s.0,"height":560.0}}\n' "$instrument" \
         > "$midi_out_config/dawsome/settings.json"
-    XDG_CONFIG_HOME="$midi_out_config" cargo run -q -p dawsome-app -- \
+    XDG_CONFIG_HOME="$midi_out_config" cargo run -q -p dawsome-app -- --theme graphite \
         --load tests/fixtures/p19_echo.json --window-size "${main}x700" \
         --midi-out-ports "Synth:Synth MIDI 1 24:0,Midi Through:Midi Through Port-0 14:0" \
         --open-instrument channel:1 --screenshot "$shot" --screenshot-window instrument \
@@ -328,18 +427,112 @@ for case in "1000 560" "1920 960"; do
         probe::midi_out::m1_the_midi_out_group_lines_up_under_the_input --nocapture
 done
 
+shot="$out_dir/s4_synth_window.png"
+rm -f -- "$shot"
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p33_sine.json --window-size 1000x700 \
+    --open-instrument channel:1 --screenshot "$shot" --screenshot-window instrument \
+    --screenshot-after 1200 --quit-after 4500
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::synth::s4_the_synth_window_shows_its_headings_as_blocks --nocapture
+
 roll="$out_dir/p3.png"
-rm -f -- "$roll"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p3_roll.json --panels piano-roll \
-    --window-size 1000x560 --screenshot "$roll" --screenshot-after 800 --quit-after 4000
+dump="$out_dir/p3.json"
+rm -f -- "$roll" "$dump"
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p3_roll.json --panels piano-roll \
+    --window-size 1000x560 --screenshot "$roll" --screenshot-after 800 --quit-after 4000 \
+    --dump-layout "$dump"
 DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::p3_screenshot_shows_the_piano_roll --nocapture
+scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+
+for case in "length" "scale minor-pentatonic"; do
+    fold="${case%% *}"
+    scale=()
+    probe=probe::roll_strip::p3_the_rolls_strip_at_700_folds_its_length
+    if [[ "$case" == *" "* ]]; then
+        scale=(--roll-scale "${case##* }")
+        probe=probe::roll_strip::p3_the_rolls_strip_at_700_with_a_scale_folds_preview_and_follow_too
+    fi
+    shot="$out_dir/p3_strip_700_$fold.png"
+    dump="$out_dir/p3_strip_700_$fold.json"
+    rm -f -- "$shot" "$dump"
+    cargo run -q -p dawsome-app -- --theme graphite \
+        --load tests/fixtures/p3_roll.json --panels browser,piano-roll \
+        --browser-root tests/fixtures/browser "${scale[@]}" --window-size 1000x560 \
+        --screenshot "$shot" --screenshot-after 800 --quit-after 4000 --dump-layout "$dump"
+    scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+    DAWSOME_UI_DUMP="$dump" cargo test -q -p dawsome-app -- --ignored --exact "$probe" \
+        --nocapture
+done
+
+roll_config="$out_dir/xdg/config-roll-least"
+rm -rf -- "$roll_config"
+mkdir -p -- "$roll_config/dawsome"
+printf '{"panel_windows":{"piano-roll":{"width":608.0,"height":400.0}}}\n' \
+    > "$roll_config/dawsome/settings.json"
+renamed="$out_dir/p3_roll_bass_808_low.json"
+scripts/python.sh -I -c 'import json, sys
+project = json.load(open(sys.argv[1]))
+project["channels"][0]["name"] = "Bass 808 low"
+json.dump(project, open(sys.argv[2], "w"))' tests/fixtures/p3_roll.json "$renamed"
+cp -- tests/fixtures/impulse.wav "$out_dir/impulse.wav"
+for case in "length tests/fixtures/p3_roll.json" \
+    "scale tests/fixtures/p3_roll.json minor-pentatonic" \
+    "name $renamed minor-pentatonic"; do
+    read -r fold project mode <<<"$case"
+    scale=()
+    if [ -n "${mode:-}" ]; then
+        scale=(--roll-scale "$mode")
+    fi
+    case "$fold" in
+        length) probe=p3_the_rolls_own_window_at_its_least_folds_its_length_and_switches ;;
+        scale) probe=p3_the_rolls_own_window_at_its_least_with_a_scale_shows_every_control ;;
+        name) probe=p3_the_rolls_own_window_at_its_least_cuts_a_long_name_to_fit ;;
+    esac
+    shot="$out_dir/p3_roll_window_least_$fold.png"
+    dump="$out_dir/p3_roll_window_least_$fold.json"
+    rm -f -- "$shot" "$dump"
+    XDG_CONFIG_HOME="$roll_config" cargo run -q -p dawsome-app -- --theme graphite \
+        --load "$project" --pop-out piano-roll "${scale[@]}" \
+        --screenshot "$shot" --screenshot-window piano-roll --screenshot-after 1500 \
+        --quit-after 4000 --dump-layout "$dump"
+    scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+    DAWSOME_UI_DUMP="$dump" cargo test -q -p dawsome-app -- --ignored --exact \
+        "probe::roll_strip::$probe" --nocapture
+done
+
+shot="$out_dir/rp_roll_playing.png"
+dump="$out_dir/rp_roll_playing.json"
+rm -f -- "$shot" "$dump"
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/rp_keys_drums.json --panels rack,piano-roll \
+    --window-size 1000x700 --null-output --midi-ports none --play-roll \
+    --screenshot "$shot" --screenshot-after 1300 --quit-after 2500 --dump-layout "$dump"
+scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+DAWSOME_UI_SHOT="$shot" DAWSOME_UI_DUMP="$dump" cargo test -q -p dawsome-app -- --ignored \
+    --exact probe::roll_strip::rp_the_roll_player_shows_its_playhead_in_the_roll_and_the_rack_at_one_tick \
+    --nocapture
 DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::p2_the_rolls_bar_shows_the_view_at_its_start --nocapture
 
+# The chord at the first tick at 64 px a step: its stems stand in one column at the lane's left.
+roll="$out_dir/p2_chord_64.png"
+chord_config="$out_dir/xdg/config-chord-64"
+rm -rf -- "$roll" "$chord_config"
+mkdir -p -- "$chord_config/dawsome"
+printf '{"piano_roll":{"zoom":64.0}}\n' > "$chord_config/dawsome/settings.json"
+XDG_CONFIG_HOME="$chord_config" cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p33_chord.json --panels piano-roll --window-size 1000x560 \
+    --screenshot "$roll" --screenshot-after 800 --quit-after 4000
+DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::fixes::p2_a_chord_at_the_first_tick_stands_its_stems_at_the_lanes_left --nocapture
+
 roll="$out_dir/p2_roll_end.png"
 rm -f -- "$roll"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p3_roll.json --panels piano-roll \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p3_roll.json --panels piano-roll \
     --window-size 1000x560 --scroll end --screenshot "$roll" --screenshot-after 800 \
     --quit-after 4000
 DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -347,7 +540,7 @@ DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
 
 shot="$out_dir/p4_drag_over.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p3_roll.json --panels rack \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/p3_roll.json --panels rack \
     --window-size 1000x560 --drag-over channel:2 --screenshot "$shot" --screenshot-after 800 \
     --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -355,7 +548,8 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 
 shot="$out_dir/p5_channel_menu.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p5_gain.json --panels rack,playlist \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p5_gain.json --panels rack,playlist \
     --window-size 1000x560 --channel-menu channel:5 --screenshot "$shot" \
     --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -363,7 +557,7 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 
 shot="$out_dir/p5_menu_over_hint_bar.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p5_gain.json --panels rack \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/p5_gain.json --panels rack \
     --window-size 1000x400 --hints on --channel-menu channel:5 --screenshot "$shot" \
     --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -371,7 +565,7 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 
 shot="$out_dir/p5_curve_menu.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p8_ui.json --panels playlist \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/p8_ui.json --panels playlist \
     --window-size 1000x260 --hints on --curve-menu automation:1 --screenshot "$shot" \
     --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -386,7 +580,7 @@ for backend in picked tiny-skia; do
     fi
     shot="$out_dir/p5_add_menu$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- \
+    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- --theme graphite \
         --load tests/fixtures/p5_gain.json --panels mixer --window-size 1000x480 --hints on \
         --slot-menu insert:12,slot:0 --screenshot "$shot" --screenshot-after 800 \
         --quit-after 4000 --stats | sed -n 's/^renderer: //p')"
@@ -400,10 +594,10 @@ for backend in picked tiny-skia; do
 
     shot="$out_dir/p5_library_row_menu$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- \
+    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- --theme graphite \
         --load tests/fixtures/p10_library.json --panels browser \
         --browser-root tests/fixtures/browser --cache tests/fixtures/p7_catalogue.json \
-        --midi-ports "Port A,Port B" --window-size 1000x784 --hints on \
+        --midi-ports "Port A,Port B" --window-size 1000x866 --hints on \
         --library-menu "device:Port A" --screenshot "$shot" --screenshot-after 800 \
         --quit-after 4000 --stats | sed -n 's/^renderer: //p')"
     echo "ui-check: the Library row menu drew with ${renderer:-no renderer}"
@@ -421,7 +615,8 @@ for case in "playlist p6_the_playlist_scrolled_past_the_song_end" \
     probe="${case##* }"
     shot="$out_dir/p6_${panel}_end.png"
     rm -f -- "$shot"
-    cargo run -q -p dawsome-app -- --load tests/fixtures/p15_long_song.json --panels "$panel" \
+    cargo run -q -p dawsome-app -- --theme graphite \
+        --load tests/fixtures/p15_long_song.json --panels "$panel" \
         --window-size 1000x560 --scroll end --screenshot "$shot" --screenshot-after 800 \
         --quit-after 4000
     DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -430,7 +625,7 @@ done
 
 roll="$out_dir/b2_four_panels.png"
 rm -f -- "$roll"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p3_roll.json \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/p3_roll.json \
     --panels rack,playlist,piano-roll,mixer --window-size 1000x560 --screenshot "$roll" \
     --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -438,16 +633,27 @@ DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
 
 roll="$out_dir/a5_hint_bar.png"
 rm -f -- "$roll"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p3_roll.json --panels piano-roll \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p3_roll.json --panels piano-roll \
     --window-size 1000x560 --hints on --screenshot "$roll" --screenshot-after 800 \
     --quit-after 4000
 DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::ease::a5_the_hint_bar_sits_under_the_panels --nocapture
 
+roll="$out_dir/a5b_roll_at_the_foot.png"
+rm -f -- "$roll"
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p3_roll.json --panels playlist,piano-roll \
+    --window-size 1000x418 --hints on --screenshot "$roll" --screenshot-after 800 \
+    --quit-after 4000
+DAWSOME_UI_SHOT="$roll" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::ease::a5b_the_roll_at_the_stacks_foot_keeps_its_lane_above_the_hint_bar --nocapture
+
 for fixture in p4_two_clips p4_loop p4_loop_off; do
     shot="$out_dir/$fixture.png"
     rm -f -- "$shot"
-    cargo run -q -p dawsome-app -- --load "tests/fixtures/$fixture.json" --panels playlist \
+    cargo run -q -p dawsome-app -- --theme graphite \
+        --load "tests/fixtures/$fixture.json" --panels playlist \
         --window-size 1000x560 --screenshot "$shot" --screenshot-after 800 --quit-after 4000
 done
 DAWSOME_UI_SHOT="$out_dir/p4_two_clips.png" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -463,7 +669,8 @@ mixer_shot() {
     local fixture="$1" shot="$2"
     shift 2
     rm -f -- "$shot"
-    env "$@" cargo run -q -p dawsome-app -- --load "tests/fixtures/$fixture.json" --panels mixer \
+    env "$@" cargo run -q -p dawsome-app -- --theme graphite \
+        --load "tests/fixtures/$fixture.json" --panels mixer \
         --window-size 1000x560 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
         --stats | sed -n 's/^renderer: //p'
 }
@@ -493,7 +700,8 @@ mixer_probes "$out_dir/p5_gain_software.png" "$out_dir/p5_delay_sync_software.pn
 shot="$out_dir/p7_picker.png"
 dump="$out_dir/p7_picker.txt"
 rm -f -- "$shot" "$dump"
-cargo run -q -p dawsome-app -- --cache tests/fixtures/p7_catalogue.json --open-picker instrument \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --cache tests/fixtures/p7_catalogue.json --open-picker instrument \
     --screenshot "$shot" --screenshot-after 1500 --quit-after 5000 --dump-picker "$dump"
 printf 'Analog Lead\nBell Keys\nDawsome Test Sine\nCould not load (1)\nbroken.clap: crashed: signal 6\n' \
     | cmp - "$dump"
@@ -503,7 +711,8 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 shot="$out_dir/p27_picker.png"
 dump="$out_dir/p27_picker.txt"
 rm -f -- "$shot" "$dump"
-cargo run -q -p dawsome-app -- --cache tests/fixtures/p27_catalogue.json --open-picker instrument \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --cache tests/fixtures/p27_catalogue.json --open-picker instrument \
     --screenshot "$shot" --screenshot-after 1500 --quit-after 5000 --dump-picker "$dump"
 printf '%s\n' 'Dawsome Test Fail (VST3)' 'Dawsome Test Sine' 'Dawsome Test Tick (VST3)' \
     'Dawsome Test View (VST3)' 'Could not load (1)' 'Dawsome Test VST3 Crash.vst3: crashed: signal 6' |
@@ -518,7 +727,7 @@ cp -R tests/fixtures/instruments/. "$adder_data/dawsome/instruments/"
 shot="$out_dir/a2_adder.png"
 dump="$out_dir/a2_adder.txt"
 rm -f -- "$shot" "$dump"
-XDG_DATA_HOME="$adder_data" cargo run -q -p dawsome-app -- \
+XDG_DATA_HOME="$adder_data" cargo run -q -p dawsome-app -- --theme graphite \
     --cache tests/fixtures/p7_catalogue.json --open-adder --window-size 1000x560 \
     --screenshot "$shot" --screenshot-after 1500 --quit-after 5000 --dump-picker "$dump"
 printf '%s\n' 'Instrument sets' Layers Macro Pad 'Round robin' 'Starter kit' 'Kick 808' \
@@ -539,16 +748,30 @@ mkdir -p -- "$lanes_config/dawsome"
 printf '{"playlist":{"lane_height":32.0}}\n' > "$lanes_config/dawsome/settings.json"
 # 1500 ms: the saw's waveform loads in the background; with the Library's rows drawn beside it,
 # the debug build had it on screen at 1000 ms but not at 800 (and before the Library, not at 600).
-XDG_CONFIG_HOME="$lanes_config" cargo run -q -p dawsome-app -- --load tests/fixtures/p8_ui.json \
-    --panels browser,playlist --browser-root tests/fixtures/browser --window-size 1000x722 \
+XDG_CONFIG_HOME="$lanes_config" cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p8_ui.json \
+    --panels browser,playlist --browser-root tests/fixtures/browser --window-size 1000x800 \
     --screenshot "$shot" --screenshot-after 1500 --quit-after 4000
 printf '{"playlist":{"lane_height":32.0}}\n' | cmp - "$lanes_config/dawsome/settings.json"
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::p8_screenshot_shows_the_browser_an_audio_clip_and_an_automation_line --nocapture
 
+# 22. The roll pulled up: whole playlist rows and the Library's seam.
+shot="$out_dir/u1b_whole_rows.png"
+rm -f -- "$shot"
+roll_config="$out_dir/xdg/config-roll-up"
+rm -rf -- "$roll_config"
+mkdir -p -- "$roll_config/dawsome"
+printf '{"piano_roll":{"height":2000.0}}\n' > "$roll_config/dawsome/settings.json"
+XDG_CONFIG_HOME="$roll_config" cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p4_two_clips.json --panels browser,playlist,piano-roll \
+    --window-size 1000x600 --screenshot "$shot" --screenshot-after 800 --quit-after 4000
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::fixes::u1b_the_playlist_shows_whole_rows_and_the_library_its_seam --nocapture
+
 shot="$out_dir/p8_notice.png"
 rm -f -- "$shot"
-PIPEWIRE_REMOTE=bogus ALSA_CONFIG_PATH=/dev/null cargo run -q -p dawsome-app -- \
+PIPEWIRE_REMOTE=bogus ALSA_CONFIG_PATH=/dev/null cargo run -q -p dawsome-app -- --theme graphite \
     --load tests/fixtures/p8_notice.json --window-size 1000x560 \
     --screenshot "$shot" --screenshot-after 800 --quit-after 4000 2>/dev/null
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -558,7 +781,8 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 for width in 960 930 900 880; do
     shot="$out_dir/p8_notice_$width.png"
     rm -f -- "$shot"
-    PIPEWIRE_REMOTE=bogus ALSA_CONFIG_PATH=/dev/null cargo run -q -p dawsome-app -- \
+    PIPEWIRE_REMOTE=bogus ALSA_CONFIG_PATH=/dev/null cargo run -q -p dawsome-app -- --theme graphite \
+        \
         --load tests/fixtures/p8_notice.json --window-size "${width}x560" \
         --screenshot "$shot" --screenshot-after 800 --quit-after 4000 2>/dev/null
     DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -571,7 +795,8 @@ done
 
 shot="$out_dir/b4_edit_menu.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/f1_four_on_floor.json --show edit-menu \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/f1_four_on_floor.json --show edit-menu \
     --window-size 1000x560 --screenshot "$shot" --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::ease::b4_the_edit_menu_opens_under_the_edit_button --nocapture
@@ -590,7 +815,8 @@ fi
 
 shot="$out_dir/p9_settings_none.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --panels settings --midi-ports none --window-size 1000x560 \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --panels settings --midi-ports none --window-size 720x560 \
     --screenshot "$shot" --screenshot-window settings --screenshot-after 800 --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::p9_settings_screenshot_says_no_port_was_found --nocapture
@@ -600,31 +826,73 @@ ports_config="$out_dir/xdg/config-two-ports"
 rm -rf -- "$ports_config" "$shot"
 mkdir -p -- "$ports_config/dawsome"
 printf '{"midi_inputs":["Port A","Port B"]}\n' > "$ports_config/dawsome/settings.json"
-XDG_CONFIG_HOME="$ports_config" cargo run -q -p dawsome-app -- --panels settings \
-    --midi-ports "Port A,Port B" --window-size 1000x560 \
+XDG_CONFIG_HOME="$ports_config" cargo run -q -p dawsome-app -- --theme graphite --panels settings \
+    --midi-ports "Port A,Port B" --window-size 720x560 \
     --screenshot "$shot" --screenshot-window settings --screenshot-after 800 --quit-after 4000
 printf '{"midi_inputs":["Port A","Port B"]}\n' | cmp - "$ports_config/dawsome/settings.json"
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::p9_settings_screenshot_ticks_the_two_ports_that_play --nocapture
 
+shot="$out_dir/p9_settings_radio.png"
+radio_config="$out_dir/xdg/config-settings-radio"
+rm -rf -- "$radio_config" "$shot"
+mkdir -p -- "$radio_config/dawsome"
+radio='{"midi_inputs":["Port A","Port B"],"audio_output":"Probe device"}'
+printf '%s\n' "$radio" > "$radio_config/dawsome/settings.json"
+XDG_CONFIG_HOME="$radio_config" cargo run -q -p dawsome-app -- --theme graphite --panels settings \
+    --midi-ports "Port A,Port B" --window-size 720x560 --null-output \
+    --screenshot "$shot" --screenshot-window settings --screenshot-after 800 --quit-after 4000
+printf '%s\n' "$radio" | cmp - "$radio_config/dawsome/settings.json"
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::tests::p9_settings_marks_the_chosen_output_in_the_accent --nocapture
+
+shot="$out_dir/p9_settings_reset.png"
+reset_config="$out_dir/xdg/config-settings-tall"
+rm -rf -- "$reset_config" "$shot"
+mkdir -p -- "$reset_config/dawsome"
+tall='{"midi_inputs":[]}'
+printf '%s\n' "$tall" > "$reset_config/dawsome/settings.json"
+XDG_CONFIG_HOME="$reset_config" cargo run -q -p dawsome-app -- --theme graphite --panels settings \
+    --midi-ports none --window-size 720x900 \
+    --screenshot "$shot" --screenshot-window settings --screenshot-after 800 --quit-after 4000
+printf '%s\n' "$tall" | cmp - "$reset_config/dawsome/settings.json"
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::tests::p9_settings_general_page_ends_with_the_reset_button --nocapture
+
 shot="$out_dir/t2_settings_least.png"
 least_config="$out_dir/xdg/config-settings-least"
 rm -rf -- "$least_config" "$shot"
 mkdir -p -- "$least_config/dawsome"
-least='{"midi_inputs":["Port A","Port B"],"settings_window":{"width":420.0,"height":240.0}}'
+least='{"midi_inputs":["Port A","Port B"]}'
 printf '%s\n' "$least" > "$least_config/dawsome/settings.json"
-XDG_CONFIG_HOME="$least_config" cargo run -q -p dawsome-app -- --panels settings \
-    --midi-ports "Port A,Port B" \
+XDG_CONFIG_HOME="$least_config" cargo run -q -p dawsome-app -- --theme graphite --panels settings \
+    --midi-ports "Port A,Port B" --window-size 420x240 \
     --screenshot "$shot" --screenshot-window settings --screenshot-after 800 --quit-after 4000
 printf '%s\n' "$least" | cmp - "$least_config/dawsome/settings.json"
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::t2_the_least_settings_window_keeps_its_tabs_and_first_group --nocapture
 
+shot="$out_dir/p9_settings_1400.png"
+dump="$out_dir/p9_settings_1400.json"
+wide_config="$out_dir/xdg/config-settings-wide"
+rm -rf -- "$wide_config" "$shot" "$dump"
+mkdir -p -- "$wide_config/dawsome"
+wide='{"midi_inputs":["Port A","Port B"]}'
+printf '%s\n' "$wide" > "$wide_config/dawsome/settings.json"
+XDG_CONFIG_HOME="$wide_config" cargo run -q -p dawsome-app -- --theme graphite \
+    --panels settings --midi-ports "Port A,Port B" --window-size 1400x700 --screenshot "$shot" \
+    --screenshot-window settings --screenshot-after 800 --quit-after 4000 --dump-layout "$dump"
+printf '%s\n' "$wide" | cmp - "$wide_config/dawsome/settings.json"
+scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::tests::p9_settings_general_page_stands_in_three_columns --nocapture
+
 shot="$out_dir/p9_stretch_ui.png"
 stretch_cache="$out_dir/stretch-cache"
 rm -rf -- "$stretch_cache" "$shot"
 mkdir -p -- "$stretch_cache"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p9_stretch_ui.json --panels playlist \
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p9_stretch_ui.json --panels playlist \
     --cache-dir "$stretch_cache" --window-size 1000x560 \
     --screenshot "$shot" --screenshot-after 1500 --quit-after 5000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -643,10 +911,11 @@ for backend in picked tiny-skia; do
     fi
     shot="$out_dir/p10_library$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" XDG_CONFIG_HOME="$library_config" cargo run -q -p dawsome-app -- \
+    renderer="$(env "${forced[@]}" XDG_CONFIG_HOME="$library_config" cargo run -q -p dawsome-app -- --theme graphite \
+        \
         --load tests/fixtures/p10_library.json --panels browser --browser-root tests/fixtures/browser \
         --cache tests/fixtures/p7_catalogue.json --midi-ports "Port A,Port B" \
-        --window-size 1000x844 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
+        --window-size 1000x908 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
         --stats | sed -n 's/^renderer: //p')"
     echo "ui-check: p10_library drew with ${renderer:-no renderer}"
     if [ "$backend" = tiny-skia ] && [ "$renderer" != tiny-skia ]; then
@@ -659,8 +928,9 @@ for backend in picked tiny-skia; do
 
     shot="$out_dir/p10_library_empty$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- --panels browser \
-        --browser-root tests/fixtures/browser --midi-ports none --window-size 1000x800 \
+    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- --theme graphite \
+        --panels browser \
+        --browser-root tests/fixtures/browser --midi-ports none --window-size 1000x860 \
         --screenshot "$shot" --screenshot-after 800 --quit-after 4000 --stats \
         | sed -n 's/^renderer: //p')"
     echo "ui-check: the empty Library drew with ${renderer:-no renderer}"
@@ -685,9 +955,10 @@ for backend in picked tiny-skia; do
     fi
     shot="$out_dir/p11_library$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" XDG_DATA_HOME="$sets_data" cargo run -q -p dawsome-app -- \
+    renderer="$(env "${forced[@]}" XDG_DATA_HOME="$sets_data" cargo run -q -p dawsome-app -- --theme graphite \
+        \
         --panels browser --browser-root tests/fixtures/browser --midi-ports none \
-        --window-size 1000x844 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
+        --window-size 1000x908 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
         --stats | sed -n 's/^renderer: //p')"
     echo "ui-check: the Library with sets drew with ${renderer:-no renderer}"
     if [ "$backend" = tiny-skia ] && [ "$renderer" != tiny-skia ]; then
@@ -707,7 +978,8 @@ for backend in picked tiny-skia; do
     fi
     shot="$out_dir/v2_library_preview$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" XDG_DATA_HOME="$sets_data" cargo run -q -p dawsome-app -- \
+    renderer="$(env "${forced[@]}" XDG_DATA_HOME="$sets_data" cargo run -q -p dawsome-app -- --theme graphite \
+        \
         --panels browser --browser-root tests/fixtures/browser --midi-ports none \
         --library-preview "$sets_data/dawsome/instruments/pad/pad.sfz" \
         --window-size 1000x800 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
@@ -728,7 +1000,7 @@ for backend in picked tiny-skia; do
         forced=(ICED_BACKEND=tiny-skia)
         suffix=_software
     fi
-    for case in "k3_keys_page --panels settings --settings-page keys --screenshot-window settings k3_the_keys_page_draws_the_piano_row" \
+    for case in "k3_keys_page --panels settings --settings-page keys --window-size 720x560 --screenshot-window settings k3_the_keys_page_draws_the_piano_row" \
         "k4_callout --load tests/fixtures/f1_four_on_floor.json --callouts on k4_the_keyboard_note_rings_the_switch_and_points_at_it"; do
         read -r -a rest <<<"$case"
         name="${rest[0]}"
@@ -736,7 +1008,8 @@ for backend in picked tiny-skia; do
         rest=("${rest[@]:1:${#rest[@]}-2}")
         shot="$out_dir/$name$suffix.png"
         rm -f -- "$shot"
-        renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- "${rest[@]}" \
+        renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- --theme graphite \
+            "${rest[@]}" \
             --screenshot "$shot" --screenshot-after 1200 --quit-after 4500 \
             --stats | sed -n 's/^renderer: //p')"
         echo "ui-check: $name drew with ${renderer:-no renderer}"
@@ -751,7 +1024,7 @@ done
 
 shot="$out_dir/k6_playlist_maximized.png"
 rm -f -- "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/k6_forty_tracks.json \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/k6_forty_tracks.json \
     --panels browser,rack,playlist --window-size 1920x1080 --hints on \
     --screenshot "$shot" --screenshot-after 1200 --quit-after 4500
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -759,11 +1032,132 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 
 shot="$out_dir/h1_help_window.png"
 rm -f -- "$shot"
-env -u DAWSOME_HELP_DIR cargo run -q -p dawsome-app -- --show help --screenshot-window help \
+env -u DAWSOME_HELP_DIR cargo run -q -p dawsome-app -- --theme graphite \
+    --show help --screenshot-window help \
     --null-output --midi-ports none \
     --screenshot "$shot" --screenshot-after 1200 --quit-after 4500
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::help::h1_the_help_window_shows_its_contents_its_page_and_a_picture --nocapture
+
+# 21. The zoom: F1 with the Library, the rack and the playlist at 100,
+# 125, 150 and 200 %, each 1920 x 1080 device pixels (the window's own size given, which the system's pixels
+# are the zoom times), with the software renderer (its bytes follow no GPU or driver). As each
+# shot is taken its layout is dumped (--dump-layout) and checked: the zoom asked, and no text
+# cut short, no text over text, nothing outside the window but what scrolls
+# (tests/scripts/layout_bounds.py). No pixel is pinned at these zooms: the probes above run at
+# 100 %.
+for case in "1920x1080 100" "1536x864 125" "1280x720 150" "960x540 200"; do
+    size="${case% *}"
+    zoom="${case#* }"
+    shot="$out_dir/z1_zoom_$zoom.png"
+    dump="$out_dir/z1_zoom_$zoom.json"
+    rm -f -- "$shot" "$dump"
+    renderer="$(ICED_BACKEND=tiny-skia cargo run -q -p dawsome-app -- --theme graphite \
+        --load tests/fixtures/f1_four_on_floor.json --panels browser,rack,playlist \
+        --window-size "$size" --zoom "$zoom" --screenshot "$shot" --screenshot-after 1500 \
+        --quit-after 5000 --dump-layout "$dump" --stats | sed -n 's/^renderer: //p')"
+    if [ "$renderer" != tiny-skia ]; then
+        echo "ui-check: the zoom's shot at $zoom % drew with '$renderer', not the software renderer" >&2
+        exit 1
+    fi
+    scripts/python.sh -I -c 'import json, sys
+dump = json.load(open(sys.argv[1]))
+if dump["zoom"] != int(sys.argv[2]):
+    sys.exit("ui-check: the shot at " + sys.argv[2] + " % was drawn at " + str(dump["zoom"]) + " %")' \
+        "$dump" "$zoom"
+    scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+done
+
+# 23. The themes: 21's shot at 100 % again in each theme but Graphite (--theme graphite),
+# which every probe above runs in. A theme changes colours alone, so each shot's layout dump must
+# be 21's at 100 % byte for byte as well as pass its checks; five of the palette's colours are
+# probed against the theme's own. Then the synth window in Gilt, its console drawn in the
+# theme's green lacquer and gold: no pixel pinned, kept in the output dir to look at.
+for theme in slate gilt garnet fjord; do
+    shot="$out_dir/th1_$theme.png"
+    dump="$out_dir/th1_$theme.json"
+    rm -f -- "$shot" "$dump"
+    renderer="$(ICED_BACKEND=tiny-skia cargo run -q -p dawsome-app -- \
+        --load tests/fixtures/f1_four_on_floor.json --panels browser,rack,playlist \
+        --window-size 1920x1080 --zoom 100 --theme "$theme" --screenshot "$shot" \
+        --screenshot-after 1500 --quit-after 5000 --dump-layout "$dump" --stats \
+        | sed -n 's/^renderer: //p')"
+    if [ "$renderer" != tiny-skia ]; then
+        echo "ui-check: the $theme shot drew with '$renderer', not the software renderer" >&2
+        exit 1
+    fi
+    scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+    if ! cmp -s -- "$dump" "$out_dir/z1_zoom_100.json"; then
+        echo "ui-check: the layout in $theme differs from Graphite's (z1_zoom_100.json)" >&2
+        exit 1
+    fi
+    DAWSOME_UI_SHOT="$shot" DAWSOME_UI_THEME="$theme" cargo test -q -p dawsome-app -- \
+        --ignored --exact probe::theme::th1_the_main_window_draws_its_themes_colours --nocapture
+done
+shot="$out_dir/th2_synth_gilt.png"
+rm -f -- "$shot"
+cargo run -q -p dawsome-app -- --load tests/fixtures/p33_sine.json --window-size 1000x700 \
+    --open-instrument channel:1 --theme gilt --screenshot "$shot" \
+    --screenshot-window instrument --screenshot-after 1200 --quit-after 4500
+if [ ! -s "$shot" ]; then
+    echo "ui-check: no shot of the synth window in Gilt" >&2
+    exit 1
+fi
+echo "ui-check: the synth window in Gilt, to look at: $shot"
+
+# 24. An accent of the user's own, for the run alone (--accent): the main window as 21's 100 %
+# shot, its layout the same byte for byte, its lit controls in the accent and its content colours
+# its own; the Settings window's Theme page showing it on the accent's row and keeping each
+# theme's key in its set's own colours. The colour is the generator's probe blue.
+accent='#3FA7D6'
+shot="$out_dir/ac1_accent.png"
+dump="$out_dir/ac1_accent.json"
+rm -f -- "$shot" "$dump"
+renderer="$(ICED_BACKEND=tiny-skia cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/f1_four_on_floor.json --panels browser,rack,playlist \
+    --window-size 1920x1080 --zoom 100 --accent "$accent" --screenshot "$shot" \
+    --screenshot-after 1500 --quit-after 5000 --dump-layout "$dump" --stats \
+    | sed -n 's/^renderer: //p')"
+if [ "$renderer" != tiny-skia ]; then
+    echo "ui-check: the accent's shot drew with '$renderer', not the software renderer" >&2
+    exit 1
+fi
+if ! cmp -s -- "$dump" "$out_dir/z1_zoom_100.json"; then
+    echo "ui-check: the layout with an accent of one's own differs from z1_zoom_100.json" >&2
+    exit 1
+fi
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::accent::ac1_the_main_window_draws_the_users_accent_and_keeps_its_content_colours \
+    --nocapture
+shot="$out_dir/ac2_settings_accent.png"
+rm -f -- "$shot"
+ICED_BACKEND=tiny-skia cargo run -q -p dawsome-app -- --theme graphite \
+    --panels settings --settings-page theme \
+    --midi-ports none --window-size 720x560 --accent "$accent" --screenshot "$shot" \
+    --screenshot-window settings --screenshot-after 800 --quit-after 4000
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::accent::ac2_the_settings_window_shows_the_users_accent_on_the_swatch_and_the_wheel \
+    --nocapture
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::accent::ac3_the_theme_keys_keep_their_sets_own_colours --nocapture
+if grep -qs ui_accent -- "$XDG_CONFIG_HOME/dawsome/settings.json"; then
+    echo "ui-check: a run with --accent wrote the accent into the settings file" >&2
+    exit 1
+fi
+# The piano roll's notes in a colour of the user's own, for the run alone (--note-color, the
+# generator's yellow-green): p3_roll's lead and its stems in it, the kick's ghosts in their own.
+shot="$out_dir/ac4_note_color.png"
+rm -f -- "$shot"
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p3_roll.json --panels piano-roll \
+    --window-size 1000x560 --note-color '#E8F04A' --screenshot "$shot" \
+    --screenshot-after 800 --quit-after 4000
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::accent::ac4_the_piano_roll_draws_its_notes_and_stems_in_the_users_colour --nocapture
+if grep -qs ui_note_color -- "$XDG_CONFIG_HOME/dawsome/settings.json"; then
+    echo "ui-check: a run with --note-color wrote the colour into the settings file" >&2
+    exit 1
+fi
 
 # 17. VST3 plugin windows. The windows carry the class dawsome-test (the tests set it), so a desktop
 # rule keeps them off the user's screen and focus; any such window still open after a test fails
@@ -831,7 +1225,7 @@ done
 params_dump="$out_dir/p27_params.txt"
 shot="$out_dir/p27_params.png"
 rm -f -- "$params_dump" "$shot"
-cargo run -q -p dawsome-app -- --load tests/fixtures/p27_vst3_fx.json \
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/p27_vst3_fx.json \
     --plugin-path "$target_dir/test-plugins-vst3" --cache "$vst3_cache" --null-output \
     --midi-ports none --open-plugin effect:1 --dump-params "$params_dump" \
     --screenshot "$shot" --screenshot-after 2000 --screenshot-window params --quit-after 3500 \
@@ -873,7 +1267,7 @@ project["channels"][0]["name"] = "Surge XT (VST3)"
 project["channels"][0]["processor"] = {"id": f"vst3:{plugin['id']}", "name": "Surge XT"}
 json.dump(project, open(sys.argv[2], "w", encoding="utf-8"))
 PY
-    env "${toolchain[@]}" HOME="$params_home" cargo run -q -p dawsome-app -- \
+    env "${toolchain[@]}" HOME="$params_home" cargo run -q -p dawsome-app -- --theme graphite \
         --load "$surge_project" --plugin-path "$surge_vst3" --cache "$surge_cache" --null-output \
         --midi-ports none --open-params channel:1 --scroll end \
         --screenshot "$shot" --screenshot-after 6000 --screenshot-window params --quit-after 8000 \
@@ -895,7 +1289,7 @@ for backend in picked tiny-skia; do
     fi
     shot="$out_dir/p30_sample_editor$suffix.png"
     rm -f -- "$shot"
-    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- \
+    renderer="$(env "${forced[@]}" cargo run -q -p dawsome-app -- --theme graphite \
         --load tests/fixtures/p30_fades_stereo.json --null-output --midi-ports none \
         --open-sample-editor channel:1 --sample-editor-select 2-6 --screenshot "$shot" \
         --screenshot-after 1500 --screenshot-window sample-editor --quit-after 3000 --stats \
@@ -917,3 +1311,37 @@ for test in surge_xt_opens_its_editor dexed_opens_its_editor js80p_opens_its_edi
 done
 cargo test -q -p dawsome-app --test desktop_drop -- --ignored --nocapture
 no_test_window_left "the desktop drop"
+
+# 25. "4K": the main window on the 3840 x 2160 monitor, where there is one.
+four_k="$(xrandr --listmonitors 2>/dev/null |
+    sed -n 's|.* 3840/[0-9]*x2160/[0-9]*+\([0-9-]*\)+\([0-9-]*\) .*|\1 \2|p' | head -n 1)"
+if [ -z "$four_k" ]; then
+    echo "ui-check: 4K: no 3840 x 2160 monitor (xrandr --listmonitors): the stage is skipped"
+else
+    read -r four_k_x four_k_y <<<"$four_k"
+    probe_dump="$out_dir/4k_scale.json"
+    rm -f -- "$probe_dump"
+    DAWSOME_APP_ID=dawsome-test-4k DAWSOME_WINDOW_SYSTEM=x11 cargo run -q -p dawsome-app -- --theme graphite \
+        \
+        --window-size 400x300 --screenshot "$out_dir/4k_scale.png" --dump-layout "$probe_dump" \
+        --screenshot-after 800 --quit-after 2000
+    # The desktop's scale, as the app reports it, and the monitor's place and size over it.
+    place_and_size="$(scripts/python.sh -I -c '
+import json, math, sys
+scale = json.load(open(sys.argv[1]))["scale_factor"]
+x, y = (math.floor(int(value) / scale) for value in sys.argv[2:4])
+print(f"{x},{y} {math.floor(3840 / scale)}x{math.floor(2160 / scale)} {scale}")
+' "$probe_dump" "$four_k_x" "$four_k_y")"
+    read -r four_k_place four_k_size four_k_scale <<<"$place_and_size"
+    echo "ui-check: 4K: the monitor at +$four_k_x+$four_k_y, the desktop's scale $four_k_scale:" \
+        "the window at $four_k_place, $four_k_size"
+    shot="$out_dir/4k_main.png"
+    dump="$out_dir/4k_main.json"
+    rm -f -- "$shot" "$dump"
+    DAWSOME_APP_ID=dawsome-test-4k DAWSOME_WINDOW_SYSTEM=x11 cargo run -q -p dawsome-app -- --theme graphite \
+        \
+        --panels browser,rack,playlist,piano-roll,mixer --window-position "$four_k_place" \
+        --window-size "$four_k_size" --screenshot "$shot" --dump-layout "$dump" \
+        --screenshot-after 2500 --quit-after 4000
+    scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+fi

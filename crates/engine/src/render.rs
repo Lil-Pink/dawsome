@@ -42,7 +42,9 @@ use crate::plan::{
     Rate, RuntimeDelta, PLUGIN_CHANNELS, PROCESSOR_SLOTS, TABLE_SLOTS,
 };
 use crate::processor::{PortEvent, ProcessContext, Processor, TransportInfo};
-use crate::project::{ChannelId, ClipId, Curve, MAX_AUDIO_CLIPS, MAX_AUTOMATIONS, MAX_INSERTS};
+use crate::project::{
+    ChannelId, ClipId, Curve, ProcessorOwner, MAX_AUDIO_CLIPS, MAX_AUTOMATIONS, MAX_INSERTS,
+};
 use crate::source::{ClipSource, SourceRead};
 use crate::time::{self, Ticks};
 use crate::transport::{ParamTarget, TempoSegment};
@@ -991,6 +993,11 @@ impl Runtime {
             ParamTarget::Plugin { owner, id } => {
                 if let Some(slot) = plan.processor_slot(owner) {
                     self.queue_param(slot, id, value);
+                }
+            }
+            ParamTarget::Instrument { channel, param } => {
+                if let Some(slot) = plan.processor_slot(ProcessorOwner::Channel(channel)) {
+                    self.set_param(slot, usize::from(param), value);
                 }
             }
             ParamTarget::ChannelVolume(_)
@@ -1978,8 +1985,8 @@ fn voices(
         return;
     };
     match plan.playing {
-        Playing::Pattern(index) => {
-            if let Some(pattern) = plan.patterns.get(index) {
+        Playing::Pattern(_) | Playing::Channel { .. } => {
+            if let Some(pattern) = plan.pattern_played() {
                 let mut walk = EventWalk::from_tick(pattern, from);
                 while let Some((sample, tick, event)) = walk.next_before(timeline, end) {
                     block.start_note(sample, tick, event, None);

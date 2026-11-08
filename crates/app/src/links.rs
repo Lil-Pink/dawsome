@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use dawsome_engine::edit::Edit;
-use dawsome_engine::processor::{param_values, Registry};
+use dawsome_engine::processor::{param_values, ParamInfo, Registry};
 use dawsome_engine::project::{
     AutomationTarget, ProcessorOwner, ProcessorRef, Project, FADER_RANGE, MAX_VOLUME, PAN_RANGE,
     SEND_RANGE,
@@ -220,15 +220,19 @@ fn resolve(project: &Project, registry: &Registry, target: &AutomationTarget) ->
         ),
         AutomationTarget::EffectParam { effect, key } => {
             let (_, placed) = mixer.effect(*effect)?;
-            let params = registry.get(&placed.processor.id)?.params();
-            let index = params.iter().position(|info| info.key == key)?;
-            let info = params[index];
-            let live = ParamTarget::Effect {
-                effect: *effect,
-                param: u16::try_from(index).ok()?,
-            };
-            let value = param_values(params, &placed.processor.params)[index];
-            native(live, info.min..=info.max, value)
+            native_param(registry, &placed.processor, key, |param| {
+                ParamTarget::Effect {
+                    effect: *effect,
+                    param,
+                }
+            })?
+        }
+        AutomationTarget::InstrumentParam { channel, key } => {
+            let processor = project.channels.get(channel)?.processor.as_ref()?;
+            native_param(registry, processor, key, |param| ParamTarget::Instrument {
+                channel: *channel,
+                param,
+            })?
         }
         AutomationTarget::EffectPlugin { effect, param_id } => {
             let (_, placed) = mixer.effect(*effect)?;
@@ -241,6 +245,39 @@ fn resolve(project: &Project, registry: &Registry, target: &AutomationTarget) ->
             plugin_param(registry, owner, processor, *param_id)?
         }
     })
+}
+
+/// Parameter `key` of the native processor `reference` names (an effect's or a synth's), set
+/// live through the target `live` gives for its index.
+fn native_param(
+    registry: &Registry,
+    reference: &ProcessorRef,
+    key: &str,
+    live: impl FnOnce(u16) -> ParamTarget,
+) -> Option<Linked> {
+    let params = registry.get(&reference.id)?.params();
+    let index = params.iter().position(|info| info.key == key)?;
+    let info = params[index];
+    Some(Linked {
+        lo: f64::from(info.min),
+        hi: f64::from(info.max),
+        live: live(u16::try_from(index).ok()?),
+        value: param_values(params, &reference.params)[index],
+        plugin: None,
+    })
+}
+
+/// Parameter `key` of the native processor `reference` names, as its factory describes it.
+fn native_info<'a>(
+    registry: &'a Registry,
+    reference: &ProcessorRef,
+    key: &str,
+) -> Option<&'a ParamInfo> {
+    registry
+        .get(&reference.id)?
+        .params()
+        .iter()
+        .find(|info| info.key == key)
 }
 
 /// Parameter `id` of the plugin `owner` plays, as its host describes it.
@@ -296,13 +333,18 @@ fn set_edit(
         },
         AutomationTarget::EffectParam { effect, key } => {
             let (_, placed) = project.mixer.effect(*effect)?;
-            let info = registry
-                .get(&placed.processor.id)?
-                .params()
-                .iter()
-                .find(|info| info.key == key)?;
+            let info = native_info(registry, &placed.processor, key)?;
             Edit::SetEffectParam {
                 effect: *effect,
+                key: key.clone(),
+                value: Some(info.clamp(value)),
+            }
+        }
+        AutomationTarget::InstrumentParam { channel, key } => {
+            let processor = project.channels.get(channel)?.processor.as_ref()?;
+            let info = native_info(registry, processor, key)?;
+            Edit::SetChannelParam {
+                channel: *channel,
                 key: key.clone(),
                 value: Some(info.clamp(value)),
             }

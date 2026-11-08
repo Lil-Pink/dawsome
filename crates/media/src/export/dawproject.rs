@@ -22,6 +22,7 @@ use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
+use dawsome_engine::dsp::synth::NAME as SYNTH;
 use dawsome_engine::project::{
     ChannelId, ChannelKind, Clip, ClipId, ClipItem, InsertId, Mixer, ProcessorRef, Project,
     StretchMode, MAX_VOLUME,
@@ -405,7 +406,10 @@ fn project_xml(project: &Project, contents: &Contents) -> String {
     for (&id, channel) in &project.channels {
         let content = match channel.kind {
             ChannelKind::Audio | ChannelKind::Input => "audio",
-            ChannelKind::Sampler | ChannelKind::Plugin | ChannelKind::Instrument => "notes",
+            ChannelKind::Sampler
+            | ChannelKind::Plugin
+            | ChannelKind::Instrument
+            | ChannelKind::Synth => "notes",
         };
         xml.open(
             "Track",
@@ -683,6 +687,9 @@ fn lines(project: &Project, contents: &Contents) -> Vec<String> {
                     )),
                 }
             }
+            ChannelKind::Synth => lines.push(format!(
+                "{name}: {SYNTH} stays in Dawsome, so its track has no instrument"
+            )),
             ChannelKind::Input => lines.push(format!(
                 "{name}: a live input has nothing to carry; its track is empty"
             )),
@@ -854,6 +861,29 @@ mod tests {
             ["empty: empty.wav could not be read (it holds no audio); its clips are left out"]
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // A synth channel goes as a notes track with no instrument (no other program plays Dawsome
+    // Synth), and the report says the synth stays in Dawsome.
+    #[test]
+    fn a_synth_channel_is_a_notes_track_and_its_synth_stays() {
+        use dawsome_engine::project::Channel;
+        use dawsome_engine::time::MilliBpm;
+        let mut project = Project::new(44_100, MilliBpm(120_000), 96);
+        project
+            .channels
+            .insert(ChannelId(1), Channel::synth("Lead"));
+        let contents = contents(&project, Path::new("/nonexistent-dawsome-test"));
+        let xml = project_xml(&project, &contents);
+        assert!(
+            xml.contains(r#"<Track contentType="notes" id="track1" name="Lead">"#),
+            "{xml}"
+        );
+        assert!(!xml.contains("<Devices>"), "{xml}");
+        assert_eq!(
+            lines(&project, &contents),
+            ["Lead: Dawsome Synth stays in Dawsome, so its track has no instrument"]
+        );
     }
 
     // A file no decoder reads leaves its clips out and says why, and the rest still packs.

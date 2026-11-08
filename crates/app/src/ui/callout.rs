@@ -8,6 +8,7 @@ use iced::widget::{button, canvas, column, container, opaque, pin, row, stack, t
 use iced::{mouse, Element, Fill, Point, Rectangle, Renderer, Theme};
 
 use crate::app::Message;
+use crate::ui::fonts::size;
 use crate::ui::style;
 
 /// What the note's buttons say.
@@ -57,14 +58,14 @@ pub fn view<'a>(
     let mut words = column![].spacing(6);
     for (index, line) in lines.into_iter().enumerate() {
         let color = if index == 0 {
-            style::TEXT
+            style::palette().text
         } else {
-            style::TEXT_DIM
+            style::palette().text_secondary
         };
-        words = words.push(text(line).size(13).color(color));
+        words = words.push(text(line).size(size::BODY).color(color));
     }
     let choose = |label: &'a str, lit: bool, message: CalloutMessage| {
-        button(text(label).size(13))
+        button(text(label).size(size::BODY))
             .padding([5, 10])
             .style(style::tool_button(lit))
             .on_press(Message::Callout(message))
@@ -106,7 +107,7 @@ impl canvas::Program<Message> for Pointer {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let ring = ring(self.anchor);
         let line = canvas::Stroke::default()
-            .with_color(style::ACCENT)
+            .with_color(style::accent())
             .with_width(2.5);
         frame.stroke(
             &canvas::Path::rounded_rectangle(ring.position(), ring.size(), 6.0.into()),
@@ -119,7 +120,7 @@ impl canvas::Program<Message> for Pointer {
             path.line_to(Point::new(tip.x - ARROW_HALF_WIDTH, self.at.y + 1.0));
             path.close();
         });
-        frame.fill(&arrow, style::ACCENT);
+        frame.fill(&arrow, style::accent());
         vec![frame.into_geometry()]
     }
 }

@@ -1,10 +1,12 @@
 //! `dawsome`, the command line.
-//! - `dawsome render <project.json> <out.wav|out.mp3> [--song] [--block N] [--bars N]
-//!   [--bits 16|24|32f] [--no-dither] [--input-feed <file>] [--midi-out-log <file>]` renders
-//!   pattern 1, or
+//! - `dawsome render <project.json> <out.wav|out.mp3> [--song | --pattern <name>] [--channel
+//!   <name> [--once]] [--block N] [--bars N] [--bits 16|24|32f] [--no-dither] [--input-feed
+//!   <file>] [--midi-out-log <file>]` renders pattern 1 (or the one `--pattern` names), or
 //!   with `--song` the playlist, through `Player::process`, the same function live playback uses;
-//!   an input channel plays `--input-feed`'s frames (the file standing in for its device), else
-//!   silence; `--midi-out-log` writes the messages the MIDI outs were sent, as JSON.
+//!   `--channel` plays that channel's notes of the pattern alone, as the piano roll's Play does,
+//!   `--once` a single pass; an input channel plays `--input-feed`'s frames (the file standing in
+//!   for its device), else silence; `--midi-out-log` writes the messages the MIDI outs were sent,
+//!   as JSON.
 //! - `dawsome scan [--plugin-path DIR].. [--cache FILE] [--force]` scans the CLAP and VST3
 //!   plugin directories into the plugin catalogue, one child process (`dawsome scan --child
 //!   <file>`) per plugin file or VST3 module.
@@ -52,7 +54,8 @@ use dawsome_media::record::monitor_ring;
 use dawsome_media::{BitDepth, Dither, Encoding, MediaSounds, Playback, Sink, WriteError};
 use thiserror::Error;
 
-const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--song] [--block N] [--bars N] [--bits 16|24|32f]
+const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--song | --pattern NAME]
+                      [--channel NAME [--once]] [--block N] [--bars N] [--bits 16|24|32f]
                       [--no-dither] [--stream-threshold FRAMES] [--plugin-path DIR].. [--cache FILE]
                       [--cache-dir DIR] [--input-feed FILE] [--midi-out-log FILE]
        dawsome scan [--plugin-path DIR].. [--cache FILE] [--force]
@@ -64,6 +67,12 @@ const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--s
        dawsome export-dawproject <project.json> <out.dawproject>
        dawsome --version
   --song         play the playlist from tick 0 instead of looping pattern 1
+  --pattern NAME  (render) loop the pattern of this name instead of pattern 1
+  --channel NAME  (render) play only this channel's notes of the pattern, as the piano roll's
+                 Play does: every other channel's notes and every other input channel left out,
+                 the channel's sound through its insert and the mixer as ever
+  --once         (render, with --channel) play the pattern once: the render is one pass long,
+                 so --bars does not go with it
   --block N      frames per processing block (default 512)
   --bars N       bars to render, counted as played: loop and song-end wraps count (default 1)
   --bits         WAV sample format: 16 or 24-bit integer, or 32-bit float (default 32f); an .mp3
@@ -93,10 +102,10 @@ const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--s
   --cache-dir    where stretched audio clips are kept (default: dawsome/stretch in the user's
                  cache folder)
   --force        scan every plugin file again, also unchanged ones
-  --pattern, --channel  the pattern and channel a MIDI file is read into or written from, by
-                 id (default: the first of each)
-render writes pattern 1 (with --song, the playlist) as a WAV or MP3 file, the same audio the
-app plays; scan finds the CLAP and VST3 plugins and writes the plugin catalogue; smf-import
+  --pattern, --channel  (smf-import, smf-export) the pattern and channel a MIDI file is read
+                 into or written from, by id (default: the first of each)
+render writes pattern 1 (with --song, the playlist; with --channel, that channel's notes
+alone) as a WAV or MP3 file, the same audio the app plays; scan finds the CLAP and VST3 plugins and writes the plugin catalogue; smf-import
 puts a MIDI file's notes on one channel of a pattern, and smf-export writes them out as a MIDI
 file.
 export-midi writes the song as one MIDI file, a track per channel; export-stems writes
@@ -121,6 +130,12 @@ struct RenderArgs {
     /// Play the playlist rather than pattern 1. A flag, not a project field, because the play
     /// mode is playback state and is never saved.
     song: bool,
+    /// The name of the pattern to play rather than pattern 1.
+    pattern: Option<String>,
+    /// The name of the channel whose notes of the pattern play alone (Channel mode).
+    channel: Option<String>,
+    /// Play the pattern once: the render is one pass long (`bars` is unused).
+    once: bool,
     encoding: Encoding,
     plugins: PluginArgs,
     /// Audio clip files longer than this stream; `None` is the default, 30 s of frames.
@@ -262,6 +277,8 @@ enum CliError {
     Scan(#[from] scan::UnsavedCatalogue),
     #[error("cannot start the render thread: {0}")]
     Thread(io::Error),
+    #[error("--once: the player played on past the pattern's end, so the render is not one pass")]
+    RanOn,
     #[error("{}: {source}", .path.display())]
     Smf { path: PathBuf, source: SmfError },
     #[error("the import was refused: {0}")]
@@ -359,8 +376,9 @@ fn main() -> ExitCode {
 fn parse_render_args(mut args: impl Iterator<Item = OsString>) -> Result<RenderArgs, CliError> {
     let mut paths = Vec::new();
     let mut block = 512;
-    let mut bars = 1;
+    let mut bars = None;
     let mut song = false;
+    let (mut pattern, mut channel, mut once) = (None, None, false);
     let mut bits = None;
     let mut dither = Dither::Tpdf;
     let mut plugins = PluginArgs::default();
@@ -397,10 +415,25 @@ fn parse_render_args(mut args: impl Iterator<Item = OsString>) -> Result<RenderA
             stream_threshold = Some(whole::<u64>("--stream-threshold", args.next())?);
         } else if arg == "--song" {
             song = true;
+        } else if arg == "--pattern" || arg == "--channel" {
+            let flag = arg.to_string_lossy().into_owned();
+            let name = args
+                .next()
+                .ok_or_else(|| usage(&format!("{flag} needs a name")))?;
+            let slot = if arg == "--pattern" {
+                &mut pattern
+            } else {
+                &mut channel
+            };
+            if slot.replace(name.to_string_lossy().into_owned()).is_some() {
+                return Err(usage(&format!("{flag} was given twice")));
+            }
+        } else if arg == "--once" {
+            once = true;
         } else if arg == "--block" {
             block = positive::<NonZeroUsize>("--block", args.next())?.get();
         } else if arg == "--bars" {
-            bars = positive::<NonZeroU32>("--bars", args.next())?.get();
+            bars = Some(positive::<NonZeroU32>("--bars", args.next())?.get());
         } else if arg == "--bits" {
             bits = Some(bit_depth(args.next())?);
         } else if arg == "--no-dither" {
@@ -420,6 +453,19 @@ fn parse_render_args(mut args: impl Iterator<Item = OsString>) -> Result<RenderA
             paths.len()
         ))
     })?;
+    if song && (pattern.is_some() || channel.is_some()) {
+        return Err(usage(
+            "--song plays the playlist: --pattern and --channel play a pattern",
+        ));
+    }
+    if once && channel.is_none() {
+        return Err(usage("--once plays a channel's notes once: give --channel"));
+    }
+    if once && bars.is_some() {
+        return Err(usage(
+            "--once renders the pattern once, one pass long: --bars does not go with it",
+        ));
+    }
     // The log reads the MIDI-out ring after each call: a longer call could fill it and drop
     // notes, and the log would then depend on the block size.
     if midi_out_log.is_some() && block > midi_out::RING_CAPACITY {
@@ -439,8 +485,11 @@ fn parse_render_args(mut args: impl Iterator<Item = OsString>) -> Result<RenderA
         project,
         out,
         block,
-        bars,
+        bars: bars.unwrap_or(1),
         song,
+        pattern,
+        channel,
+        once,
         encoding,
         plugins,
         stream_threshold,
@@ -725,9 +774,47 @@ fn render(args: &RenderArgs) -> Result<(), CliError> {
     };
     // Pattern 1 is the lowest pattern ID. A project without patterns has nothing a clip could
     // play either, so song mode renders the same silence.
-    let mode = match project.patterns.keys().next() {
-        Some(&id) if !args.song => PlayMode::Pattern(id),
-        _ => PlayMode::Song,
+    let pattern = match &args.pattern {
+        Some(name) => Some(named(
+            name,
+            "pattern",
+            project
+                .patterns
+                .iter()
+                .map(|(&id, p)| (id, p.name.as_str())),
+        )?),
+        None => project.patterns.keys().next().copied(),
+    };
+    let channel = match &args.channel {
+        Some(name) => Some(named(
+            name,
+            "channel",
+            project
+                .channels
+                .iter()
+                .map(|(&id, c)| (id, c.name.as_str())),
+        )?),
+        None => None,
+    };
+    let mode = match (pattern, channel) {
+        _ if args.song => PlayMode::Song,
+        (Some(pattern), Some(channel)) => PlayMode::Channel {
+            pattern,
+            channel,
+            once: args.once,
+        },
+        (Some(pattern), None) => PlayMode::Pattern(pattern),
+        (None, Some(_)) => {
+            return Err(CliError::NothingToTarget {
+                path: args.project.clone(),
+            })
+        }
+        (None, None) => PlayMode::Song,
+    };
+    // Played once, the render is the pattern's one pass: the transport stops at its end.
+    let bars = match pattern.and_then(|id| project.patterns.get(&id)) {
+        Some(played) if args.once => played.length_bars,
+        _ => args.bars,
     };
     render_project(RenderJob {
         project: &project,
@@ -735,7 +822,7 @@ fn render(args: &RenderArgs) -> Result<(), CliError> {
         base,
         out: &args.out,
         mode,
-        bars: args.bars,
+        bars,
         block: args.block,
         encoding: args.encoding,
         plugins: &args.plugins,
@@ -744,6 +831,23 @@ fn render(args: &RenderArgs) -> Result<(), CliError> {
         feeds,
         midi_out_log: args.midi_out_log.as_deref(),
     })
+}
+
+/// The one item of `items` (id, name) named `name`, as `--pattern` and `--channel` find it;
+/// none, or two, is a usage error naming what was looked for.
+fn named<'a, Id>(
+    name: &str,
+    what: &str,
+    items: impl Iterator<Item = (Id, &'a str)>,
+) -> Result<Id, CliError> {
+    let mut found = items.filter(|(_, named)| *named == name).map(|(id, _)| id);
+    match (found.next(), found.next()) {
+        (Some(id), None) => Ok(id),
+        (None, _) => Err(usage(&format!("no {what} is named \"{name}\""))),
+        (Some(_), Some(_)) => Err(usage(&format!(
+            "two {what}s are named \"{name}\": rename one to choose it"
+        ))),
+    }
 }
 
 /// Renders `job` through `Player::process`, the same function live playback uses, its plugins'
@@ -822,6 +926,11 @@ fn render_project(job: RenderJob<'_>) -> Result<(), CliError> {
     let sink = Sink::create(out, sample_rate, encoding).map_err(write_error)?;
     let logging = midi_out.is_some();
     let mut stopped = Ok(());
+    // Played once, the render is the pattern's length (`--once` sets its bars), and the player
+    // must have stopped by itself on its last frame: a render that plays on is refused, so the
+    // file's length is never this program's arithmetic alone.
+    let once = matches!(mode, PlayMode::Channel { once: true, .. });
+    let mut ran_on = false;
     let rendered = dawsome_media::render_on_thread_then(
         player,
         frames,
@@ -835,6 +944,7 @@ fn render_project(job: RenderJob<'_>) -> Result<(), CliError> {
         // A logged render ends as playback does: Stop, taken by one more call, ends the notes
         // still sounding on their MIDI outs, on the render's last frame.
         &mut |player| {
+            ran_on = once && link.playing();
             if logging {
                 stopped = link.send(Control::Stop);
                 player.process(&mut []);
@@ -845,6 +955,9 @@ fn render_project(job: RenderJob<'_>) -> Result<(), CliError> {
     )
     .map_err(CliError::Thread)?;
     rendered.result.map_err(write_error)?;
+    if ran_on {
+        return Err(CliError::RanOn);
+    }
     rendered.sink.finish().map_err(write_error)?;
     stopped?;
     if let (Some(path), Some(reader)) = (midi_out_log, midi_out.as_mut()) {

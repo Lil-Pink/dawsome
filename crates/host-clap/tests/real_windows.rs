@@ -33,6 +33,9 @@ mod test_plugins;
 /// Set in the child [`in_temp_home`] starts.
 const CHILD: &str = "DAWSOME_REAL_WINDOW_CHILD";
 const OWNER: ProcessorOwner = ProcessorOwner::Channel(ChannelId(1));
+/// The scale the plugins' windows are opened at: a desktop at 100 %, as these tests have always
+/// opened them (Dawsome told no scale before), so what they check stays what they saw.
+const SCALE: f64 = 1.0;
 
 /// Whether this is the child that does `test`'s work: else the test runs again in a child of this
 /// binary with temp HOME and XDG folders, whose result is this one's.
@@ -208,7 +211,10 @@ fn surge_xt_holds_our_window_to_its_interface() {
     let host = ClapHost::new(catalogue);
     let reference = ProcessorRef::plugin(format!("clap:{}", record.id), &record.name);
     let audio = host.create(OWNER, &reference, 48_000).expect("creates");
-    assert_eq!(host.open_editor(OWNER, "Surge XT"), Ok(Editor::Embedded));
+    assert_eq!(
+        host.open_editor(OWNER, "Surge XT", SCALE),
+        Ok(Editor::Embedded)
+    );
     let ours = host.editor_window(OWNER).expect("open in a window of ours");
     let opened = held_to_its_interface(&host, &x, ours, 5, "opened");
     let (interface, _) = x.interface(ours).expect("its window inside ours");

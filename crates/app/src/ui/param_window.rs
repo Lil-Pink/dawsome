@@ -26,7 +26,8 @@ use iced::widget::{
 use iced::{Center, Color, Element, Fill, Padding, Point, Size, Theme};
 
 use crate::app::Message;
-use crate::ui::instrument_window::{HINT_HEIGHT, HINT_SIZE, MIDI_OUT_RULE, PADDING};
+use crate::ui::fonts::size;
+use crate::ui::instrument_window::{HINT_HEIGHT, MIDI_OUT_RULE, PADDING};
 use crate::ui::style;
 use crate::ui::text_fit;
 
@@ -48,13 +49,8 @@ pub const SLIDER_HEIGHT: f32 = 12.0;
 pub const GAP: f32 = 10.0;
 /// Where the sliders start across the window.
 pub const SLIDER_X: f32 = PADDING + NAME_WIDTH + GAP;
-const TEXT_SIZE: f32 = 12.0;
-/// A group's title, as the instrument window's MIDI OUT title.
-const GROUP_SIZE: f32 = 10.0;
-/// The heading: the place as the instrument window's channel name, the plugin beside it dim;
-/// its band's height, the list starting under it.
-const PLACE_SIZE: f32 = 15.0;
-const ABOUT_SIZE: f32 = 11.0;
+/// The heading's band's height (the place as the instrument window's channel name, the plugin
+/// beside it in the secondary text), the list starting under it.
 pub const HEADING_HEIGHT: f32 = 40.0;
 /// The list's scroller, as wide as the in-window panel's was.
 const SCROLLER: f32 = 6.0;
@@ -203,7 +199,7 @@ impl ParamPanel {
         let labels = params
             .iter()
             .map(|param| {
-                text_fit::fit_width(&param.name, NAME_WIDTH, TEXT_SIZE)
+                text_fit::fit_width(&param.name, NAME_WIDTH, size::LABEL)
                     .map(std::borrow::Cow::into_owned)
                     .unwrap_or_default()
             })
@@ -335,11 +331,11 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
     // On one line, cut by the window's edge in a window too narrow for both.
     let heading = row![
         text(panel.place.clone())
-            .size(PLACE_SIZE)
+            .size(size::TITLE)
             .wrapping(text::Wrapping::None),
         text(panel.about.clone())
-            .size(ABOUT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .wrapping(text::Wrapping::None),
     ]
     .spacing(10)
@@ -353,8 +349,8 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
     let body: Element<'_, Message> = if panel.params.is_empty() {
         container(
             text("This plugin shows no parameters.")
-                .size(TEXT_SIZE)
-                .color(style::TEXT_DIM),
+                .size(size::LABEL)
+                .color(style::palette().text_secondary),
         )
         .padding([0.0, PADDING])
         .height(Fill)
@@ -375,13 +371,13 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
             .into()
     };
     let room = (size.width - 2.0 * PADDING).max(0.0);
-    let foot_line = text_fit::fit_width(&hint, room, HINT_SIZE)
+    let foot_line = text_fit::fit_width(&hint, room, size::LABEL)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_default();
     let foot_line = container(
         text(foot_line)
-            .size(HINT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .wrapping(text::Wrapping::None),
     )
     .padding([0.0, PADDING])
@@ -428,13 +424,13 @@ fn item_view<'a>(panel: &'a ParamPanel, item: &Item) -> Element<'a, Message> {
 /// group's name small, in capitals and dim, an accent rule after it.
 fn group_title(group: &str) -> Element<'static, Message> {
     let words = text(group.to_uppercase())
-        .size(GROUP_SIZE)
-        .color(style::TEXT_DIM)
+        .size(size::DENSE)
+        .color(style::palette().text_secondary)
         .wrapping(text::Wrapping::None);
     let rule = container(space())
         .width(Fill)
         .height(MIDI_OUT_RULE)
-        .style(ground(style::ACCENT));
+        .style(ground(style::accent()));
     container(row![words, rule].spacing(6).align_y(Center))
         .height(ROW_HEIGHT)
         .align_y(Center)
@@ -447,13 +443,13 @@ fn group_title(group: &str) -> Element<'static, Message> {
 fn param_row(panel: &ParamPanel, index: usize) -> Element<'_, Message> {
     let param = &panel.params[index];
     let color = if param.read_only {
-        style::TEXT_DIM
+        style::palette().text_disabled
     } else {
-        style::TEXT
+        style::palette().text
     };
     let words = |content: &str| {
         text(content.to_owned())
-            .size(TEXT_SIZE)
+            .size(size::LABEL)
             .color(color)
             .wrapping(text::Wrapping::None)
     };
@@ -467,9 +463,9 @@ fn param_row(panel: &ParamPanel, index: usize) -> Element<'_, Message> {
         0.0
     };
     let fill = if param.read_only {
-        style::BUTTON
+        style::palette().button
     } else {
-        style::SLIDER_FILL
+        style::slider_fill()
     };
     let filled = container(space())
         .width(SLIDER_WIDTH * fraction)
@@ -478,7 +474,7 @@ fn param_row(panel: &ParamPanel, index: usize) -> Element<'_, Message> {
     let track = container(filled)
         .width(SLIDER_WIDTH)
         .height(SLIDER_HEIGHT)
-        .style(ground(style::FADER_TRACK));
+        .style(ground(style::palette().fader_track));
     // The row's height is the slider's to press, as the in-window panel's reach around it was.
     let slider = container(track).height(ROW_HEIGHT).align_y(Center);
     let shown = panel.texts.get(index).map_or("", String::as_str);
@@ -504,15 +500,15 @@ fn param_row(panel: &ParamPanel, index: usize) -> Element<'_, Message> {
 /// instrument window's footer ends in its Close.
 fn footer(panel: &ParamPanel) -> Element<'_, Message> {
     let latency = panel.foot.as_deref().unwrap_or_default();
-    let close = button(text("Close").size(12))
+    let close = button(text("Close").size(size::LABEL))
         .padding([2, 8])
         .style(style::tool_button(false))
         .on_press(Message::Params(ParamMessage::Close));
     container(
         row![
             text(latency.to_owned())
-                .size(ABOUT_SIZE)
-                .color(style::TEXT_DIM)
+                .size(size::LABEL)
+                .color(style::palette().text_secondary)
                 .wrapping(text::Wrapping::None),
             space().width(Fill),
             close

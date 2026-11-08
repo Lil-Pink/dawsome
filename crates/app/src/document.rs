@@ -155,6 +155,11 @@ pub struct Host {
     /// Where the starter kit's sounds are put the first time one is previewed or dragged;
     /// `None` puts them nowhere, and the Library says so when one is.
     pub starter_kit: Option<PathBuf>,
+    /// Where the user's presets of Dawsome Synth's sounds are listed from and saved to; `None`
+    /// lists none and offers no Save preset…. A scripted run reads it as the Library reads the
+    /// data folder's sets (the shot scripts give it a folder of their own) and, with nobody at
+    /// the window, never writes there.
+    pub synth_presets: Option<PathBuf>,
     /// The data folder's instrument sets, which the Library lists (it only reads there); `None`
     /// lists none.
     pub instruments: Option<PathBuf>,
@@ -239,6 +244,7 @@ impl Host {
             recordings: (!scripted).then(project_file::recordings_dir).flatten(),
             demo_dir: (!scripted).then(project_file::demo_dir).flatten(),
             starter_kit: (!scripted).then(project_file::starter_kit_dir).flatten(),
+            synth_presets: project_file::synth_presets_dir(),
             instruments: project_file::instruments_dir(),
             installed_instruments: dawsome_media::paths::installed_instruments(),
             settings_file: settings::settings_file(),
@@ -292,6 +298,7 @@ impl Host {
             recordings: None,
             demo_dir: None,
             starter_kit: None,
+            synth_presets: None,
             instruments: None,
             installed_instruments: None,
             settings_file: None,

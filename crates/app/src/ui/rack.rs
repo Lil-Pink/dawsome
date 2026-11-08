@@ -1,7 +1,7 @@
 //! The channel rack: one row per channel with its mute light, name button, pan and volume
-//! knobs, and step buttons, under a header with the selected pattern's bar count,
-//! "+ Instrument…" and the pattern's swing knob; under the rows a "+" button opens the same
-//! picker. One canvas draws the rows from [`layout`] positions, another the header. The rows
+//! knobs, and step buttons, under a header with the pattern's swing knob and the selected
+//! pattern's bar count; under the rows "+ Instrument…" opens the instrument picker. One canvas
+//! draws the rows from [`layout`] positions, another the header. The rows
 //! live in a cached layer; the playhead has a cheap layer of its own, redrawn every frame. A
 //! sampler row takes a sound file: dropped on it (from the browser or the desktop), picked from
 //! its name's menu, or picked with a double press on the name while it has none; while it has
@@ -23,13 +23,16 @@ use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, Path, Stroke, 
 use iced::{alignment, mouse, window, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 use crate::app::{MediaMessage, Message, PatternMessage, SWING_STEP};
+use crate::ui::add_words::{self, Look};
+use crate::ui::fonts::size;
 use crate::ui::hint::{hover_change, Hover, RackPart};
 use crate::ui::layout::{
-    self, HeaderHit, RackHit, BARS_LABEL_X, CONTROL_SIZE, PAN_KNOB_X, RACK_HEADER_HEIGHT,
-    SWING_LABEL_X, VOLUME_KNOB_X,
+    self, HeaderHit, RackHit, CONTROL_SIZE, PAN_KNOB_X, RACK_HEADER_HEIGHT, RACK_TITLE_X,
+    STEPS_PER_GROUP, VOLUME_KNOB_X,
 };
 use crate::ui::mixer::TIP_HEIGHT;
 use crate::ui::mixer_state::{pan_text, percent_text};
+use crate::ui::panels::Panel;
 use crate::ui::picker::PickerTarget;
 use crate::ui::rack_rows::{RackRow, RackRows};
 use crate::ui::scroll::{BarMessage, Span};
@@ -37,9 +40,8 @@ use crate::ui::step_grid::{self, StepGrid};
 use crate::ui::style;
 use crate::ui::text_fit::fit_width;
 
-/// A name button's text size and the room left of and right of its text: a longer name is cut
-/// with an ellipsis to fit.
-const NAME_TEXT_SIZE: f32 = 13.0;
+/// The room left of and right of a name button's text: a longer name is cut with an ellipsis to
+/// fit.
 const NAME_PADDING: f32 = 8.0;
 
 /// The value tip over a knob: its width, centered on the knob, and the gap between it and the
@@ -227,6 +229,13 @@ impl ChannelRack<'_> {
         layout::hit_test(point, self.rows.len(), steps)
     }
 
+    /// Whether `cursor` is over "+ Instrument…" under the rows.
+    fn on_add(&self, bounds: Rectangle, cursor: mouse::Cursor) -> bool {
+        cursor
+            .position_in(bounds)
+            .is_some_and(|point| layout::add_instrument_rect(self.rows.len()).contains(point))
+    }
+
     /// The rows with their steps (and an empty sampler's hint) moved `steps` px left: those
     /// first, then the light, name and knobs over them, on the well's ground where the steps
     /// are scrolled under them. Why drawn over rather than clipped: the software renderer draws
@@ -259,6 +268,9 @@ impl ChannelRack<'_> {
                     };
                     let rect = layout::step_rect(row, step);
                     frame.fill_rectangle(rect.position(), rect.size(), color);
+                    if step > 0 && step % STEPS_PER_GROUP == 0 {
+                        draw_beat_line(frame, row, step);
+                    }
                 }
                 if is_empty_sampler(channel) {
                     draw_empty_hint(frame, row, grid.steps());
@@ -271,10 +283,15 @@ impl ChannelRack<'_> {
         if steps > 0.0 {
             let height = frame.height();
             let column = Size::new(layout::STEPS_X, height);
-            frame.fill_rectangle(Point::ORIGIN, column, style::RACK_WELL);
+            frame.fill_rectangle(Point::ORIGIN, column, style::palette().bg);
         }
         for &(row, _, id, channel) in &shown {
-            draw_mute_light(frame, row, !channel.mute);
+            draw_mute_light(
+                frame,
+                layout::mute_led_center(row),
+                layout::MUTE_LED_RADIUS,
+                (!channel.mute).then_some(style::LED_ON),
+            );
             draw_name_button(frame, row, &channel.name, self.selected == Some(id));
             for (knob, knob_x) in [(Knob::Pan, PAN_KNOB_X), (Knob::Volume, VOLUME_KNOB_X)] {
                 let automated = self.automated.get(&knob.automation(id));
@@ -292,11 +309,12 @@ impl ChannelRack<'_> {
         if let Some((row, count, open)) = self.rows.takes_header() {
             draw_takes_header(frame, row, count, open);
         }
-        draw_add_button(frame, self.rows.len());
     }
 
-    /// The rows (cached), the knob's value tip and the playhead along the steps, with the steps
-    /// scrolled `steps` px left; a playhead mark on a step scrolled under the knobs is left out.
+    /// The rows (cached), the knob's value tip, the playhead along the steps and "+ Instrument…"
+    /// under the rows (lit under the pointer, so drawn each frame, as "+ Track" is), with the
+    /// steps scrolled `steps` px left; a playhead mark on a step scrolled under the knobs is
+    /// left out.
     fn draw_with_steps(
         &self,
         state: &RackState,
@@ -338,10 +356,17 @@ impl ChannelRack<'_> {
                 playhead.fill_rectangle(
                     Point::new(x, rect.y),
                     Size::new(rect.width, layout::PLAYHEAD_EDGE),
-                    style::ACCENT,
+                    style::accent(),
                 );
             }
         }
+        let look = if state.hover == Some(Hover::RackAdd) {
+            Look::Lit
+        } else {
+            Look::Resting
+        };
+        let add = layout::add_instrument_rect(self.rows.len());
+        add_words::draw(&mut playhead, layout::ADD_INSTRUMENT_LABEL, add, look);
         vec![rows, playhead.into_geometry()]
     }
 }
@@ -438,35 +463,13 @@ impl canvas::Program<Message> for ScrolledRack<'_> {
     }
 }
 
-/// The two add buttons' face and label: the text color on the button's, so they read as the
-/// buttons they are (the dim text color read as disabled, 2.3:1).
-const ADD_FACE: iced::Color = style::BUTTON;
-const ADD_LABEL: iced::Color = style::TEXT;
-
-/// The "+" under the last row, which opens the "+ Instrument…" picker as the header's button
-/// does, where the rows end.
-fn draw_add_button(frame: &mut Frame, rows: usize) {
-    let rect = layout::add_plugin_rect(rows);
-    frame.fill_rectangle(rect.position(), rect.size(), ADD_FACE);
-    frame.fill_text(Text {
-        content: "+".into(),
-        position: rect.center(),
-        color: ADD_LABEL,
-        size: NAME_TEXT_SIZE.into(),
-        align_x: alignment::Horizontal::Center.into(),
-        align_y: alignment::Vertical::Center,
-        ..Text::default()
-    });
-}
-
 /// What a sampler row without a sound says right of its steps, a line each. Why two lines:
 /// one did not fit beside a bar of steps in a 1000 px window.
 pub const EMPTY_SAMPLER_HINT: [&str; 2] =
     ["Drag a sound here, or", "double-click one in the Library"];
 
-/// The hint's text size, the distance between its two lines' middles, and its room right of
-/// the steps: with a bar of steps (730 px) the rack stays inside a 1000 px window.
-const HINT_SIZE: f32 = 11.0;
+/// The distance between the hint's two lines' middles, and its room right of the steps: with a
+/// bar of steps (730 px) the rack stays inside a 1000 px window.
 const HINT_LINE: f32 = 13.0;
 pub const HINT_WIDTH: f32 = 260.0;
 
@@ -476,14 +479,14 @@ fn draw_empty_hint(frame: &mut Frame, row: usize, steps: u32) {
     let left = layout::rack_size(row + 1, steps).width;
     let middle = layout::name_button_rect(row).center_y();
     for (line, offset) in EMPTY_SAMPLER_HINT.iter().zip([-0.5, 0.5]) {
-        let Some(words) = fit_width(line, HINT_WIDTH - 8.0, HINT_SIZE) else {
+        let Some(words) = fit_width(line, HINT_WIDTH - 8.0, size::LABEL) else {
             continue;
         };
         frame.fill_text(Text {
             content: words.into_owned(),
             position: Point::new(left, middle + offset * HINT_LINE),
-            color: style::TEXT_DIM,
-            size: HINT_SIZE.into(),
+            color: style::palette().text_secondary,
+            size: size::LABEL.into(),
             align_y: alignment::Vertical::Center,
             ..Text::default()
         });
@@ -500,12 +503,12 @@ fn draw_input_badge(frame: &mut Frame, row: usize, steps: u32, input: &InputSour
     let left = layout::rack_size(row + 1, steps).width;
     let middle = layout::name_button_rect(row).center_y();
     let badge = Rectangle::new(Point::new(left, middle - BADGE.height / 2.0), BADGE);
-    frame.fill_rectangle(badge.position(), badge.size(), style::ACCENT);
+    frame.fill_rectangle(badge.position(), badge.size(), style::accent());
     frame.fill_text(Text {
         content: "IN".into(),
         position: badge.center(),
-        color: style::RACK_WELL,
-        size: HINT_SIZE.into(),
+        color: style::palette().bg,
+        size: size::LABEL.into(),
         align_x: alignment::Horizontal::Center.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
@@ -516,12 +519,12 @@ fn draw_input_badge(frame: &mut Frame, row: usize, steps: u32, input: &InputSour
         crate::live_input::channels_words(input.channels)
     );
     let room = HINT_WIDTH - 8.0 - BADGE.width - BADGE_GAP;
-    if let Some(words) = fit_width(&words, room, HINT_SIZE) {
+    if let Some(words) = fit_width(&words, room, size::LABEL) {
         frame.fill_text(Text {
             content: words.into_owned(),
             position: Point::new(badge.x + BADGE.width + BADGE_GAP, middle),
-            color: style::TEXT_DIM,
-            size: HINT_SIZE.into(),
+            color: style::palette().text_secondary,
+            size: size::LABEL.into(),
             align_y: alignment::Vertical::Center,
             ..Text::default()
         });
@@ -570,13 +573,6 @@ fn swing_fraction(tenths: u16) -> f32 {
     f32::from(tenths.saturating_sub(low)) / f32::from(high - low)
 }
 
-/// The header's text size.
-const HEADER_TEXT_SIZE: f32 = 12.0;
-
-/// The header's add button: one picker over the sets, the starter kit, the plugin instruments
-/// and a sound file of the user's.
-pub const ADD_INSTRUMENT: &str = "+ Instrument\u{2026}";
-
 impl RackHeader {
     /// The control under `cursor`: the swing only while there is a pattern to swing.
     fn hit(&self, bounds: Rectangle, cursor: mouse::Cursor) -> Option<HeaderHit> {
@@ -589,7 +585,7 @@ impl RackHeader {
         match hit {
             HeaderHit::BarsDown => self.shorter.then_some(-1),
             HeaderHit::BarsUp => self.longer.then_some(1),
-            HeaderHit::AddSampler | HeaderHit::Swing => None,
+            HeaderHit::Swing => None,
         }
     }
 
@@ -597,7 +593,6 @@ impl RackHeader {
     /// runs it, as the tempo's).
     fn message(&self, hit: HeaderHit) -> Option<Message> {
         match hit {
-            HeaderHit::AddSampler => Some(Message::OpenPicker(PickerTarget::AddInstrument)),
             HeaderHit::Swing => self.swing.map(|_| Message::SwingPressed),
             nudge => self
                 .nudge(nudge)
@@ -674,55 +669,54 @@ impl canvas::Program<Message> for RackHeader {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::HEADER);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().raised);
         let middle = RACK_HEADER_HEIGHT / 2.0;
-        header_text(
-            &mut frame,
-            "Channel rack",
-            Point::new(12.0, middle),
-            style::TEXT,
-        );
+        // The panel's title, at the panel titles' size.
+        frame.fill_text(Text {
+            content: Panel::Rack.title().to_owned(),
+            position: Point::new(RACK_TITLE_X, middle),
+            color: style::palette().text,
+            size: size::PANEL_TITLE.into(),
+            align_y: alignment::Vertical::Center,
+            ..Text::default()
+        });
         header_text(
             &mut frame,
             "Bars",
-            Point::new(BARS_LABEL_X, middle),
-            style::TEXT_DIM,
+            Point::new(layout::bars_label_x(), middle),
+            style::palette().text_secondary,
         );
         for (rect, glyph, hit) in [
             (layout::bars_down_rect(), "\u{2212}", HeaderHit::BarsDown),
             (layout::bars_up_rect(), "+", HeaderHit::BarsUp),
         ] {
-            frame.fill_rectangle(rect.position(), rect.size(), style::BUTTON);
+            frame.fill_rectangle(rect.position(), rect.size(), style::palette().button);
             let color = if self.nudge(hit).is_some() {
-                style::TEXT
+                style::palette().text
             } else {
-                style::TEXT_DIM
+                style::palette().text_disabled
             };
             centered_text(&mut frame, glyph, rect.center(), color);
         }
         let count = layout::bars_count_rect();
-        frame.fill_rectangle(count.position(), count.size(), style::LCD);
+        frame.fill_rectangle(count.position(), count.size(), style::palette().lcd);
         if let Some(bars) = self.bars {
             centered_text(
                 &mut frame,
                 &bars.to_string(),
                 count.center(),
-                style::LCD_TEXT,
+                style::palette().lcd_text,
             );
         }
-        let add = layout::add_sampler_rect();
-        frame.fill_rectangle(add.position(), add.size(), ADD_FACE);
-        let at = Point::new(add.x + 8.0, add.center_y());
-        header_text(&mut frame, ADD_INSTRUMENT, at, ADD_LABEL);
         header_text(
             &mut frame,
             "Swing",
-            Point::new(SWING_LABEL_X, middle),
-            style::TEXT_DIM,
+            Point::new(layout::swing_label_x(), middle),
+            style::palette().text_secondary,
         );
         let knob = layout::swing_knob_rect();
         let readout = layout::swing_count_rect();
-        frame.fill_rectangle(readout.position(), readout.size(), style::LCD);
+        frame.fill_rectangle(readout.position(), readout.size(), style::palette().lcd);
         match self.swing {
             Some(swing) => {
                 draw_knob(&mut frame, knob.center(), knob.width, swing_fraction(swing));
@@ -730,13 +724,13 @@ impl canvas::Program<Message> for RackHeader {
                     &mut frame,
                     &swing_text(swing),
                     readout.center(),
-                    style::LCD_TEXT,
+                    style::palette().lcd_text,
                 );
             }
             // No pattern to swing: a dial with no pointer over an empty readout, as the bars'.
             None => frame.fill(
                 &Path::circle(knob.center(), knob.width / 2.0),
-                style::KNOB_RING,
+                style::palette().knob_ring,
             ),
         }
         vec![frame.into_geometry()]
@@ -762,7 +756,7 @@ fn header_text(frame: &mut Frame, content: &str, at: Point, color: iced::Color) 
         content: content.to_owned(),
         position: at,
         color,
-        size: HEADER_TEXT_SIZE.into(),
+        size: size::LABEL.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
     });
@@ -774,7 +768,7 @@ fn centered_text(frame: &mut Frame, content: &str, center: Point, color: iced::C
         content: content.to_owned(),
         position: center,
         color,
-        size: HEADER_TEXT_SIZE.into(),
+        size: size::LABEL.into(),
         align_x: alignment::Horizontal::Center.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
@@ -799,7 +793,6 @@ pub fn hover_of(hit: RackHit) -> Hover {
         RackHit::PanKnob { row } => rack(row, RackPart::Pan),
         RackHit::VolumeKnob { row } => rack(row, RackPart::Volume),
         RackHit::Step { row, step } => rack(row, RackPart::Step(step)),
-        RackHit::AddPlugin => Hover::RackAdd,
     }
 }
 
@@ -821,7 +814,11 @@ impl canvas::Program<Message> for ChannelRack<'_> {
             if self.browser_drag {
                 return None;
             }
-            let now = self.hit(bounds, cursor).map(hover_of);
+            let now = if self.on_add(bounds, cursor) {
+                Some(Hover::RackAdd)
+            } else {
+                self.hit(bounds, cursor).map(hover_of)
+            };
             return hover_change(&mut state.hover, now);
         }
         if let canvas::Event::Mouse(mouse::Event::ButtonReleased(_)) = event {
@@ -834,9 +831,14 @@ impl canvas::Program<Message> for ChannelRack<'_> {
             return None;
         };
         state.held = None;
+        if self.on_add(bounds, cursor) && *button == mouse::Button::Left {
+            let open = Message::OpenPicker(PickerTarget::AddInstrument);
+            return Some(canvas::Action::publish(open).and_capture());
+        }
         let hit = self.hit(bounds, cursor)?;
         // The Recordings header: a left press anywhere on it opens or folds the takes.
-        if let Some(row) = hit.row().filter(|&row| self.rows.channel(row).is_none()) {
+        let row = hit.row();
+        if self.rows.channel(row).is_none() {
             let header = matches!(self.rows.get(row), Some(RackRow::Takes { .. }));
             if header && *button == mouse::Button::Left {
                 return Some(canvas::Action::publish(Message::ToggleTakes).and_capture());
@@ -905,7 +907,6 @@ impl canvas::Program<Message> for ChannelRack<'_> {
                 channel: self.channel_at(row)?,
                 step,
             },
-            RackHit::AddPlugin => Message::OpenPicker(PickerTarget::AddInstrument),
         };
         Some(canvas::Action::publish(message).and_capture())
     }
@@ -927,26 +928,60 @@ impl canvas::Program<Message> for ChannelRack<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        match self.hit(bounds, cursor) {
-            Some(_) => mouse::Interaction::Pointer,
-            None => mouse::Interaction::default(),
+        if self.hit(bounds, cursor).is_some() || self.on_add(bounds, cursor) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
         }
     }
 }
 
-fn draw_mute_light(frame: &mut Frame, row: usize, audible: bool) {
-    let color = if audible {
-        style::LED_ON
-    } else {
-        style::LED_OFF
-    };
-    let light = Path::circle(layout::mute_led_center(row), layout::MUTE_LED_RADIUS);
-    frame.fill(&light, color);
+/// The width of a mute light's ring while it is off.
+const MUTE_RING: f32 = 1.5;
+
+/// A mute light (the rack's, a track's, a mixer strip's): heard, a dot `radius` round in `lit`;
+/// off (`None`), a ring in the palette's strong line, its outer edge where the dot's is and the
+/// ground showing through. Why a ring and not a darker dot: an unlit dot on the rack's well was
+/// 1.25:1, so a muted channel barely showed.
+pub(crate) fn draw_mute_light(
+    frame: &mut Frame,
+    center: Point,
+    radius: f32,
+    lit: Option<iced::Color>,
+) {
+    match lit {
+        Some(color) => frame.fill(&Path::circle(center, radius), color),
+        None => frame.stroke(
+            &Path::circle(center, radius - MUTE_RING / 2.0),
+            Stroke::default()
+                .with_color(style::palette().line_strong)
+                .with_width(MUTE_RING),
+        ),
+    }
 }
+
+/// The soft line between two beat groups of `row`'s steps, before step `step` (the first of a
+/// group): 2 px down the middle of the gap, as tall as a step, in the palette's soft line. Why:
+/// the unlit steps' two tones are a shade down so every channel's lit step stands 3:1 off both,
+/// which leaves the tones 1.16:1 apart; the line keeps the beat groups apart (with the
+/// soft line, not a lighter tone).
+fn draw_beat_line(frame: &mut Frame, row: usize, step: u32) {
+    let before = layout::step_rect(row, step - 1);
+    let after = layout::step_rect(row, step);
+    let middle = (before.x + before.width + after.x) / 2.0;
+    frame.fill_rectangle(
+        Point::new(middle - BEAT_LINE / 2.0, after.y),
+        Size::new(BEAT_LINE, after.height),
+        style::palette().line_soft,
+    );
+}
+
+/// The beat line's width.
+const BEAT_LINE: f32 = 2.0;
 
 fn draw_name_button(frame: &mut Frame, row: usize, name: &str, selected: bool) {
     let rect = layout::name_button_rect(row);
-    frame.fill_rectangle(rect.position(), rect.size(), style::NAME_BUTTON);
+    frame.fill_rectangle(rect.position(), rect.size(), style::palette().name_button);
     if selected {
         let width = 1.5;
         // Inset by half the line width so the outline stays inside the button.
@@ -955,15 +990,15 @@ fn draw_name_button(frame: &mut Frame, row: usize, name: &str, selected: bool) {
             Point::new(rect.x + inset, rect.y + inset),
             Size::new(rect.width - width, rect.height - width),
             Stroke::default()
-                .with_color(style::ACCENT)
+                .with_color(style::accent())
                 .with_width(width),
         );
     }
     frame.fill_text(Text {
         content: shown_name(name),
         position: Point::new(rect.x + NAME_PADDING, rect.center_y()),
-        color: style::TEXT,
-        size: NAME_TEXT_SIZE.into(),
+        color: style::palette().text,
+        size: size::BODY.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
     });
@@ -973,13 +1008,13 @@ fn draw_name_button(frame: &mut Frame, row: usize, name: &str, selected: bool) {
 /// "Recordings (N)" on the name button's ground, nothing in the light's, knobs' or steps' place.
 fn draw_takes_header(frame: &mut Frame, row: usize, count: usize, open: bool) {
     let rect = layout::name_button_rect(row);
-    frame.fill_rectangle(rect.position(), rect.size(), style::NAME_BUTTON);
+    frame.fill_rectangle(rect.position(), rect.size(), style::palette().name_button);
     let arrow = if open { "\u{25be}" } else { "\u{25b8}" };
     frame.fill_text(Text {
         content: format!("{arrow} {TAKES_HEADER} ({count})"),
         position: Point::new(rect.x + NAME_PADDING, rect.center_y()),
-        color: style::TEXT_DIM,
-        size: NAME_TEXT_SIZE.into(),
+        color: style::palette().text_secondary,
+        size: size::BODY.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
     });
@@ -992,15 +1027,23 @@ pub const TAKES_HEADER: &str = "Recordings";
 /// hint bar names it whole).
 fn shown_name(name: &str) -> String {
     let room = layout::NAME_BUTTON_WIDTH - 2.0 * NAME_PADDING;
-    fit_width(name, room, NAME_TEXT_SIZE).map_or_else(String::new, std::borrow::Cow::into_owned)
+    fit_width(name, room, size::BODY).map_or_else(String::new, std::borrow::Cow::into_owned)
 }
 
 /// A dark dial `size` px across with an accent pointer; `fraction` 0 points down-left, 0.5 up,
 /// 1 down-right.
 pub(crate) fn draw_knob(frame: &mut Frame, center: Point, size: f32, fraction: f32) {
     let radius = size / 2.0;
-    frame.fill(&Path::circle(center, radius), style::KNOB_RING);
-    frame.fill(&Path::circle(center, radius - 2.0), style::KNOB_FACE);
+    frame.fill(&Path::circle(center, radius), style::palette().knob_ring);
+    frame.fill(
+        &Path::circle(center, radius - 2.0),
+        style::palette().knob_face,
+    );
+    draw_pointer(frame, center, radius, fraction);
+}
+
+/// The accent pointer of a knob `radius` px round at `center`, pointing as [`draw_knob`]'s.
+pub(crate) fn draw_pointer(frame: &mut Frame, center: Point, radius: f32, fraction: f32) {
     let angle = knob_angle(fraction);
     let along = |distance: f32| {
         Point::new(
@@ -1011,7 +1054,7 @@ pub(crate) fn draw_knob(frame: &mut Frame, center: Point, size: f32, fraction: f
     frame.stroke(
         &Path::line(along(radius * 0.3), along(radius - 4.0)),
         Stroke::default()
-            .with_color(style::ACCENT)
+            .with_color(style::accent())
             .with_width(2.5)
             .with_line_cap(LineCap::Round),
     );
@@ -1025,7 +1068,7 @@ pub(crate) fn draw_automated_dot(frame: &mut Frame, center: Point, size: f32) {
             Point::new(center.x + offset, center.y - offset),
             AUTOMATED_DOT / 2.0,
         ),
-        style::ACCENT,
+        style::accent(),
     );
 }
 
@@ -1038,7 +1081,7 @@ pub(crate) fn draw_linked_dot(frame: &mut Frame, center: Point, size: f32) {
             center.y - size / 2.0,
         ),
         Size::new(LINKED_DOT, LINKED_DOT),
-        style::ACCENT,
+        style::accent(),
     );
 }
 
@@ -1103,7 +1146,9 @@ impl canvas::Program<Message> for DeviceDrop<'_> {
             frame.stroke_rectangle(
                 Point::new(2.0, top - 1.0),
                 Size::new(bounds.width - 4.0, layout::ROW_HEIGHT),
-                Stroke::default().with_color(style::ACCENT).with_width(1.5),
+                Stroke::default()
+                    .with_color(style::accent())
+                    .with_width(1.5),
             );
         }
         vec![frame.into_geometry()]
@@ -1172,7 +1217,7 @@ impl canvas::Program<Message> for SoundDrop<'_> {
                 Point::new(rect.x + inset, rect.y + inset),
                 Size::new(rect.width - DROP_OUTLINE, rect.height - DROP_OUTLINE),
                 Stroke::default()
-                    .with_color(style::ACCENT)
+                    .with_color(style::accent())
                     .with_width(DROP_OUTLINE),
             );
         }
@@ -1238,11 +1283,47 @@ mod tests {
             drop_sampler: drag.flatten(),
             rows: RackRows::of(project, false),
         };
-        let size = layout::rack_canvas_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16);
         let bounds = Rectangle::new(Point::ORIGIN, size);
         let action = rack.update(state, &event, bounds, mouse::Cursor::Available(at))?;
         let (message, _, status) = action.into_inner();
         Some((message?, status == iced::event::Status::Captured))
+    }
+
+    // "+ Instrument…" under the rows (p3_roll's two channels: its words and 8 px either side,
+    // 28..126.395 by the add row's 84..108, layout's test): a left press on it opens the
+    // instrument picker and takes the press; the pointer over it names it in the hint bar; a
+    // right press, or a press right of it in its row (140, 96), does nothing. (It stood in the
+    // header, then was a button 28..128 by 86..106.)
+    #[test]
+    fn the_add_words_under_the_rows_open_the_instrument_picker() {
+        let project = fixture("p3_roll.json");
+        let mut state = RackState::default();
+        let add = layout::add_instrument_rect(2);
+        assert_eq!((add.x, add.y, add.height), (28.0, 84.0, 24.0));
+        let at = Point::new(60.0, 96.0);
+        assert!(matches!(
+            rack_event(&project, &mut state, None, press(mouse::Button::Left), at),
+            Some((Message::OpenPicker(PickerTarget::AddInstrument), true))
+        ));
+        let moved = canvas::Event::Mouse(mouse::Event::CursorMoved { position: at });
+        assert!(matches!(
+            rack_event(&project, &mut state, None, moved, at),
+            Some((
+                Message::Hover(crate::ui::hint::HoverMessage::Over(Hover::RackAdd)),
+                false
+            ))
+        ));
+        assert!(rack_event(&project, &mut state, None, press(mouse::Button::Right), at).is_none());
+        let beside = Point::new(140.0, 96.0);
+        assert!(rack_event(
+            &project,
+            &mut state,
+            None,
+            press(mouse::Button::Left),
+            beside
+        )
+        .is_none());
     }
 
     // Recording v2: the audio takes fold under one header, Recordings, after the channels.
@@ -1268,7 +1349,7 @@ mod tests {
         };
         let pressed = |open: bool, at: Point, button| {
             let rack = rack(open);
-            let size = layout::rack_canvas_size(rack.rows.len(), 16);
+            let size = layout::rack_size(rack.rows.len(), 16);
             let bounds = Rectangle::new(Point::ORIGIN, size);
             let action = rack.update(
                 &mut RackState::default(),
@@ -1332,7 +1413,7 @@ mod tests {
         ));
     }
 
-    // P3: a press on a name selects its channel; the release on it, on its own, does nothing
+    // A press on a name selects its channel; the release on it, on its own, does nothing
     // (a click opens no window), nor does a release off the name;
     // a second press within the double-press time opens the channel's window, and its release
     // is nothing either.
@@ -1366,7 +1447,7 @@ mod tests {
         assert!(rack_event(&project, &mut state, None, released, name).is_none());
     }
 
-    // P6, by hand on p3_roll's one bar of steps (they reach 508 px past x 222) in a rack 400 px
+    // By hand on p3_roll's one bar of steps (they reach 508 px past x 222) in a rack 400 px
     // wide (178 px of steps in view), scrolled 100 px: a press at x 236 lands on step 3 (its left
     // edge 312 is 212 after the scroll), the name stays where it is drawn; Shift+wheel down over
     // the steps asks for an eighth of the view later; a wheel over the knobs, and a plain wheel,
@@ -1559,7 +1640,7 @@ mod tests {
     #[test]
     fn a_device_held_over_the_rows_names_the_channel_that_plays_notes() {
         let project = fixture("p8_ui.json");
-        let size = layout::rack_canvas_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16);
         let moved = |heard, row| {
             let target = DeviceDrop {
                 project: &project,
@@ -1585,13 +1666,13 @@ mod tests {
         ));
     }
 
-    // P4: a sound held from the Library over p8_ui's rows: over the sampler's header (row 2,
+    // A sound held from the Library over p8_ui's rows: over the sampler's header (row 2,
     // channel 2) the target says so once; over the audio row's header (channel 1) and between
     // rows it is over none.
     #[test]
     fn a_sound_held_over_a_header_names_its_channel() {
         let project = fixture("p8_ui.json");
-        let size = layout::rack_canvas_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16);
         let moved = |heard, at: Point| {
             let target = SoundDrop {
                 project: &project,
@@ -1690,7 +1771,7 @@ mod tests {
         rack.knob_tip(row, knob)
     }
 
-    // B7: a knob says its value in a tip as the mixer's controls do: p3_roll's lead at 100% and
+    // A knob says its value in a tip as the mixer's controls do: p3_roll's lead at 100% and
     // centered. The volume knob of row 1 is centered at (196, 60): the 52 x 16 tip stands 2 px
     // above it, at (170, 28); in row 0 there is no room above the knob (center y 22), so the tip
     // stands 2 px under it, at y 38.
@@ -1765,7 +1846,7 @@ mod tests {
         })
     }
 
-    // Swing (spec swing.md §5): a press on the knob or its readout starts a drag; a second
+    // Swing: a press on the knob or its readout starts a drag; a second
     // within the double-press time (400 ms) sets it straight, and the press after that starts
     // over; the wheel up is +1 % (10 tenths), down −1 %, published for the window, which applies
     // Shift. The swing's wheel is the swing's only.
@@ -1855,20 +1936,20 @@ mod tests {
             "{cut}"
         );
         let room = layout::NAME_BUTTON_WIDTH - 2.0 * NAME_PADDING;
-        assert!(crate::ui::text_fit::text_width(&cut, NAME_TEXT_SIZE) <= room);
+        assert!(crate::ui::text_fit::text_width(&cut, size::BODY) <= room);
     }
 
-    // B7: the add buttons' labels read at WCAG AA for small text, 4.5:1 at least: the text
-    // color #C9CDD3 on the button's #3A3E45 is 6.73:1, as the WCAG formula gives it in Python
-    // (relative luminances 0.6078 and 0.0477).
+    // "+ Instrument…" reads at WCAG AA for small text, 4.5:1 at least, at rest and lit, on
+    // the rack's ground (no face of its own): the secondary text #9FA3A9 on #1F2125 is 6.36:1,
+    // the text #C9CDD3 10.10:1, as the WCAG formula gives them in Python (relative luminances
+    // 0.3643, 0.6078 and 0.0151). (Pin moved: the button's text on its #3A3E45 face, 6.73:1.)
     #[test]
-    fn the_add_buttons_labels_have_aa_contrast() {
-        let ratio = style::contrast(ADD_LABEL, ADD_FACE);
-        assert!((ratio - 6.73).abs() < 0.01, "{ratio}");
-        assert!(ratio >= 4.5);
-        assert!(
-            style::contrast(style::TEXT_DIM, ADD_FACE) < 4.5,
-            "the dim color would not"
-        );
+    fn the_add_words_have_aa_contrast() {
+        let palette = style::palette();
+        let resting = style::contrast(palette.text_secondary, palette.bg);
+        let lit = style::contrast(palette.text, palette.bg);
+        assert!((resting - 6.36).abs() < 0.01, "{resting}");
+        assert!((lit - 10.10).abs() < 0.01, "{lit}");
+        assert!(resting >= 4.5 && lit >= 4.5);
     }
 }

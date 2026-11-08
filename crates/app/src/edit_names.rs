@@ -55,7 +55,8 @@ pub fn name(edit: &Edit) -> &'static str {
         Edit::AddSamplerChannel { .. }
         | Edit::AddPluginChannel { .. }
         | Edit::AddInstrumentChannel { .. }
-        | Edit::AddInputChannel { .. } => "Add channel",
+        | Edit::AddInputChannel { .. }
+        | Edit::AddSynthChannel { .. } => "Add channel",
         Edit::RemoveChannel { .. } => "Remove channel",
         Edit::SetProcessorState { .. } => "Plugin settings",
         Edit::PlaceClips { clips, .. } => plural(clips.len(), "Place clip", "Place clips"),
@@ -117,6 +118,8 @@ pub fn name(edit: &Edit) -> &'static str {
         Edit::UnaddEffect { .. } | Edit::RemoveEffect { .. } => "Remove effect",
         Edit::RestoreEffect { .. } => "Restore effect",
         Edit::SetEffectParam { .. } => "Effect setting",
+        Edit::SetChannelParam { .. } => "Synth setting",
+        Edit::SetChannelParams { .. } => "Load preset",
         Edit::MoveEffect { .. } => "Move effect",
         // Why not the effect's own name ("EQ on"): the history keeps names as `&'static str`,
         // and a plugin's name is the document's.

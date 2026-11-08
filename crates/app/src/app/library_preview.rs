@@ -1,7 +1,8 @@
 //! The Library's preview: a single click on an instrument row (a starter kit sound, an instrument
-//! set or a plugin instrument) makes it the row the typing keyboard and the MIDI devices no link
-//! routes play, before it is added to the rack. A channel of the plans alone plays it
-//! ([`Session::set_preview`](crate::session::Session::set_preview), under [`PREVIEW_CHANNEL`]):
+//! set, a plugin instrument or the synth) makes it the row the typing keyboard and the MIDI
+//! devices no link routes play, before it is added to the rack. A channel of the plans alone
+//! plays it ([`Session::set_preview`](crate::session::Session::set_preview), under
+//! [`PREVIEW_CHANNEL`]):
 //! never in the document, its saves, its exports, the rack or the history, at the default sound
 //! settings, into the master. Its row shows a mark while it is the preview. It ends when a rack
 //! channel is selected, an instrument is added, another part of the Library is pressed, another
@@ -10,6 +11,7 @@
 //! the keys stay on the channel the take records. A plugin's preview instance is the only one: the
 //! next preview replaces it.
 
+use dawsome_engine::dsp::synth::NAME as SYNTH;
 use dawsome_engine::project::{Channel, ChannelId};
 
 use super::plugins::plugin_processor;
@@ -129,6 +131,7 @@ impl App {
                     .as_added();
                 (Playing::Plugin(plugin.processor_id()), channel)
             }
+            Pick::Synth => (Playing::Synth, Channel::synth(SYNTH).as_added()),
             // An input plays through its own channel once added: there is nothing to preview.
             Pick::ExternalInput
             | Pick::Rescan

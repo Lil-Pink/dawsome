@@ -1,0 +1,17 @@
+{
+  "synth": "dawsome.synth",
+  "name": "Pad",
+  "params": {
+    "osc2_wave": 2,
+    "osc2_cents": -8,
+    "osc_mix": 0.5,
+    "unison": 3,
+    "detune": 20,
+    "spread": 0.8,
+    "amp_attack": 0.8,
+    "amp_release": 0.85,
+    "cutoff": 0.55,
+    "lfo_cutoff": 0.1,
+    "lfo_rate": 0.4
+  }
+}

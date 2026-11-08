@@ -1,26 +1,32 @@
 {
  "pictures": {
-  "chain.png": "ab408f6c25fb9168ffa517d29989140e356cd64d9e4aa640e1b1becb07bc27fd",
-  "dividers.png": "4240c0109a2fe9a057b5c310c324854c8cfbcb219be858b816ac5daa554adf76",
-  "help-button.png": "caa94375e226b4f6024f7dfffc289b807e9a51e978f3302b43a041c230696cc9",
-  "instrument-window.png": "4be06d353e23594410f505f69c4073fe73193f1a4ed5045492f6c3a09e9114e4",
-  "library-devices.png": "e5b923be9a5fdd573cef70411e2e24655ac1a2f542585078159636637345fc18",
-  "linked-clips.png": "29fdc56c677d60893edf59253cbe7178da0ed2b60e17db97347e6aaf8050ffc5",
-  "mixer.png": "fb0f457954ae2c4349d9c1b2657d863fb4cdbe9fcbdc9c9a40c490c076ffbff3",
-  "pattern-box.png": "31dc5912283085f340e08d1a752ca4312b949fe7bd692f9f1732a8bcfa312b22",
-  "piano-roll.png": "72ac0c9c035882d86238ce19a77a45b6519a26792021a2f021934c02b9575e8f",
-  "rack.png": "1d73a6ab3108d76ca59759d1c52283f78cfdd8adf291e092a106759d0b310339",
-  "record.png": "ef8c0e4c6d26c0d8b5c24be308942b64093f85f54d1221da6cc5c89552a2f859",
-  "sample-editor.png": "5b86687fcf8c4604b813cbecebfd26d87d880821f6c3dc5bc2dc402a59e4f54a",
-  "screen.png": "6c178eb4b3aa3aa2aff006082b8f37c4ae85687f5bd311c493acd71eb1b1e0f9",
-  "settings-midi.png": "47e2e5eb3bd2fa8394e78c1078f26ee4d4b39ef87d9b47825379aff286ccf818",
-  "toolbar.png": "d71791f3e7c12e13f8a90e54b22c3cc6a6d8d2ca0adba12daee49efb961166a3"
+  "chain.png": "22909b28885362c0bce65574215bf6b0a4abb164e304fcb57ccea1f16ffd16cb",
+  "dividers.png": "caf6da063c2c09dd09533e3ceacf856117a47ad7df9be6e0ef73d6c855b7ab0a",
+  "help-button.png": "3cc0db279d9749bd2c4c51b957639ab6a066b6614bf908e2827dd4413a3aa934",
+  "instrument-window.png": "bc80b487409aa84d39053441d4d473196ed43071d4d00ea19dce4da60f249b35",
+  "library-devices.png": "58a19881b30c7efcb015c1510552395e83058f01aba7c856e2e469f650958a02",
+  "linked-clips.png": "3d00840948570dbe0373e487aae9b58f07986eea2e8e935c21f6557054865bb8",
+  "mixer.png": "c0e3a84621e10e206c64889ac5c1e48d4f1105e8dbb62769c57722e492c3a96c",
+  "pattern-box.png": "ef9b5d0fd1929ce6d5930b93d677dcaba7cf8c746c614a34b5a2047951cc6197",
+  "piano-roll.png": "585daf81b5b77a1b67afb2e8b33f4f6afb37fd2a3b8c8785ad34531b91986ab8",
+  "rack.png": "c21d2b27962a24dfce71685b0b22fe970710f7d3b77710b676350de8a0471382",
+  "record.png": "1b0131130e34779f89a5fb13ee650e03fb84961a5bc9e8311a25294c135d493b",
+  "sample-editor.png": "e622a996bdc739de983b9d7cf1beb25fd02e1494509422828845898e1b01b571",
+  "screen.png": "27587f378e1c19a52b1f1b9f5a9bafed4fb1bf7615ec5acf57a587551fb2c118",
+  "settings-midi.png": "40cff4bf2d87d689b96adaaf986408c923b9d5ffd551c72b48c08f684c15a945",
+  "synth-window.png": "499c8a472edb331ce859a9dbf8aad5552e0d37a2070a5718797a056af295488c",
+  "toolbar.png": "da150d74ec6e0cf6c13d11a85638000f37be4aedccf8dcd9f106d92e1b127e55"
  },
  "sources": {
   "assets/help/source/guide-keys.json": "d3fd581c7a46ed3d8f5b2934688342c2d386dedc42820716e84e7da316cae062",
   "assets/help/source/guide-song.json": "6495b40f83231d8e627b4437c6202084ddd2b276719d03455943aef57e72e123",
   "assets/help/source/guide-sound.json": "9c2daa1c340f74e99c2b7d053912cff283c43922adccf7e738a1acde8a5d51c1",
-  "assets/help/source/shots.json": "094ae6e25e8edde086809d6fa2531d856d88717297c05cc95a1f1306e8641d18",
-  "scripts/help_shots.py": "27bdd774d014bc71d0032bde439e89b86bc561a4a392a28e81f78080a8a5fd8f"
+  "assets/help/source/guide-synth.json": "60af71d95c38228b1f09ae1093b886d7045cbe231677406bd86d49fa7cc9ee63",
+  "assets/help/source/shots.json": "1c0006d0d167e8cc17ed4c2d70d379af4077ccaafd709bb2cafb5924ebf2ae48",
+  "crates/app/assets/fonts/fonts.lock": "69f804e6675dac3e7e0a7b013ba1b6aa50f0a3c0ffd57a426d0f89fdc41bf15d",
+  "crates/app/src/ui/fonts.rs": "1ec1a056f4660de7fc6c50aa9ee6061fdf2e8ba37950ca1f7f3c48eb3bedf620",
+  "crates/app/src/ui/palette.rs": "0fb8964a654f0012c89655c5fd9bfc0f4119b0f731210832ff932f52b6e99eeb",
+  "crates/app/src/ui/style.rs": "cf02f48ad6b2a8341a28163e09cd33cbf17e11c43e0a03f2d2021217494d9bed",
+  "scripts/help_shots.py": "7d811064e21d754520b5e7e18bd16fcb0bdc2033f29d09ccbf7fb0eb4f2c8981"
  }
 }

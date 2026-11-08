@@ -481,7 +481,7 @@ mod tests {
         }
     }
 
-    // 6d K1, by hand from the layout research's table: a new window plays the piano row, on,
+    // By hand from the piano row's layout: a new window plays the piano row, on,
     // with A on middle C (60) at velocity 100 (100/128 to the player); W and ' are 61 and 77,
     // Q plays nothing; Z and X move the octave, C and V step the velocity (80 is 80/128 =
     // 0.625, 127 is 0.9921875).

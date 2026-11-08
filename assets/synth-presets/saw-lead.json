@@ -1,0 +1,15 @@
+{
+  "synth": "dawsome.synth",
+  "name": "Saw Lead",
+  "params": {
+    "osc2_wave": 2,
+    "osc2_cents": 7,
+    "osc_mix": 0.5,
+    "unison": 2,
+    "detune": 12,
+    "cutoff": 0.7,
+    "resonance": 0.25,
+    "filter_env": 0.3,
+    "glide_ms": 60
+  }
+}

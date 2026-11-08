@@ -194,12 +194,12 @@ TWINS = [
               [plugin("com.v.synth", "Synth", "VSTi Works", "instrument")],
               [plugin("00000000000000000000000053796E74", "Synth", "VSTi Works VST3", "instrument")]),
 ]
-# The spec's cases, by hand: twins, twins, both, both, the VST3 listed, twins, both, twins.
+# The cases, by hand: twins, twins, both, both, the VST3 listed, twins, both, twins.
 assert [[r["twin"] for r in c["offered"]["instrument"] + c["offered"]["effect"]] for c in TWINS] == [
     [True], [True], [False, False], [False, False], [False], [True], [False, False], [True]], TWINS
 
 
-# --- the test plugins' catalogue as the app lists it (K1) ------------------------------------
+# --- the test plugins' catalogue as the app lists it -----------------------------------------
 CLAP_FILE = "dawsome_test_plugin.clap"
 CRASH = "Dawsome Test VST3 Crash.vst3"
 CLAP_SCANNED = [plugin("org.dawsome.test.gain", "Dawsome Test Gain", "Dawsome", "effect"),
@@ -245,7 +245,7 @@ LISTS = {
                    "added": {"channel": 2, "id": "vst3:" + SINE, "name": "Dawsome Test Sine"},
                    "first_capture": b64(preset(SINE, component_state(1.0), b"OTC1" + struct.pack("<I", 0)))},
 }
-# By hand (the spec's K1): the CLAP sine twins the VST3 one; the VST3 Fail, Tick, Latency and View
+# By hand: the CLAP sine twins the VST3 one; the VST3 Fail, Tick, Latency and View
 # (the plugin windows' sixth class) have no CLAP build; the crash module is the one failed file.
 assert LISTS["both"]["instruments"] == ["Dawsome Test Fail (VST3)", "Dawsome Test Sine", "Dawsome Test Tick (VST3)",
                                         "Dawsome Test View (VST3)", "Could not load (1)",
@@ -264,7 +264,7 @@ SCAN_CHILD = "".join("dawsome-scan-progress %d\n" % n for n in range(1, len(VST3
     "dawsome-scan-result " + J({"plugins": SCAN_RECORDS}) + "\n"
 
 
-# --- bend and wheel (K2) -----------------------------------------------------------------------
+# --- bend and wheel ----------------------------------------------------------------------------
 BEND_PARAM, WHEEL_PARAM, WHEEL_HEARD = 1, 2, 3
 NO_PARAM = 0xFFFFFFFF
 
@@ -355,7 +355,7 @@ assert BEND["center_value"] == 0.5000305194408838 and BEND["wheel"]["heard"] == 
 assert BEND["masked_wheel"]["heard"] == 72 / 127 == 0.5669291338582677 and BEND["clamped"]["sent"] == 1.0
 
 
-# --- stepped and hidden parameters (K3) --------------------------------------------------------
+# --- stepped and hidden parameters -------------------------------------------------------------
 STEPS = 4
 SLIDER_WIDTH = 120
 
@@ -398,7 +398,7 @@ assert (STEPPED["drag"]["heard"], STEPPED["drag"]["text"]) == (0.25, "1/4")
 assert [h for _, h in STEPPED["ring"]] == [0.5, 0.75, 0.75, 1.0, 0.0, 0.0]
 
 
-# --- restarts and latency (K4) -----------------------------------------------------------------
+# --- restarts and latency ----------------------------------------------------------------------
 FLAGS = {"reload": 1, "io": 2, "values": 4, "latency": 8, "titles": 16, "midi_cc": 32}
 
 

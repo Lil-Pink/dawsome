@@ -1,4 +1,4 @@
-//! `dawsome --version` prints the program's name and the workspace's version (Cargo.toml: 0.1.2)
+//! `dawsome --version` prints the program's name and the workspace's version (Cargo.toml: 0.1.3)
 //! and exits.
 
 use std::process::Command;
@@ -12,7 +12,7 @@ fn version_names_the_program_and_its_version() {
     assert!(output.status.success(), "--version failed");
     assert_eq!(
         String::from_utf8(output.stdout).expect("utf-8"),
-        "dawsome 0.1.2\n"
+        "dawsome 0.1.3\n"
     );
     assert!(output.stderr.is_empty(), "--version wrote to stderr");
 }

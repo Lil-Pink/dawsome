@@ -42,8 +42,10 @@ mod session;
 mod sets;
 mod settings;
 mod starter_kit;
+mod synth_presets;
 mod ui;
 mod window_stats;
+mod zoom;
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -113,6 +115,23 @@ fn scan_child(file: &std::path::Path) -> i32 {
     match PluginFormat::of_path(file) {
         Some(PluginFormat::Vst3) => dawsome_host_vst3::scan::run_child(file),
         _ => dawsome_host_clap::scan::run_child(file),
+    }
+}
+
+/// Where the main window opens: `--window-position`'s point (the desktop's logical pixels),
+/// else the window system's choice. On Wayland the compositor places every window, so the point
+/// is left out with a line saying so.
+fn main_window_position(asked: Option<iced::Point>) -> window::Position {
+    match asked {
+        Some(_) if desktop::on_wayland() => {
+            eprintln!(
+                "dawsome-app: --window-position is ignored on Wayland, where the compositor \
+                 places the window (DAWSOME_WINDOW_SYSTEM=x11 opens it on X11)"
+            );
+            window::Position::Default
+        }
+        Some(at) => window::Position::Specific(at),
+        None => window::Position::Default,
     }
 }
 
@@ -279,6 +298,7 @@ fn main() -> ExitCode {
         }
     };
     let layout_given = args::layout_given(&raw);
+    let window_size_given = raw.iter().any(|word| word == "--window-size");
     let args = match Args::parse(raw) {
         Ok(args) => args,
         Err(error) => {
@@ -513,10 +533,16 @@ fn main() -> ExitCode {
             maximized: false,
         }
     } else {
-        let saved = settings::Settings::load(host.settings_file.as_deref()).window;
-        settings::start_window(saved.as_ref())
+        let kept = settings::Settings::load(host.settings_file.as_deref());
+        settings::start_window(kept.window.as_ref(), kept.zoom())
     };
-    let script = args.script;
+    let window_position = args.window_position;
+    let mut script = args.script;
+    // A scripted run's --window-size sizes the Settings window too, its shots being of the size
+    // their stage names; any other run's opens at its share of the main window's.
+    if scripted && window_size_given {
+        script.settings_size = Some(args.window_size);
+    }
     let dump_picker = script.dump_picker.clone();
     let (panels, window_size) = (start_window.panels, start_window.size);
     if args.stats {
@@ -531,10 +557,14 @@ fn main() -> ExitCode {
     // focus) treats them alike.
     #[cfg(target_os = "linux")]
     dawsome_host_common::window::set_class(&desktop::app_id());
+    // The bundled font, before the window loads it again (the same bytes, loaded once): any face
+    // of its family installed on the system out first (`ui::fonts`).
+    ui::fonts::load();
     let main_window = window::Settings {
         maximized: start_window.maximized,
         // A close with unsaved changes asks first; the app closes itself once answered.
         exit_on_close_request: false,
+        position: main_window_position(window_position),
         ..desktop::window_settings(start_window.size)
     };
     // A daemon, not an application, for the instrument window beside the main one: iced 0.14's
@@ -643,6 +673,12 @@ fn main() -> ExitCode {
         App::view_window,
     )
     .title(App::window_title)
+    // Every window at the app's zoom, on top of the system's display scale (`zoom`): the
+    // toolkit reads it again after every message, so a change applies at once.
+    .scale_factor(|app: &App, _window| app.zoom().factor())
+    .font(ui::fonts::REGULAR)
+    .font(ui::fonts::SEMIBOLD)
+    .default_font(ui::fonts::UI)
     .theme(iced::Theme::Dark)
     .subscription(App::subscription)
     .executor::<executor::Executor>()

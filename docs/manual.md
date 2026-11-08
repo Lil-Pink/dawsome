@@ -1,6 +1,6 @@
 # Dawsome
 
-The reference for Dawsome 0.1.2: every panel, gesture and setting. The README is the short introduction.
+The reference for Dawsome 0.1.3: every panel, gesture and setting. The README is the short introduction.
 
 Dawsome is a pattern-based digital audio workstation for Linux and Windows. Program beats in the
 channel rack, write melodies in the piano roll, arrange patterns, audio and automation in the
@@ -15,7 +15,12 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
 - **Channel rack**: sampler channels with a step grid (16 steps a bar), volume and pan, patterns
   of 1 to 32 bars, each with its own swing (see **Swing**); plugin instruments (CLAP or VST3) as channels. A channel that plays notes
   starts at −5 dB, so a few notes together stay clear of the master; audio
-  and input channels start at 0 dB.
+  and input channels start at 0 dB. The unlit steps alternate two dark tones by beat, with a
+  soft line between the beat groups; a muted channel's light (left of its name) is a ring, a
+  heard one's a green dot, as a track's and a mixer strip's are. Its header reads, left to right,
+  "Channel Rack", the pattern's **Swing** (its knob and readout) and its **Bars** (− the count
+  +); **+ Instrument…** stands under the last channel row, in line with the channels' names,
+  as words alone, as **+ Track** stands under the tracks.
 - **Piano roll**: draw, move, resize and delete notes, a velocity lane, selections, duplicate,
   snap and zoom, the other channels' notes shown faintly; a sample plays at the pitch of its key.
   Selection and editing: click, Shift+click and box selection, arrows to transpose and nudge,
@@ -24,15 +29,96 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   painted across stems or drawn as a ramp (Alt); a scale chooser that shades the keys outside it
   and folds the rows; the notes you play live (keyboard, MIDI) shown as they sound, and a
   take's light while recording them.
+  - **The grid** reads as the playlist's does (**Reading the grid**, under **Playlist**): a
+    ruler of bar numbers over it, a double line and a brighter number every fourth bar, every
+    other bar shaded a little lighter, and finer lines (beats, steps, half steps) that fade in
+    as you zoom in; the ruler ticks each beat too, fading with the beat lines. Past the
+    pattern's end the rows, their shading and the lines are all dimmed, so the empty bars read
+    quieter than the pattern. **Snap: Line**, the snap the roll starts with, snaps to the
+    finest lines drawn at least half strength: half steps from 24 px a step, steps from 12,
+    beats below that. A click draws a note one snap unit long (the strip's **Len**, or the snap
+    picker's hint where the strip has folded Len away), so the
+    smallest note a click draws covers the smallest cell you see, and it follows the zoom;
+    once you click or resize a note, its length is the one drawn next, at any zoom. Under
+    **None** (single ticks) a click draws a Line's length.
+  - **The key column** at the left is drawn as a keyboard: each black key covers two thirds of
+    the column, the white key showing beside it, and every C is named. Pressing a key's row
+    plays that key. The grid shows whole rows only, from the top: the few pixels left under the
+    last whole row are plain ground over the scroll bar, where a press does nothing, and the
+    keys scroll a whole row at a time, so no key is ever cut to a sliver.
+  - **Zoom**: anywhere from 4 to 64 pixels a step (16 to start); Ctrl+wheel over the grid or
+    the ruler zooms a quarter of a doubling a notch, keeping what is under the pointer in place.
+    The zoom is kept for the next start. Scrolling along time (Shift+wheel, a page or a notch on
+    the scroll bar, letting go of its thumb, Follow's jumps) comes to rest on a whole beat. The
+    scroll bar under the grid runs the panel's whole width, under the keys too: at the
+    pattern's start its thumb begins at the panel's left edge.
+  - **The velocity lane** under the grid is 32 pixels tall, always, on a dark ground between
+    two light lines: a stem's height is its note's velocity, 128 at the lane's top and 0 at its
+    foot. Every note in view has its stem: one scrolled half out of view on the left has it at
+    the lane's left edge, and the notes of a chord share one column, the taller stems showing
+    above the shorter. Alt+drag across the lane draws a ramp: each note it crosses takes the
+    ramp's value where its stem stands, the stem pinned at the left edge included.
+  - **The strip** over the roll: the channel's name, then the snap picker (Line, Step, Beat,
+    Bar or None, no word before it) and Len, Preview and Follow, the scale (its chooser half as
+    wide as its longest name: a long name shows cut short with "…" there, and whole in its menu)
+    and Fold, the **Notes** menu, and the roll's **Play** and **Loop**, the two a little apart
+    from the rest; the velocity a lane drag
+    sets and the "Rec notes" light come and go after them, and the pop-out grip stands at the
+    right end. Where the roll is too narrow for all of it, the strip folds, step by step until it
+    fits: Len goes (the snap picker's hint then says the length, "Snap: Line · draws 0:01:00"),
+    then Preview and Follow become 24 px buttons with a small speaker and a small arrow (lit as
+    their words were), then the scale's chooser narrows to 48 px (the arrow alone; its menu and
+    hint name the scale), and last the channel's name is cut short with "…" to the room left,
+    never to fewer than its first three letters ("Bass 808 low" becomes "Bas…"; its hint says
+    the name whole). Play and Loop, the snap picker, the scale and Fold, Notes and the grip
+    always stay. Beside the Library (a 700 px roll) Len folds, and with a scale chosen Preview
+    and Follow fold too; the roll in its own window at its least width, 608, folds Len, Preview
+    and Follow, with a scale the scale's chooser too, and with a long name the name, every
+    control still showing (a name whose first three letters are wider than "Bas", the velocity
+    readout or the "Rec notes" light can still push Loop past the edge: widen the window).
+  - **Playing from the piano roll**: the strip's **Play** plays the notes the roll holds, this
+    channel's notes of this pattern alone (not the other channels', not the faint notes), from
+    the pattern's start, through the channel's real sound: its volume, pan, mixer insert,
+    effects and routing, so it sounds as it does in the song, while the other channels on the
+    same insert stay silent. **Loop** (on to start) repeats the pattern; off, it plays once and
+    stops at the pattern's end. Edit notes while it loops and the next pass plays the edit;
+    choose another channel or pattern and it plays that. It is the one transport, not a second
+    player: the toolbar shows neither Pat nor Song lit and its position runs, Play in the
+    toolbar takes back over (from the pattern's start, or from the song marker in song mode),
+    the roll's Play while the song plays takes over from the pattern's start, and Stop (or
+    Space) stops either. While a take records, the roll's Play is off: recording is the
+    toolbar's, so stop the take first. **Shift+Space** is the roll's Play / Stop while the roll
+    has the keys. Loop is kept for the next start.
 - **Playlist**: tracks holding pattern clips, audio clips (trim, gain, waveform, time-stretch or
   resample with pitch shift) and automation clips (linear, hold, smooth and exponential segments);
-  pattern and song mode; a loop range; the timeline's scroll bar under the tracks. A sound file
+  a pattern clip draws each note as a bar from its start to its end, as the piano roll does, one
+  row per pitch, a step hit as a short mark, a note running past the clip's end cut there;
+  pattern and song mode; a loop range; the timeline's scroll bar under the tracks, across the
+  whole panel (under the track names too, so at the song's start its thumb begins at the
+  panel's left edge). The lanes fit the panel, squeezing down to 32 px as tracks are added, then
+  the tracks scroll; while they fit they grow up to 106 px, the "+ Track" row under the last track taking only its own height.
+  Alt+wheel fixes a height (32, 48, 64, 85 or 106 px) and the header's Fit fits them again. A
+  sound file
   dropped from the desktop on a track is a new audio channel and its clip there, from the bar,
   beat or step the Snap chose (several files on the tracks under it, one undo step). Clips of one
   pattern are linked (an edit changes them all) and say so with "×N"; while such a clip is
   selected, a chain right of the header's Fit unlinks every selected clip (each its own copy,
   "Pattern 1 (copy)", "(copy 2)"…) and, crossed once they play copies, links them back, one
   undo step a click; a clip's menu (Ctrl+right-click) does the same for that clip.
+  - **Reading the grid**: a bar is four beats, and a new pattern is one bar long, so its clip
+    fills one bar. The lanes' lines mark the bars and, between them, the beats; every fourth bar
+    (1, 5, 9, …) starts with a brighter double line and has its number written brighter in the
+    ruler, so a song reads in phrases of four bars. Every other bar is shaded a little lighter
+    (every other four bars when zoomed far out), so the bars read as blocks even where their
+    lines are faint. Beat lines fade in as you zoom in and are gone when the beats are only a few
+    pixels apart. Inside a loop range the lanes keep the loop's tint, unshaded.
+  - **Zoom**: anywhere from 16 to 256 pixels a bar (64 to start). **−** and **+** halve and
+    double it; Ctrl+wheel over the lanes or the ruler zooms a quarter of a doubling a notch,
+    keeping what is under the pointer in place. The zoom is kept for the next start. Scrolling
+    along time (Shift+wheel, a page or a notch on the scroll bar, letting go of its thumb, − and
+    +, Follow's jumps) comes to rest on a whole beat, or on a whole bar while beat lines are not
+    drawn, so the view never starts on a sliver of one; a drag of the thumb is smooth while you
+    hold it.
 - **Sample editor**: a sampler's or an audio channel's sound in a window of its own (a
   double-click on an audio clip, or Edit sample… in the channel's right-click menu or at the
   foot of its instrument window): its waveform a lane a side, zoomed with Ctrl+wheel from the
@@ -52,6 +138,8 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   Density saturator ported from Airwindows, a filter, a distortion, a chorus, a flanger, a
   phaser, a gate and a stereo width.
   Plugin effects (CLAP or VST3) go in the same chain.
+  - **The header's routing control** (− "Insert 3 → Master" +), centred in the mixer's header,
+    names the selected insert and where it goes; the effects area has no title of its own.
   - **The effects area**: right of the strips, the selected insert's effects, in the room the
     strips leave (at least 332 px: in a narrower window the strips scroll under it). Each effect
     is a block, in chain order (the order the sound goes through them), left to right, a line
@@ -167,6 +255,10 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   ends the one before it on that channel, like plucking a bass string, falling over the release
   (over 2 ms without one), so a fast line does not stack; the 808 basses are added with it on,
   every other sound with it off, and a channel's hint in the rack says when it is on.
+- **Dawsome Synth**: a synthesizer of Dawsome's own, a channel like any instrument: two
+  oscillators with unison and noise, a resonant low-pass with its envelope, an amp envelope, an
+  LFO, glide and velocity, 16 voices, its knobs in its instrument window and eight presets to
+  start from (see [Dawsome Synth](#dawsome-synth)).
 - **External input**: a channel that plays an audio input live (a synth or keyboard cabled into
   your interface): pick its device and channels in its window and it plays through its volume,
   pan and mixer insert like any channel, playing or stopped (Library → Instruments → External
@@ -222,7 +314,7 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
 ## Swing
 
 Swing plays every second 16th note of a pattern late, for a shuffle. Each pattern has its own,
-set with the **Swing** knob at the top of the Channel rack, right of **+ Instrument…**; the
+set with the **Swing** knob at the top of the Channel rack, right of its title; the
 readout beside it shows the swing of the pattern in the pattern box.
 
 - **The scale**: how much of each pair of 16ths (one 8th note) the first 16th takes. 50 % is
@@ -269,6 +361,114 @@ leaves the notes as they were. Playback meanwhile plays the notes as they are, n
   straight second 16th. On one part, use one: the knob for step patterns, quantize for played
   parts you want to edit as you hear them.
 
+## Dawsome Synth
+
+Dawsome Synth is a small subtractive synthesizer built into Dawsome: two oscillators, mixed and
+then filtered, shaped by two envelopes and an LFO. It is a channel of its own kind (its rack
+row's hint and its window say Synth) and plays like any instrument: patterns, takes, the
+computer keyboard, a MIDI keyboard with its sustain pedal, pitch bend and mod wheel.
+
+- **Adding one**: in the Library, under Instruments → Plugins, Dawsome Synth is the first row
+  (above the plugins found on the computer). Click it to hear a note, double-click it (or
+  Enter) to add it to the end of the rack, right-click it to add it and open its window, or drag
+  it onto the rack or a playlist track. It starts at its defaults (the Init preset).
+- **Its window**: a double-click on its name in the rack. The synth's knobs in eight blocks,
+  one per heading, laid out like a DJ's booth: a deck on each side (Osc 1 over Unison on the
+  left, Osc 2 over the LFO on the right) and the mixer between them (Filter, Filter env, Amp env
+  and Play, one under another). Under the left deck the LEVEL group (pan, volume, the output
+  insert) as for any channel, one module as wide as the deck; under the right deck the Presets
+  module (the Preset list and Save preset…); every column reaches down to one line, so no bare
+  board shows. The window opens large enough to show the whole booth (924 × 516), and grows to
+  that again each time it shows a synth channel; made smaller, the window scrolls and the
+  blocks stay where they are.
+- **The knobs** work as an effect's knobs in the mixer: drag left or right (Shift for fine), a
+  double-click puts the default back, the value under each knob is in its unit, and a choice
+  (the waves, the unison's voices, the LFO's shape) is a button that steps to the next value on
+  each click. Each drag, reset or click is one undo step. Right-click a knob for Create
+  automation clip (Show automation clip once it has one) and Link to controller… (the next knob
+  moved on a MIDI controller takes it; Unlink controller once linked); an automated knob shows
+  its automation's value and a dot, a linked one a small mark beside it. Every setting is saved in the project.
+
+The settings, by heading (each knob's name in the window, then what it does):
+
+- **Osc 1** and **Osc 2**, the two oscillators: **Wave** Sine, Triangle, Saw or Square
+  (oscillator 1 starts as a saw, oscillator 2 as a square); **Width** the square's duty, 5 to
+  95% (50% a plain square; only the square uses it, and it stays centred on zero at any
+  width); **Octave** −2 to +2; **Semi** −12 to +12
+  semitones; **Fine** −100 to +100 cents; **Level** 0 to 100%. The saw and the square are
+  band-limited at their jumps (PolyBLEP), the triangle is not (its harmonics fall fast enough to
+  keep its aliasing low). Under Osc 2, **Mix**: 0% is oscillator 1 alone (the default), 100%
+  oscillator 2 alone, 50% both at half.
+- **Unison**: **Voices** 1, 2 or 3 copies of each oscillator per note, their phases spread;
+  **Detune** 0 to 50 cents, the distance between the lowest and the highest copy (10 by
+  default); **Spread** 0 to 100%, how far the copies are panned apart (the outer ones hard left
+  and right at 100%); the copies are added at the level of one. **Noise** 0 to 100%: white noise
+  added to each voice, the same on both sides.
+- **Filter**, a resonant low-pass per voice (the Filter effect's state-variable filter at 12 dB
+  per octave): **Cutoff** 20 Hz to 20 kHz evenly in octaves, open at 100% (the default, where the
+  filter passes the sound untouched while nothing moves it); **Resonance** Q 0.5 to 20, as the
+  Filter effect's (10% is Q 0.72); **Env amt** −100 to +100%, how far the filter envelope moves
+  the cutoff (8 octaves at full); **Key track** 0 to 100%: at 100% the cutoff follows the key
+  note for note from C5 (key 60), so high notes stay as bright as low ones; **Drive** 0 to 100%:
+  each note pushed into a soft clip after the filter (the Distortion effect's antialiased tanh,
+  per note, so a chord's notes do not distort each other), warmer and grittier as it rises,
+  the Distortion's Auto gain taking back what the clipping adds so it changes the sound more
+  than its loudness (Saw Lead plays about 1.6 dB quieter at 50% and 2.5 dB at 100%); at 0% (the
+  default) the sound passes untouched.
+- **Filter env** and **Amp env**: **Attack**, **Decay** and **Release** each 1 ms to 10 s,
+  evenly in decades (10 ms at a quarter of the knob, 100 ms at half, 1 s at three quarters), and
+  **Sustain** 0 to 100%. The segments are exponential curves; the attack reaches full level in
+  exactly its time, the release falls to silence in finite time and frees the voice. The amp
+  envelope starts at 1 ms, 100 ms, 100% and 100 ms; the filter envelope at 1 ms, 100 ms, 0% and
+  100 ms.
+- **LFO**, one for the whole synth, running from Play: **Rate** 0.01 to 20 Hz evenly in
+  octaves (2.99 Hz by default); **Shape** Sine, Triangle, Square or Saw; **→ Pitch** 0 to 12
+  semitones of vibrato; **→ Cutoff** 0 to 100%, up to 4 octaves either way. The mod wheel adds
+  up to a semitone of the LFO to the pitch, on top of **→ Pitch**.
+- **Play**: **Glide** 0 to 1000 ms: a note started while another is held slides to its pitch
+  from where the held note's pitch is, in a straight line in semitones (so every interval takes
+  the glide's time); separate notes do not slide. **Volume** −48 to +6 dB (−6 by default).
+  **Vel→level** 0 to 100%: at 100% a note's level follows its velocity all the way, at 0% every
+  note plays full. **Vel→cutoff** 0 to 100%: softer notes are darker, by up to 4 octaves at the
+  softest.
+
+How it plays:
+
+- **16 voices.** A note past them takes the voice that started first, without a click: the
+  stolen voice keeps its filter and starts its envelopes from where they were.
+- **Free-running oscillators.** A voice's waves run on from where its last note left them, as an
+  analog synth's do, and Stop sets each voice to a point of the cycle of its own: the notes of a
+  chord do not start in step (their first cycles pile up less), and a note played twice does
+  not sound exactly the same twice.
+- **Pitch bend** bends ±2 semitones (the window's Bend applies to samplers and sets, not to the
+  synth). The **sustain pedal** holds the notes let go of until it lifts, as for every
+  instrument.
+- **Stop** silences it at once, as it does a plugin instrument.
+
+**Presets**: the Preset list in the Presets module under the right deck lists the factory
+presets, then yours.
+
+- **Factory presets**: Init (every default: a saw, the filter open, attack 1 ms, decay 100 ms,
+  sustain 100%, release 100 ms), Saw Lead, Square Bass, Sub, Pad, Pluck, Keys and Brass, built
+  into the program.
+- **Loading** one sets every setting at once, one undo step ("Load preset"): Undo gives back the
+  sound before. While the synth sounds as a preset, the list shows that preset; once a knob
+  moves it shows "Choose a preset".
+- **Save preset…** opens a name box in its module: type a name and press Enter or Save. Names
+  keep letters, digits, spaces, `-` and `_` (anything else is left out); a factory preset's name
+  is refused, and a name you have used asks "Replace it?" first (Replace or Cancel). Esc closes
+  the box.
+- **Where**: each of your presets is a file, `~/.local/share/dawsome/synth-presets/<name>.json`
+  (`%LOCALAPPDATA%\dawsome\synth-presets\` on Windows), listed in every synth channel of every
+  project. The file holds `{"synth":"dawsome.synth","name":…,"params":{…}}` with only the
+  settings that differ from their defaults, so a preset keeps sounding the same after a later
+  version adds settings.
+
+**Files**: a project with a synth channel is written as format version 9. Versions before 0.1.3
+refuse to open it, by its version, rather than open it without the synth's sound. In a
+DAWproject export the synth is an instrument track with its notes and no device (the other
+program plays them with an instrument of its own).
+
 ## What is included
 
 - **Instrument sets**: an upright piano, an electric piano, a bass guitar, electric and synth
@@ -279,6 +479,7 @@ leaves the notes as they were. Playback meanwhile plays the notes as they are, n
 - **Starter kit**: twelve drums made for Dawsome (808 and 909 kicks, snare, clap, closed and
   open hi-hats, three toms, rim, cowbell, crash), built into the app.
 - **One-shots and loops**: a folder of sounds the Samples section lists.
+- **Dawsome Synth**: Dawsome's own synthesizer, with eight factory presets.
 - **Surge XT**: the Surge Synth Team's synthesizer, release 1.3.4, as a CLAP plugin with its
   factory patches and wavetables; the Library lists it under Plugins like any other.
 - **Licenses**: every sound is dedicated to the public domain under CC0 1.0: use it in songs or
@@ -348,18 +549,23 @@ programs are given shows the windows a little softer.
 
 ## First steps
 
+- **The toolbar's right end** holds the six panel buttons, then File, Edit and Help; what goes
+  wrong (a missing sound, audio off) is said between the computer keyboard's switch and the
+  panel buttons. The tempo reads one decimal, more only when set (120.0, 120.5, 120.125; type
+  up to three), and it and the position stand centred in their boxes.
 - **Help** (at the right end of the toolbar, or F1) opens a guide for someone new to making music:
   what each part of the window is for and how to use it, a section a page, with pictures of the
   app.
 - **The demo**: File → Open demo opens a short song made of the app's own synthesized sounds.
   A fresh install also lists it under the recent files.
 - **A new document** starts with one pattern, an empty sampler channel, 8 playlist tracks and 16
-  mixer inserts. "+ Instrument…" in the rack adds a channel: an instrument set, a starter kit
-  sound, a plugin or a sound file of yours ("Sample file…"); drop a file on a sampler row to
-  change its sound.
+  mixer inserts. "+ Instrument…" under the rack's rows adds a channel: an instrument set, a
+  starter kit sound, a plugin or a sound file of yours ("Sample file…"); drop a file on a
+  sampler row to change its sound, or anywhere else on the rack for a new channel.
 - **Panels** open and close with the digits 1 to 5, or F5 to F9 (below), and share the window.
-  Each keeps room for what it shows (the mixer every strip whole, 225 px); a window too short
-  for all of them scrolls the panels up and down. Drag the line between two stacked panels up or
+  Each keeps room for what it shows (the mixer every strip whole, 235 px); in a window too short
+  for all of them the piano roll first shows fewer rows (down to five, its velocity lane always
+  whole), then the panels scroll up and down. Drag the line between two stacked panels up or
   down to share the height between them (its grip lights orange while held); double-click it to
   put both back.
 - **A panel in its own window**: hold the line over the channel rack, the playlist, the piano
@@ -375,21 +581,98 @@ programs are given shows the windows a little softer.
   back in the stack, where it stacks and at the height it had. The panel's key or toolbar
   button brings its window to the front, or, pressed in that window, puts the panel back. The
   top panel of the stack has no line over it, so it stays docked; one panel per window, the
-  Library never. Its size and place are kept, and a panel out in its own window when Dawsome
-  closes opens that way at the next start. Nothing dragged between windows: a clip or a file
-  dropped on a panel's own window lands nowhere. **Settings** (6 or F10, or the cog among the toolbar's panel buttons) opens a window of its
-  own beside the main one: its pages scroll, and Esc, its close button or the same key closes
-  it. It keeps its size and place for the next time.
+  Library never. A panel's own window is at least 480 px wide, the piano roll's at least 608, so
+  its strip, folded all the way, still shows every control for most names. Its size and place
+  are kept, and a panel out in its own window when Dawsome closes opens that way at the next
+  start. Nothing dragged between windows: a clip or a file dropped on a panel's own window lands
+  nowhere.
+- **The pop-out button**: the small dim grip (two short lines, the dividers' grip in small) at
+  the right end of the channel rack's, the playlist's, the piano roll's and the mixer's header
+  (it lights as the pointer comes over it) does the same in one press:
+  the panel opens in its own window where that window last was (the first time, where your
+  system puts a new window, 1000 by 480). It works for a panel alone in the stack too, which has
+  no line over it to drag. In the panel's own window the button is not there: close the window,
+  or press the panel's key or toolbar button in it, to put the panel back.
+- **Settings** (6 or F10, or the cog among the toolbar's panel buttons) opens a window of its
+  own beside the main one, with three pages, chosen by the tabs along its top: **General** (MIDI
+  input, the typing keyboard's octave, the hints, the zoom, the audio output and input, the
+  input latency), **Keys** (the note layout and every shortcut) and **Theme** (the theme, the
+  accent and the piano roll's notes' colour). It opens at a fixed size, about half the main
+  window's width and two thirds of its height as the main window is at that moment, and cannot
+  be resized; it opens again where it was last. In a wide window the General page uses the
+  width: two columns from 800 pixels (the audio input and the input latency on the right),
+  three from 1200 (the audio output in the middle). Its pages scroll, and Esc, its close button
+  or the same key closes it from any page; it opens again on the page shown last.
+- **Reset to defaults**, at the foot of Settings → General, puts the looks and the layout back as
+  a first start has them: the zoom, the theme, the accent and the notes' colour, the open panels
+  (the Library, the channel rack, the playlist and the mixer, none in a window of its own), the
+  heights the
+  lines between panels were dragged to, the playlist's and the piano roll's zoom, the playlist's
+  lane height, the piano roll's Follow, the Library's folded groups and the hint bar. Your MIDI
+  inputs, audio devices, input latency, keys, the piano roll's Loop and the other windows'
+  places stay. It asks first:
+  the first press turns it into "Press again to reset" for three seconds (or until the pointer
+  leaves it), and only a second press resets.
+- **Zoom** (Settings → General → Display → Zoom, or Ctrl+= and Ctrl+-, Ctrl+0 back to 100 %) makes the
+  text and controls of every window larger or smaller, the main window and every window beside
+  it alike, on top of the display scale your system sets: 50 % to 200 %, a step of 10 % at a
+  time, with 75, 125 and 175 % between (125 and 175 % match the display scales Windows offers).
+  The toolbar says "Zoom 125 %" for two seconds after each step; a double-click on the value in
+  Settings sets 100 %. The zoom is kept for the next start, and each window keeps its size on
+  the screen: a larger zoom shows less in it, larger. Plugins' own windows keep their size: the
+  zoom does not reach them (they are told the desktop's scale as they open).
+  Every window draws its text in the font Dawsome ships (Inter), the same on every system, in a
+  few sizes: 12 px for labels, buttons and list rows, 13 for running text and menus, 14 for the
+  panels' titles ("Channel Rack", "Playlist", "Mixer", "Library") and the piano roll's channel
+  name, 16 for titles and the toolbar's readouts, 11 for numbers; each panel's first control
+  stands 48 px after its title. Controls take a press 24 pixels across
+  (Settings' rows are 24 px with 14 px boxes).
+- **Theme** (Settings → Theme) sets the colours of every window as one set, one of five, their
+  keys in one row, each with a swatch of its set (its panel and its accent, two small squares,
+  edged in the theme's light edge colour so a dark swatch shows on a dark page) before its name:
+  **Graphite**, the look Dawsome had first; **Slate**, the default, darker and cooler, its text
+  brighter; **Gilt**, metallic gold on deep green (the accent, the lit edges, the knob rings and
+  the fader caps in gold; an audio clip's body a shade lighter than elsewhere, so it reads apart
+  from the green lanes); **Garnet**, rose gold on deep plum; **Fjord**, ice blue on deep navy. A theme changes the panels, the text, the lines, the piano keys and the
+  accent. Every theme writes labels of live information ("Bars", "Snap", group names, hints) in
+  a grey that reads at 4.5:1 or more on its panels, and what cannot be used now (a button with
+  nothing to do, an unplugged device) in a dimmer one; the channel colours, the clips,
+  the notes, the lights, Record and the meters keep their colours in every theme, so what they
+  tell you stays the same. Every window changes at once, the ones beside the main window and the
+  Help window too, and the theme is kept for the next start. A theme this version does not know
+  (one a newer version kept) shows Slate and says so in the toolbar.
+- **Colours** (Settings → Theme, under the theme's keys): a menu over one colour wheel chooses
+  what the wheel sets, **Accent** (as it opens) or **Piano roll notes**.
+- **Accent** (Settings → Theme → Colours, the menu on Accent) makes the accent, the colour
+  of what is lit and selected (lit buttons, ticked boxes, the playhead, selections, slider fills), any
+  colour you like, in every theme. Drag round the ring of the colour wheel for the hue, and in
+  the square inside it for how strong (to the right) and how bright (up) it is; every window
+  follows as you drag, and the colour is kept when you let go. Or type a colour as #RRGGBB in the
+  box beside the wheel and press Enter; anything else is refused, and the line under the row says
+  how to write one. The swatch left of the wheel shows the accent drawn now. **Theme's own** puts
+  each theme's accent back (its key is lit while it shows). A colour that is hard to see on the
+  theme's panels, under 3:1 contrast, gets the note "Low contrast on this theme's panels" under
+  the row, and is still yours to keep. The channel colours, the clips, the notes, the lights,
+  Record, the loop range and the meters keep their colours whatever the accent.
+- **Piano roll notes** (Settings → Theme → Colours, the menu on Piano roll notes) draws the piano
+  roll's notes and their velocity stems in a colour of your own instead of each channel's: the
+  wheel, the hex box and the swatch work as for the accent, the notes following as you drag.
+  The other channels' notes shown faintly, the rack's steps and the playlist's clips keep their
+  channel colours. **Channel's own** gives each channel its colour back. A colour under 3:1
+  contrast on either of the roll's row tones gets the note "Low contrast on the piano roll's
+  rows", and is still yours to keep. The colour is kept for the next start.
 
 ## Keys
 
 | Key | Does |
 |-|-|
 | Space | play / stop |
+| Shift+Space | the piano roll's Play / Stop (while the roll has the keys) |
 | L (Shift+L while the computer keyboard plays notes) | pattern or song mode |
 | 1, 2, 3, 4, 5, 6 | channel rack, playlist, piano roll, mixer, Library, the Settings window |
 | F5, F6, F7, F8, F9, F10 | playlist, channel rack, piano roll, Library, mixer, the Settings window |
 | F1 | the Help window |
+| Ctrl+= (or Ctrl+Plus), Ctrl+-, Ctrl+0 | zoom every window a step larger, a step smaller, back to 100 % |
 | Ctrl+Z | undo |
 | Ctrl+Shift+Z, Ctrl+Y | redo |
 | Ctrl+A | select all notes in the piano roll |
@@ -424,6 +707,8 @@ selection, then closes the window; a double-click on an audio clip opens it.
 dawsome render song.json song.wav --song --bars 8     # or song.mp3; --bits 16|24|32f
 dawsome render song.json cd.wav --bits 16 --no-dither # 16 bits rounded plainly, no dither
 dawsome render live.json live.wav --input-feed take.wav   # input channels play take.wav
+dawsome render song.json bass.wav --pattern Verse --channel Bass --once
+                                                      # one channel's notes of a pattern, once
 dawsome scan                                          # find CLAP and VST3 plugins
 dawsome smf-import song.json melody.mid out.json --pattern 1 --channel 2
 dawsome smf-export song.json melody.mid --pattern 1 --channel 2
@@ -433,7 +718,15 @@ dawsome export-dawproject song.json song.dawproject   # for Bitwig Studio, Studi
 ```
 
 `dawsome` with no arguments prints every option. A render plays the project through the same
-engine path the app plays it through, so the file holds exactly what you hear.
+engine path the app plays it through, so the file holds exactly what you hear. `--pattern NAME`
+renders that pattern instead of the first; `--channel NAME` plays only that channel's notes of
+it, as the piano roll's Play does (its sound through the mixer as ever), and `--once` plays it a
+single time, so the file is one pass long.
+`dawsome-app --help` lists the app's own options, among them those for scripted runs
+(screenshots, `--window-size`): `--window-position <x>,<y>` opens the main window with its
+top-left corner there, in the desktop's logical pixels (on another monitor, say), on X11 and
+Windows only; on Wayland, where the compositor places every window, it is ignored with a line
+saying so.
 
 ## Taking a song to another program
 
@@ -466,6 +759,7 @@ programs read, each followed by a report (shown, and written beside the export a
 - Settings, recent files and the Library's sample folders: `~/.config/dawsome/`.
 - The demo, the starter kit (written there the first time one of its sounds is played or
   dragged) and the recordings of documents not yet saved: `~/.local/share/dawsome/`.
+- Your Dawsome Synth presets: `~/.local/share/dawsome/synth-presets/`, a file each.
 - Instrument sets of your own: `~/.local/share/dawsome/instruments/`, a folder each (an .sfz,
   its sounds, and a `set.json` naming the set and its maker). A folder there of the same name as
   an installed set plays in its place. SFZ files in your sample folders list under My
@@ -487,8 +781,12 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
 - On Linux the windows open through X11 (XWayland on a Wayland desktop, unless
   `DAWSOME_WINDOW_SYSTEM=wayland`, where the pop-out windows, a panel's own window among them,
   can go under the main one: a Wayland desktop decides how windows stack). A
-  VST3 plugin's own window opens through X11 in either case, at the
-  plugin's own scale (Dawsome gives it none); one without a window opens its parameter window. A
+  plugin's own window, CLAP's or VST3's, opens through X11 in either case. As it opens, Dawsome
+  tells the plugin the scale its window is drawn at: the desktop's, the one Dawsome's own windows
+  get (under X11 one scale for every screen, about 1.7 for a 4K screen set to 170 %), so a plugin
+  that takes it is drawn as large as the rest of the desktop; one that does not keeps its own
+  scale. Dawsome's zoom (Settings → Zoom) does not apply to plugin windows: they are the plugin's
+  own drawing, not Dawsome's. A plugin without a window opens its parameter window. A
   plugin installed as both CLAP and VST3 is listed once, as CLAP (a project naming its VST3 build
   still plays it). VST3 on Windows, its windows included, is built but not yet tried on a Windows
   machine. No LV2 or LADSPA. Plugin latency is shown, not compensated: a VST3 plugin's parameter
@@ -528,8 +826,10 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
 - Pitched sounds are read by 4-point Hermite interpolation; there is no windowed-sinc read, so a
   note far above its sound's root still folds a little of its highs back below. The Density
   saturator runs without oversampling.
-- The built-in effects take each new setting at once, with no smoothing: fast automation of a
-  filter's cutoff or a distortion's drive can be heard stepping. The delay's time is the
+- The built-in effects and Dawsome Synth take each new setting at once, with no smoothing: fast
+  automation of a filter's cutoff or a distortion's drive can be heard stepping. The synth's
+  filter is not turned down as its resonance rises (the Filter effect's is), so a high
+  resonance makes it louder at the cutoff. The delay's time is the
   exception: a change fades from the old echo to the new over 30 ms instead of jumping, so
   turning Time while it sounds does not click.
 - The 16-bit dither is plain TPDF, with no noise shaping, and silence is dithered too: a silent

@@ -1,10 +1,19 @@
 //! The app's own settings, kept per user in `dawsome/settings.json` in the settings folder
 //! ([`project_file::config_dir`]), not in any project: which MIDI inputs play,
 //! `"midi_inputs": "all"` or a list of port names, the window's layout when it last closed
-//! (`"window"`, the panels popped out of it among them, `"popped"`, written only when one is),
-//! the instrument window's, the Settings window's, the Help window's, the
-//! parameter window's and the sample editor's size and position (`"instrument_window"`,
-//! `"settings_window"`, `"help_window"`, `"params_window"`, `"sample_editor_window"`), each
+//! (`"window"`, the panels popped out of it among them, `"popped"`, written only when one is;
+//! its size, as the pop-out windows' below, in the system's logical pixels, so a window keeps its
+//! size on the screen whatever the zoom), the zoom (`"ui_zoom"`, a percentage, written only when
+//! not 100), the theme (`"ui_theme"`, its name, written only when not Slate, the default; a
+//! name this build does not know shows Slate and is kept as it was), the accent of the user's own
+//! (`"ui_accent"`, `"#RRGGBB"`, written only while one is set; a value that is no such colour
+//! shows the theme's and is kept as it was), the piano roll's notes' colour of the user's own
+//! (`"ui_note_color"`, likewise; none: each channel's own),
+//! the instrument window's, the Help window's, the parameter window's and the sample editor's
+//! size and position (`"instrument_window"`, `"help_window"`, `"params_window"`,
+//! `"sample_editor_window"`), the Settings window's position alone (`"settings_window"`: it
+//! opens as a share of the main window's size each time and cannot be resized, so a size an
+//! earlier build kept there is passed over on reading and gone from the next save), each
 //! popped panel's window's (`"panel_windows"`: a panel's name to its place, written once one
 //! was popped), the
 //! sample editor's Snap to zero (`"snap_to_zero"`, written only when off), and the
@@ -17,11 +26,15 @@
 //! than by default (`"keys"`: an action's name to its chords, a comma apart; a name this build
 //! does not know, or a value that is no text, is kept as it was and does nothing, and costs no
 //! other name its chords), the
-//! first-run notes already seen (`"callouts"`, `"keyboard_shown"`) and the piano roll's
-//! velocity lane height and Follow switch (`"piano_roll"`: `"lane_height"`, written only when
-//! dragged off its default, `"follow"`, written only when off), the playlist's Follow switch
-//! and lane height (`"playlist"`: `"follow"`, written only when off, `"lane_height"`, written
-//! only while a height was chosen over the lanes fitting the panel) and the mixer's height
+//! first-run notes already seen (`"callouts"`, `"keyboard_shown"`) and the piano roll's zoom
+//! and Follow switch (`"piano_roll"`: `"zoom"`, pixels per step, written only when not 16,
+//! `"follow"`, written only when off, `"loop_player"`, its player's Loop switch, written only
+//! when off; a `"lane_height"` an earlier build wrote, when a handle
+//! resized the velocity lane, is read and ignored, and not written again), the playlist's
+//! Follow switch,
+//! lane height and zoom (`"playlist"`: `"follow"`, written only when off, `"lane_height"`,
+//! written only while a height was chosen over the lanes fitting the panel, `"zoom"`, pixels per
+//! bar, written only when not 64) and the mixer's height
 //! (`"mixer"`: `"height"`, written only when dragged off its default), and how late the line in
 //! records what the output plays (`"input_latency"`: one entry per output and input device,
 //! [`InputLatency`], written once one is kept). Keys this
@@ -42,9 +55,11 @@ use serde_json::{Map, Value};
 use crate::desktop::PopOut;
 use crate::keys::{Keys, NoteLayout};
 use crate::project_file::{self, SaveError};
+use crate::ui::palette::{Rgb, ThemeId};
 use crate::ui::panels::{Kept, Panel, Panels};
 use crate::ui::playlist_layout::{self, Lanes};
 use crate::ui::{mixer_layout, piano_layout};
+use crate::zoom::Zoom;
 
 /// Which MIDI input ports play.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +158,8 @@ pub struct WindowLayout {
 }
 
 /// The size a first start gives the window under the maximized one, which it shows when the
-/// window is restored.
+/// window is restored: the content's size, which grows with the zoom as every pop-out window's
+/// first size does.
 pub const FIRST_START_SIZE: Size = Size::new(1280.0, 800.0);
 
 /// The smallest window a saved layout restores: a size smaller than this (a file edited by
@@ -166,9 +182,10 @@ pub fn fit_to_monitor(size: Size, monitor: Size) -> Option<Size> {
 }
 
 impl WindowLayout {
-    /// The layout of a window with `panels` open, `size` when not maximized. The Settings
-    /// window is left out: like the instrument window it opens when asked for, not at the next
-    /// start (it was a panel of the main window's before).
+    /// The layout of a window with `panels` open, `size` when not maximized (in the system's
+    /// logical pixels: the window's own times the zoom). The Settings window is left out: like
+    /// the instrument window it opens when asked for, not at the next start (it was a panel of
+    /// the main window's before).
     pub fn of(panels: Panels, size: Size, maximized: bool) -> Self {
         Self {
             panels: panels
@@ -192,6 +209,9 @@ impl WindowLayout {
 /// when it last closed:
 /// its size, and its position where the system tells a window its place (X11 and Windows do; a
 /// Wayland compositor places every window itself and tells it nothing, so there it is none).
+/// The app holds a place in its window's own logical pixels, the layout's; the settings keep it
+/// in the system's ([`WindowPlace::system`]), so a window keeps its size on the screen when the
+/// zoom changes between two runs. The position is the system's in both.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowPlace {
     pub width: f32,
@@ -242,6 +262,50 @@ impl WindowPlace {
     pub fn first(window: PopOut) -> Self {
         Self::of(window.first_size(), None)
     }
+
+    /// This place, held in a window at `zoom`, as the settings keep it: its size times the zoom,
+    /// in the system's logical pixels.
+    pub fn system(self, zoom: Zoom) -> Self {
+        self.sized(zoom.factor())
+    }
+
+    /// A place the settings keep, as a window at `zoom` holds it: its size divided by the zoom
+    /// (the toolkit opens a window of size `s` at `s` times the zoom).
+    pub fn zoomed(self, zoom: Zoom) -> Self {
+        self.sized(1.0 / zoom.factor())
+    }
+
+    fn sized(self, by: f32) -> Self {
+        Self {
+            width: self.width * by,
+            height: self.height * by,
+            ..self
+        }
+    }
+}
+
+/// Where a window the user does not size (the Settings window) was when it last closed: its
+/// position alone, the system's, as [`WindowPlace`] keeps one. Its size is worked out each time
+/// it opens ([`crate::ui::settings_panel::window_size_for`]); a `"width"` and `"height"` beside
+/// the position, as an earlier build kept them, are passed over.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowPosition {
+    pub position: (f32, f32),
+}
+
+impl WindowPosition {
+    /// The position of a window at `at`.
+    pub fn at(at: Point) -> Self {
+        Self {
+            position: (at.x, at.y),
+        }
+    }
+
+    /// Where the window opens: there, when the position is a place at all.
+    pub fn point(&self) -> Option<Point> {
+        let (x, y) = self.position;
+        (x.is_finite() && y.is_finite()).then(|| Point::new(x, y))
+    }
 }
 
 /// How the window opens: its panels, its size, and whether it is maximized.
@@ -253,14 +317,18 @@ pub struct StartWindow {
 }
 
 /// How the window opens with no layout given on the command line: as `saved` left it, or, on a
-/// first start (nothing saved), with the Library, the rack and the playlist, maximized over a
-/// [`FIRST_START_SIZE`] window. A saved layout naming no panel this build knows opens the
-/// rack, so the window is never empty; a saved size too small to use is the first start's.
+/// first start (nothing saved), with the Library, the rack, the playlist and the mixer
+/// ([`Panels::FIRST_START`]), maximized over a [`FIRST_START_SIZE`] window. A saved layout
+/// naming no panel this build knows opens the rack, so the window is never empty; a saved size
+/// too small to use is the first start's. A
+/// saved size, in the system's logical pixels, opens divided by `zoom`, so the window takes the
+/// room on the screen it took (saved 1600 × 1000 at 125 % opens as 1280 × 800, which the
+/// toolkit makes 1600 × 1000 again).
 /// "settings" in a layout an earlier build saved (when Settings was a panel of the main window)
 /// is passed over: the Settings window opens when asked for. The panels it names popped open
 /// popped, each in its own window; a popped name of a panel not open, or of no stacked panel,
 /// is passed over.
-pub fn start_window(saved: Option<&WindowLayout>) -> StartWindow {
+pub fn start_window(saved: Option<&WindowLayout>, zoom: Zoom) -> StartWindow {
     let Some(saved) = saved else {
         return StartWindow {
             panels: Panels::FIRST_START,
@@ -297,7 +365,7 @@ pub fn start_window(saved: Option<&WindowLayout>) -> StartWindow {
             Size::new(
                 saved.width.min(LARGEST_RESTORED.width),
                 saved.height.min(LARGEST_RESTORED.height),
-            )
+            ) * (1.0 / zoom.factor())
         } else {
             FIRST_START_SIZE
         },
@@ -324,13 +392,14 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub instrument_window: Option<WindowPlace>,
-    /// The Settings window's size and position when it last closed; none before.
+    /// The Settings window's position when it last closed; none before, and none where the
+    /// system tells a window nothing of its place (Wayland).
     #[serde(
         default,
         deserialize_with = "lenient",
         skip_serializing_if = "Option::is_none"
     )]
-    pub settings_window: Option<WindowPlace>,
+    pub settings_window: Option<WindowPosition>,
     /// The Help window's size and position when it last closed; none before.
     #[serde(
         default,
@@ -382,6 +451,43 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     show_hints: Option<bool>,
+    /// The zoom, a percentage ([`Zoom`]); written only when not 100. A value off the stops
+    /// reads as the nearest ([`Zoom::nearest`]); one that is no whole number from 0 to 65535 as
+    /// none, 100.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    ui_zoom: Option<u16>,
+    /// The theme, by its name ([`ThemeId::name`]); written only when not Graphite. A name this
+    /// build does not know (a newer build's, a hand edit) shows Graphite and is written back as
+    /// it was; a value that is no text is none.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    ui_theme: Option<String>,
+    /// The accent of the user's own, `"#RRGGBB"` ([`Rgb::hex`]); written only while one is set
+    /// (none: each theme's own). A value that is no such colour (a hand edit) shows the theme's
+    /// and is written back as it was; one that is no text is none.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    ui_accent: Option<String>,
+    /// The colour the piano roll draws its notes and their velocity stems in, `"#RRGGBB"`;
+    /// written only while one is set (none: the channel's own). As [`Settings::accent`]'s: a
+    /// value that is no such colour shows the channel's and is written back as it was; one that
+    /// is no text is none.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    ui_note_color: Option<String>,
     /// The output device chosen: what Settings lists it by ([`crate::audio::SINK`] and a sink's
     /// node name, else its name); written only when one is (none plays through the system's
     /// default output).
@@ -564,14 +670,18 @@ pub struct RollSettings {
         skip_serializing_if = "Option::is_none"
     )]
     height: Option<f32>,
-    /// The velocity lane's height in logical pixels, as its handle left it; written only when
-    /// not the default.
+    /// The velocity lane's height an earlier build kept, as its handle left it: read past and
+    /// never written, the lane's height being fixed now. Why a field, not one of the keys this
+    /// build does not know: those are written back as they were read.
+    #[serde(default, deserialize_with = "lenient", skip_serializing)]
+    lane_height: (),
+    /// The zoom in pixels per step (Ctrl+wheel); written only when not the default.
     #[serde(
         default,
         deserialize_with = "lenient",
         skip_serializing_if = "Option::is_none"
     )]
-    lane_height: Option<f32>,
+    zoom: Option<f32>,
     /// Whether the view jumps a page as the playhead leaves it while playing; written only
     /// when off.
     #[serde(
@@ -580,6 +690,13 @@ pub struct RollSettings {
         skip_serializing_if = "Option::is_none"
     )]
     follow: Option<bool>,
+    /// Whether the roll's Play loops the pattern (else plays it once); written only when off.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    loop_player: Option<bool>,
     /// The piano roll's settings this build does not know, written back as they were read.
     #[serde(flatten)]
     rest: Map<String, Value>,
@@ -610,6 +727,13 @@ pub struct PlaylistSettings {
         skip_serializing_if = "Option::is_none"
     )]
     lane_height: Option<f32>,
+    /// The zoom in pixels per bar (− and +, Ctrl+wheel); written only when not the default.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    zoom: Option<f32>,
     /// The playlist's settings this build does not know, written back as they were read.
     #[serde(flatten)]
     rest: Map<String, Value>,
@@ -728,6 +852,58 @@ impl Settings {
         self.show_hints = (!on).then_some(false);
     }
 
+    /// The zoom: as kept, at its nearest stop; 100 % when none is.
+    pub fn zoom(&self) -> Zoom {
+        self.ui_zoom.map_or(Zoom::DEFAULT, Zoom::nearest)
+    }
+
+    /// Keeps `zoom`; 100 % is written as nothing.
+    pub fn set_zoom(&mut self, zoom: Zoom) {
+        self.ui_zoom = (zoom != Zoom::DEFAULT).then_some(zoom.percent());
+    }
+
+    /// The theme: as kept; the default, Slate, when none is, or when its name is unknown.
+    pub fn theme(&self) -> ThemeId {
+        self.ui_theme
+            .as_deref()
+            .and_then(ThemeId::from_name)
+            .unwrap_or_default()
+    }
+
+    /// The name kept for a theme this build does not know, which shows Slate.
+    pub fn unknown_theme(&self) -> Option<&str> {
+        self.ui_theme
+            .as_deref()
+            .filter(|name| ThemeId::from_name(name).is_none())
+    }
+
+    /// Keeps `theme`; the default, Slate, is written as nothing.
+    pub fn set_theme(&mut self, theme: ThemeId) {
+        self.ui_theme = (theme != ThemeId::default()).then(|| theme.name().to_owned());
+    }
+
+    /// The accent of the user's own, as kept; none when none is, or when what is kept is no
+    /// colour.
+    pub fn accent(&self) -> Option<Rgb> {
+        self.ui_accent.as_deref().and_then(Rgb::parse)
+    }
+
+    /// Keeps `accent` as the user's own; none: each theme's own, written as nothing.
+    pub fn set_accent(&mut self, accent: Option<Rgb>) {
+        self.ui_accent = accent.map(Rgb::hex);
+    }
+
+    /// The piano roll's notes' colour of the user's own, as kept; none when none is (each
+    /// channel's own colour), or when what is kept is no colour.
+    pub fn note_color(&self) -> Option<Rgb> {
+        self.ui_note_color.as_deref().and_then(Rgb::parse)
+    }
+
+    /// Keeps `color` as the piano roll's notes'; none: each channel's own, written as nothing.
+    pub fn set_note_color(&mut self, color: Option<Rgb>) {
+        self.ui_note_color = color.map(Rgb::hex);
+    }
+
     /// The output device chosen, as Settings lists it (`sink:<node name>`, or its name); none
     /// for the system's default.
     pub fn audio_output(&self) -> Option<&str> {
@@ -815,23 +991,22 @@ impl Settings {
         );
     }
 
-    /// The piano roll's velocity lane height: as its handle left it, kept to the heights the
-    /// handle drags it to ([`piano_layout::kept_lane`]), the default until it is dragged.
-    pub fn lane_height(&self) -> f32 {
+    /// The piano roll's zoom in pixels per step: as kept, held to its ends (4..64); the default,
+    /// 16, when none is or the kept one is no number.
+    pub fn roll_zoom(&self) -> f32 {
         self.piano_roll
-            .lane_height
-            .map_or(piano_layout::LANE_HEIGHT, piano_layout::kept_lane)
+            .zoom
+            .map_or(piano_layout::ZOOM.default, |px| piano_layout::ZOOM.kept(px))
     }
 
-    /// Keeps the velocity lane `height` tall; the default is written as nothing.
-    pub fn set_lane_height(&mut self, height: f32) {
-        let height = piano_layout::kept_lane(height);
-        self.piano_roll.lane_height = (height != piano_layout::LANE_HEIGHT).then_some(height);
+    /// Keeps the piano roll's zoom `px` pixels per step; the default is written as nothing.
+    pub fn set_roll_zoom(&mut self, px: f32) {
+        self.piano_roll.zoom = (px != piano_layout::ZOOM.default).then_some(px);
     }
 
     /// The heights the dividers between the stacked panels left the rack, the piano roll and
     /// the mixer ([`Kept`]): a stored value that is no number is none; the mixer's is never
-    /// under its least height ([`mixer_layout::LEAST_HEIGHT`], 225: a height an earlier build
+    /// under its least height ([`mixer_layout::LEAST_HEIGHT`], 235: a height an earlier build
     /// let the divider leave, down to 180, reads as that), nor any under nothing (the stack
     /// keeps each at least at its least height).
     pub fn kept_heights(&self) -> Kept {
@@ -891,6 +1066,21 @@ impl Settings {
         };
     }
 
+    /// The playlist's zoom in pixels per bar: as kept, held to its ends (16..256); the default,
+    /// 64, when none is or the kept one is no number.
+    pub fn playlist_zoom(&self) -> f32 {
+        self.playlist
+            .zoom
+            .map_or(playlist_layout::ZOOM.default, |px| {
+                playlist_layout::ZOOM.kept(px)
+            })
+    }
+
+    /// Keeps the playlist's zoom `px` pixels per bar; the default is written as nothing.
+    pub fn set_playlist_zoom(&mut self, px: f32) {
+        self.playlist.zoom = (px != playlist_layout::ZOOM.default).then_some(px);
+    }
+
     /// Whether `panel`'s view jumps a page as the playhead leaves it while playing: on unless
     /// switched off, for the piano roll and the playlist; no other panel follows.
     pub fn follows(&self, panel: Panel) -> bool {
@@ -899,6 +1089,47 @@ impl Settings {
             Panel::Playlist => self.playlist.follow != Some(false),
             _ => false,
         }
+    }
+
+    /// Settings → General's "Reset to defaults": the looks and the layout as a first start has
+    /// them. The zoom, the theme, the accent and the notes' colour; the window's panels (the
+    /// first start's, none popped; its size kept), the dividers' heights (the rack's, the piano
+    /// roll's and the mixer's); the playlist's zoom and lane height; the piano roll's zoom and
+    /// Follow; the Library's folded groups; the hint bar shown. Kept: the MIDI inputs, the audio
+    /// devices and the input latency, the shortcuts, the pop-out windows' places, the first-run
+    /// notes put away, the typing keyboard, the playlist's Follow and the roll player's Loop (how
+    /// it plays, no look), and whatever this build
+    /// does not know. Why not everything: devices and keys are set up once and are tedious to
+    /// set again, and a reset is for a look or a layout gone astray.
+    pub fn reset_looks_and_layout(&mut self) {
+        self.ui_zoom = None;
+        self.ui_theme = None;
+        self.ui_accent = None;
+        self.ui_note_color = None;
+        if let Some(window) = &mut self.window {
+            let first = WindowLayout::of(Panels::FIRST_START, Size::ZERO, false);
+            window.panels = first.panels;
+            window.popped.clear();
+        }
+        self.rack.height = None;
+        self.piano_roll.height = None;
+        self.mixer.height = None;
+        self.playlist.zoom = None;
+        self.playlist.lane_height = None;
+        self.piano_roll.zoom = None;
+        self.piano_roll.follow = None;
+        self.library.folded.clear();
+        self.show_hints = None;
+    }
+
+    /// Whether the piano roll's Play loops the pattern: on unless switched off.
+    pub fn loops_roll_player(&self) -> bool {
+        self.piano_roll.loop_player != Some(false)
+    }
+
+    /// Switches the piano roll's Loop on or off; on is written as nothing.
+    pub fn set_loops_roll_player(&mut self, on: bool) {
+        self.piano_roll.loop_player = (!on).then_some(false);
     }
 
     /// Switches `panel`'s Follow on or off; a panel without one changes nothing.
@@ -996,6 +1227,11 @@ impl Settings {
                 text("audio_input"),
                 text("note_layout"),
             );
+            let (ui_theme, ui_accent, ui_note_color) =
+                (text("ui_theme"), text("ui_accent"), text("ui_note_color"));
+            let ui_zoom = rest
+                .remove("ui_zoom")
+                .and_then(|value| serde_json::from_value(value).ok());
             let mut read = |key: &str| rest.remove(key).unwrap_or(Value::Null);
             let keys = serde_json::from_value(read("keys")).unwrap_or_default();
             let callouts = serde_json::from_value(read("callouts")).unwrap_or_default();
@@ -1017,6 +1253,10 @@ impl Settings {
                 snap_to_zero,
                 preview_notes,
                 show_hints,
+                ui_zoom,
+                ui_theme,
+                ui_accent,
+                ui_note_color,
                 audio_output,
                 audio_output_name,
                 audio_input,
@@ -1093,6 +1333,355 @@ mod tests {
             rate,
             measured,
         }
+    }
+
+    // The zoom in settings.json: absent reads 100 % and nothing is written for 100, so every
+    // settings file written before stays byte for byte; 125 is written "ui_zoom": 125 and read
+    // back; a value off the stops reads as the nearest (123 as 125, 300 as 200, 0 as 50); one
+    // that is no whole number from 0 to 65535 ("big", -5, 1.25) reads as 100, the other keys
+    // keeping theirs.
+    #[test]
+    fn the_zoom_is_kept_off_100_and_read_to_its_nearest_stop() {
+        let dir = std::env::temp_dir().join(format!("dawsome-zoom-set-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("settings.json");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let mut settings = Settings::default();
+        assert_eq!(settings.zoom(), Zoom::DEFAULT);
+        settings.save(&file).expect("saves");
+        assert_eq!(
+            fs::read_to_string(&file).expect("reads"),
+            "{\n  \"midi_inputs\": []\n}\n"
+        );
+        settings.set_zoom(Zoom::exact(125).expect("a stop"));
+        settings.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_zoom": 125"#), "{text}");
+        assert_eq!(Settings::load(Some(&file)).zoom().percent(), 125);
+        settings.set_zoom(Zoom::DEFAULT);
+        settings.save(&file).expect("saves");
+        assert!(!fs::read_to_string(&file)
+            .expect("reads")
+            .contains("ui_zoom"));
+        for (written, read) in [
+            ("123", 125),
+            ("300", 200),
+            ("0", 50),
+            (r#""big""#, 100),
+            ("-5", 100),
+            ("1.25", 100),
+        ] {
+            let text = format!(r#"{{"ui_zoom":{written},"show_hints":false}}"#);
+            fs::write(&file, text).expect("writes");
+            let loaded = Settings::load(Some(&file));
+            assert_eq!(loaded.zoom().percent(), read, "{written}");
+            assert!(
+                !loaded.show_hints(),
+                "{written}: the other keys keep theirs"
+            );
+        }
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // Themes, in settings.json: absent reads Slate, the default, and nothing is written for it;
+    // Gilt is written "ui_theme": "gilt" and read back, Graphite "ui_theme": "graphite" (written
+    // as nothing while it was the default, so a file from then reads Slate: the default moved,
+    // as asked); "walnut", the name Gilt had in a build before, reads as Gilt, is no unknown name
+    // and is written back as it was until a theme is chosen; a name this build does not know
+    // ("oak", a newer build's) reads as Slate, is named as unknown and is written back as it
+    // was; one that is no text (3) is none, the other keys keeping theirs.
+    #[test]
+    fn the_theme_is_kept_by_name_and_an_unknown_one_shows_slate() {
+        let dir = std::env::temp_dir().join(format!("dawsome-theme-set-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("settings.json");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let mut settings = Settings::default();
+        assert_eq!(settings.theme(), ThemeId::Slate);
+        settings.set_theme(ThemeId::Gilt);
+        settings.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_theme": "gilt""#), "{text}");
+        assert_eq!(Settings::load(Some(&file)).theme(), ThemeId::Gilt);
+        fs::write(&file, r#"{"ui_theme":"walnut","show_hints":false}"#).expect("writes");
+        let mut earlier = Settings::load(Some(&file));
+        assert_eq!(
+            (earlier.theme(), earlier.unknown_theme()),
+            (ThemeId::Gilt, None)
+        );
+        earlier.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_theme": "walnut""#), "kept: {text}");
+        earlier.set_theme(ThemeId::Gilt);
+        earlier.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(
+            text.contains(r#""ui_theme": "gilt""#),
+            "chosen again: {text}"
+        );
+        settings.set_theme(ThemeId::Graphite);
+        settings.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_theme": "graphite""#), "{text}");
+        assert_eq!(Settings::load(Some(&file)).theme(), ThemeId::Graphite);
+        settings.set_theme(ThemeId::Slate);
+        settings.save(&file).expect("saves");
+        assert_eq!(
+            fs::read_to_string(&file).expect("reads"),
+            "{\n  \"midi_inputs\": []\n}\n"
+        );
+        fs::write(&file, r#"{"ui_theme":"oak","show_hints":false}"#).expect("writes");
+        let newer = Settings::load(Some(&file));
+        assert_eq!(newer.theme(), ThemeId::Slate);
+        assert_eq!(newer.unknown_theme(), Some("oak"));
+        newer.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_theme": "oak""#), "kept: {text}");
+        fs::write(&file, r#"{"ui_theme":3,"show_hints":false}"#).expect("writes");
+        let odd = Settings::load(Some(&file));
+        assert_eq!((odd.theme(), odd.unknown_theme()), (ThemeId::Slate, None));
+        assert!(!odd.show_hints(), "the other keys keep theirs");
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // The accent, in settings.json: absent reads none (each theme's own) and nothing is written
+    // for it, so every settings file written before stays byte for byte; #3FA7D6 is written
+    // "ui_accent": "#3FA7D6" and read back; one in small letters, hand-written, reads too; a value
+    // that is no colour ("blue", a three-digit "#36D") reads none and is written back as it was;
+    // one that is no text (7) is none, the other keys keeping theirs.
+    #[test]
+    fn the_accent_is_kept_as_hex_and_anything_else_shows_the_themes() {
+        let dir = std::env::temp_dir().join(format!("dawsome-accent-set-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("settings.json");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let blue = Rgb([0x3F, 0xA7, 0xD6]);
+        let mut settings = Settings::default();
+        assert_eq!(settings.accent(), None);
+        settings.set_accent(Some(blue));
+        settings.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r##""ui_accent": "#3FA7D6""##), "{text}");
+        assert_eq!(Settings::load(Some(&file)).accent(), Some(blue));
+        settings.set_accent(None);
+        settings.save(&file).expect("saves");
+        assert_eq!(
+            fs::read_to_string(&file).expect("reads"),
+            "{\n  \"midi_inputs\": []\n}\n"
+        );
+        fs::write(&file, r##"{"ui_accent":"#3fa7d6"}"##).expect("writes");
+        assert_eq!(Settings::load(Some(&file)).accent(), Some(blue));
+        for odd in ["blue", "#36D"] {
+            fs::write(
+                &file,
+                format!(r#"{{"ui_accent":"{odd}","show_hints":false}}"#),
+            )
+            .expect("writes");
+            let read = Settings::load(Some(&file));
+            assert_eq!(read.accent(), None, "{odd}");
+            read.save(&file).expect("saves");
+            let text = fs::read_to_string(&file).expect("reads");
+            assert!(
+                text.contains(&format!(r#""ui_accent": "{odd}""#)),
+                "kept: {text}"
+            );
+        }
+        fs::write(&file, r#"{"ui_accent":7,"show_hints":false}"#).expect("writes");
+        let number = Settings::load(Some(&file));
+        assert_eq!(number.accent(), None);
+        assert!(!number.show_hints(), "the other keys keep theirs");
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // The piano roll's notes' colour, in settings.json, as the accent's: absent reads none (each
+    // channel's own) and nothing is written for it, so a file written before stays byte for
+    // byte; #3FA7D6 is written "ui_note_color": "#3FA7D6" beside an accent of its own and read
+    // back, the two apart; one in small letters reads too; one that is no colour ("blue") reads
+    // none and is written back as it was.
+    #[test]
+    fn the_note_colour_is_kept_as_hex_beside_the_accent() {
+        let dir = std::env::temp_dir().join(format!("dawsome-note-color-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("settings.json");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let (blue, green) = (Rgb([0x3F, 0xA7, 0xD6]), Rgb([0x6C, 0xC2, 0x4A]));
+        let mut settings = Settings::default();
+        assert_eq!(settings.note_color(), None);
+        settings.set_note_color(Some(blue));
+        settings.set_accent(Some(green));
+        settings.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r##""ui_note_color": "#3FA7D6""##), "{text}");
+        let read = Settings::load(Some(&file));
+        assert_eq!(
+            (read.note_color(), read.accent()),
+            (Some(blue), Some(green))
+        );
+        settings.set_note_color(None);
+        settings.set_accent(None);
+        settings.save(&file).expect("saves");
+        assert_eq!(
+            fs::read_to_string(&file).expect("reads"),
+            "{\n  \"midi_inputs\": []\n}\n"
+        );
+        fs::write(&file, r##"{"ui_note_color":"#3fa7d6"}"##).expect("writes");
+        assert_eq!(Settings::load(Some(&file)).note_color(), Some(blue));
+        fs::write(&file, r#"{"ui_note_color":"blue"}"#).expect("writes");
+        let odd = Settings::load(Some(&file));
+        assert_eq!(odd.note_color(), None);
+        odd.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_note_color": "blue""#), "kept: {text}");
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // "Reset to defaults", by a table written by hand: a settings file with every key it resets
+    // set off its default and every key it keeps set too. After the reset each reset key reads
+    // its default (zoom 100 %, Graphite, the theme's accent, each channel's colour, the first
+    // start's panels Library, rack and playlist with none popped, no divider height kept, the
+    // playlist at 64 px a bar fitting its lanes, the piano roll at 16 px a step following, no
+    // Library group folded, the hints shown) and is written as nothing, and every kept key
+    // reads as it was (the MIDI inputs, the output and input devices, the input latency, a
+    // shortcut, the pop-out windows' places, the first-run notes, the note layout, the playlist's
+    // Follow, the window's size, a key this build does not know).
+    #[test]
+    fn a_reset_restores_the_looks_and_layout_and_keeps_the_rest() {
+        let file = r##"{
+            "midi_inputs": "all",
+            "window": {"panels": ["piano-roll", "mixer"], "width": 1500.0, "height": 900.0,
+                       "maximized": false, "popped": ["mixer"]},
+            "instrument_window": {"width": 600.0, "height": 500.0},
+            "panel_windows": {"mixer": {"width": 1000.0, "height": 300.0}},
+            "ui_zoom": 150, "ui_theme": "gilt", "ui_accent": "#3FA7D6",
+            "ui_note_color": "#E8F04A",
+            "audio_output": "sink:speakers", "audio_output_name": "Speakers",
+            "audio_input": "Line in", "note_layout": "two-rows",
+            "keys": {"play": "Ctrl+P"},
+            "callouts": {"keyboard_shown": true, "record_shown": true},
+            "show_hints": false,
+            "rack": {"height": 300.0},
+            "piano_roll": {"height": 400.0, "zoom": 32.0, "follow": false},
+            "playlist": {"follow": false, "lane_height": 48.0, "zoom": 128.0},
+            "mixer": {"height": 312.0},
+            "library": {"folded": ["Plugins"]},
+            "input_latency": [{"output": "o", "input": "i", "input_latency_frames": 1234,
+                               "rate": 48000, "measured": true}],
+            "newer_key": 7
+        }"##;
+        let mut settings: Settings = serde_json::from_str(file).expect("reads");
+        let before = settings.clone();
+        // Every kept key read as written, so keeping it is no default kept.
+        assert_eq!(settings.zoom().percent(), 150);
+        assert_eq!(settings.midi_inputs, MidiInputs::All);
+        assert_eq!(settings.audio_input(), Some("Line in"));
+        assert_eq!(settings.input_latency.len(), 1);
+        assert_ne!(settings.keys(), Keys::default());
+        assert!(settings.callouts.keyboard_shown && settings.callouts.record_shown);
+        assert_eq!(settings.note_layout(), NoteLayout::TwoRows);
+        assert!(settings.instrument_window.is_some() && !settings.panel_windows.is_empty());
+        settings.reset_looks_and_layout();
+        let first_start: Vec<String> = ["browser", "rack", "playlist", "mixer"]
+            .map(String::from)
+            .into();
+        let window = settings.window.clone().expect("a window layout");
+        let reset = [
+            ("ui_zoom", settings.zoom().percent() == 100),
+            ("ui_theme", settings.theme() == ThemeId::Slate),
+            ("ui_accent", settings.accent().is_none()),
+            ("ui_note_color", settings.note_color().is_none()),
+            ("window panels", window.panels == first_start),
+            ("window popped", window.popped.is_empty()),
+            (
+                "divider heights",
+                settings.kept_heights() == Kept::default(),
+            ),
+            ("playlist zoom", settings.playlist_zoom() == 64.0),
+            ("playlist lanes", settings.playlist_lanes() == Lanes::Fit),
+            ("roll zoom", settings.roll_zoom() == 16.0),
+            ("roll follow", settings.follows(Panel::PianoRoll)),
+            ("library folded", settings.library_folded().is_empty()),
+            ("hints", settings.show_hints()),
+        ];
+        for (key, default) in reset {
+            assert!(default, "{key} is back to its default");
+        }
+        let kept = [
+            ("midi inputs", settings.midi_inputs == before.midi_inputs),
+            ("output", settings.audio_output() == before.audio_output()),
+            ("input", settings.audio_input() == before.audio_input()),
+            ("latency", settings.input_latency == before.input_latency),
+            ("keys", settings.keys() == before.keys()),
+            (
+                "instrument window",
+                settings.instrument_window == before.instrument_window,
+            ),
+            (
+                "panel windows",
+                settings.panel_windows == before.panel_windows,
+            ),
+            ("callouts", settings.callouts == before.callouts),
+            (
+                "note layout",
+                settings.note_layout() == before.note_layout(),
+            ),
+            ("playlist follow", !settings.follows(Panel::Playlist)),
+            (
+                "window size",
+                (window.width, window.height) == (1500.0, 900.0),
+            ),
+            (
+                "unknown key",
+                settings.rest.get("newer_key") == Some(&Value::from(7)),
+            ),
+        ];
+        for (key, same) in kept {
+            assert!(same, "{key} is kept");
+        }
+        let written = serde_json::to_value(&settings).expect("writes");
+        for key in [
+            "ui_zoom",
+            "ui_theme",
+            "ui_accent",
+            "ui_note_color",
+            "show_hints",
+            "rack",
+            "mixer",
+            "library",
+        ] {
+            assert!(
+                written.get(key).is_none(),
+                "{key} written as nothing: {written}"
+            );
+        }
+        assert_eq!(written["piano_roll"], Value::Null, "{written}");
+        assert_eq!(written["playlist"], serde_json::json!({"follow": false}));
+    }
+
+    // Known answer: a window's size is kept in the system's logical pixels, so a window
+    // saved 1600 x 1000 at a zoom of 125 % opens asking the toolkit for 1280 x 800 (1600 / 1.25,
+    // 1000 / 1.25), which it makes 1600 x 1000 again; at 100 % as saved. A first start's size
+    // is the content's and stays 1280 x 800 at any zoom (the toolkit grows it). A pop-out's
+    // place round-trips the same way: 800 x 600 in a window at 125 % is kept as 1000 x 750 and
+    // opens at 800 x 600 again, its position (the system's own) untouched.
+    #[test]
+    fn a_saved_window_size_opens_divided_by_the_zoom() {
+        let zoom = Zoom::exact(125).expect("a stop");
+        let saved = WindowLayout::of(Panels::default(), Size::new(1600.0, 1000.0), false);
+        assert_eq!(
+            start_window(Some(&saved), zoom).size,
+            Size::new(1280.0, 800.0)
+        );
+        assert_eq!(
+            start_window(Some(&saved), Zoom::DEFAULT).size,
+            Size::new(1600.0, 1000.0)
+        );
+        assert_eq!(start_window(None, zoom).size, FIRST_START_SIZE);
+        let place = WindowPlace::of(Size::new(800.0, 600.0), Some(Point::new(30.0, 40.0)));
+        let kept = place.system(zoom);
+        assert_eq!((kept.width, kept.height), (1000.0, 750.0));
+        assert_eq!(kept.position(), Some(Point::new(30.0, 40.0)));
+        assert_eq!(kept.zoomed(zoom), place);
+        assert_eq!(place.system(Zoom::DEFAULT), place);
     }
 
     // gen_p23: a latency is kept per output and input device, read back as written beside the
@@ -1261,14 +1850,14 @@ mod tests {
         fs::remove_dir_all(&dir).expect("removed");
     }
 
-    // A first start (nothing saved) opens the Library, the rack and the playlist, maximized
-    // over a 1280 x 800 window; a saved layout opens as it closed; one naming no panel this
-    // build knows opens the rack, and one too small to use opens 1280 x 800. And
+    // A first start (nothing saved) opens the Library, the rack, the playlist and the mixer,
+    // maximized over a 1280 x 800 window; a saved layout opens as it closed; one naming no panel
+    // this build knows opens the rack, and one too small to use opens 1280 x 800. And
     // the Settings window is kept out of the layout, and "settings" an earlier build saved
     // opens nothing.
     #[test]
     fn the_window_opens_as_it_closed_or_as_a_first_start() {
-        let first = start_window(None);
+        let first = start_window(None, crate::zoom::Zoom::DEFAULT);
         assert_eq!(
             first,
             StartWindow {
@@ -1283,7 +1872,7 @@ mod tests {
         let saved = WindowLayout::of(mixer, Size::new(1100.0, 700.0), false);
         assert_eq!(saved.panels, ["piano-roll", "mixer"]);
         assert_eq!(
-            start_window(Some(&saved)),
+            start_window(Some(&saved), crate::zoom::Zoom::DEFAULT),
             StartWindow {
                 panels: mixer,
                 size: Size::new(1100.0, 700.0),
@@ -1298,7 +1887,7 @@ mod tests {
             popped: Vec::new(),
         };
         assert_eq!(
-            start_window(Some(&unknown)),
+            start_window(Some(&unknown), crate::zoom::Zoom::DEFAULT),
             StartWindow {
                 panels: Panels::default(),
                 size: FIRST_START_SIZE,
@@ -1313,13 +1902,16 @@ mod tests {
             panels: vec!["rack".to_owned(), "settings".to_owned()],
             ..saved
         };
-        let opened = start_window(Some(&earlier)).panels;
+        let opened = start_window(Some(&earlier), crate::zoom::Zoom::DEFAULT).panels;
         assert!(opened.rack && !opened.settings, "{opened:?}");
         let alone = WindowLayout {
             panels: vec!["settings".to_owned()],
             ..earlier
         };
-        assert_eq!(start_window(Some(&alone)).panels, Panels::default());
+        assert_eq!(
+            start_window(Some(&alone), crate::zoom::Zoom::DEFAULT).panels,
+            Panels::default()
+        );
     }
 
     // A popped panel: the layout names it under "popped" and its window's place is kept under
@@ -1328,7 +1920,10 @@ mod tests {
     // layout opens the panel popped and its window where it was. A popped name of a panel not
     // open, or of no stacked panel, pops nothing; a "panel_windows" this build cannot read
     // keeps no place, and the keys beside it still read. A place too small for the panel's
-    // window (under 480 px wide, or under the roll's least height) opens at the first size.
+    // window (under the roll's 608 px wide, the other panels' 480, or under the roll's least
+    // height) opens at the first size: the roll at 470 or 607 px, not at 608; the playlist at 607
+    // as kept. (Pins moved: the roll's least width was 480, the other panels', then 604 until
+    // the player's box.)
     #[test]
     fn popped_panels_and_their_windows_read_and_write_beside_the_layout() {
         let mut panels = Panels::NONE;
@@ -1351,13 +1946,15 @@ mod tests {
         assert_eq!(read, settings);
         assert_eq!(read.panel_window(Panel::PianoRoll), Some(place));
         assert_eq!(read.panel_window(Panel::Mixer), None);
-        let opened = start_window(read.window.as_ref()).panels;
+        let opened = start_window(read.window.as_ref(), crate::zoom::Zoom::DEFAULT).panels;
         assert_eq!(opened, panels);
         assert_eq!(opened.stacked().collect::<Vec<_>>(), [Panel::Playlist]);
         let earlier = r#"{"midi_inputs":"all","window":{"panels":["playlist","piano-roll"],"width":1280.0,"height":800.0,"maximized":false}}"#;
         let read: Settings = serde_json::from_str(earlier).expect("reads");
         assert_eq!(
-            start_window(read.window.as_ref()).panels.popped,
+            start_window(read.window.as_ref(), crate::zoom::Zoom::DEFAULT)
+                .panels
+                .popped,
             crate::ui::panels::Popped::NONE
         );
         assert_eq!(serde_json::to_string(&read).expect("writes"), earlier);
@@ -1370,7 +1967,7 @@ mod tests {
             ],
             ..WindowLayout::of(Panels::NONE, Size::new(1280.0, 800.0), false)
         };
-        let opened = start_window(Some(&stray)).panels;
+        let opened = start_window(Some(&stray), crate::zoom::Zoom::DEFAULT).panels;
         assert!(!opened.mixer && !opened.browser);
         assert_eq!(
             opened.popped.panels().collect::<Vec<_>>(),
@@ -1381,9 +1978,20 @@ mod tests {
         assert_eq!(bad.midi_inputs, MidiInputs::All);
         assert_eq!(bad.panel_window(Panel::PianoRoll), None);
         let roll = PopOut::Panel(Panel::PianoRoll);
+        for narrow in [470.0, 607.0] {
+            assert_eq!(
+                WindowPlace::of(Size::new(narrow, 420.0), None).size(roll),
+                Size::new(1000.0, 480.0),
+                "{narrow}"
+            );
+        }
         assert_eq!(
-            WindowPlace::of(Size::new(470.0, 420.0), None).size(roll),
-            Size::new(1000.0, 480.0)
+            WindowPlace::of(Size::new(608.0, 420.0), None).size(roll),
+            Size::new(608.0, 420.0)
+        );
+        assert_eq!(
+            WindowPlace::of(Size::new(607.0, 420.0), None).size(PopOut::Panel(Panel::Playlist)),
+            Size::new(607.0, 420.0)
         );
         assert_eq!(
             WindowPlace::of(Size::new(900.0, 223.0), None).size(roll),
@@ -1437,50 +2045,70 @@ mod tests {
         assert!(odd.preview_notes(), "a value it cannot read is the default");
     }
 
-    // The velocity lane's height is written under "piano_roll" only when the
-    // handle left it off the default (64); it reads back kept to the handle's limits (32..120),
-    // a value it cannot read is the default, and the piano roll's keys this build does not know
-    // stay as they were.
+    // The piano roll's zoom under "piano_roll" as "zoom", pixels per step, written only off the
+    // default 16; it reads back held to 4..64 (900 is 64, 2 is 4), and a value that is no number
+    // is the default, the piano roll's keys this build does not know staying as they were. A
+    // file this build cannot read whole still gives its zoom.
     #[test]
-    fn the_lane_height_is_kept_only_off_its_default() {
+    fn the_roll_zoom_is_kept_only_off_its_default() {
         let mut settings = Settings::default();
-        assert_eq!(settings.lane_height(), 64.0);
-        settings.set_lane_height(94.0);
+        assert_eq!(settings.roll_zoom(), 16.0);
+        settings.set_roll_zoom(19.5);
         let written = serde_json::to_string(&settings).expect("writes");
-        assert_eq!(
-            written,
-            r#"{"midi_inputs":[],"piano_roll":{"lane_height":94.0}}"#
-        );
+        assert_eq!(written, r#"{"midi_inputs":[],"piano_roll":{"zoom":19.5}}"#);
         let read: Settings = serde_json::from_str(&written).expect("reads");
-        assert_eq!(read.lane_height(), 94.0);
-        settings.set_lane_height(64.0);
+        assert_eq!(read.roll_zoom(), 19.5);
+        settings.set_roll_zoom(16.0);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
             r#"{"midi_inputs":[]}"#
         );
-        let tall: Settings =
-            serde_json::from_str(r#"{"piano_roll":{"lane_height":900}}"#).expect("reads");
-        // P2, pin moved: 120 once the grid's 10 px scroll bar sits under the grid (130 in P1).
-        assert_eq!(tall.lane_height(), 120.0);
+        let far: Settings = serde_json::from_str(r#"{"piano_roll":{"zoom":900}}"#).expect("reads");
+        let near: Settings = serde_json::from_str(r#"{"piano_roll":{"zoom":2}}"#).expect("reads");
+        assert_eq!((far.roll_zoom(), near.roll_zoom()), (64.0, 4.0));
         let odd: Settings =
-            serde_json::from_str(r#"{"piano_roll":{"lane_height":"tall","zoom":3}}"#)
-                .expect("reads");
-        assert_eq!(odd.lane_height(), 64.0);
+            serde_json::from_str(r#"{"piano_roll":{"zoom":"close","width":3}}"#).expect("reads");
+        assert_eq!(odd.roll_zoom(), 16.0);
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"piano_roll":{"zoom":3}}"#
+            r#"{"midi_inputs":[],"piano_roll":{"width":3}}"#
         );
-        // A file this build cannot read whole still gives its lane height.
         let (dir, file) = settings_file_with(
-            "lane_height",
-            r#"{"midi_inputs":"some","piano_roll":{"lane_height":40.0}}"#,
+            "roll_zoom",
+            r#"{"midi_inputs":"some","piano_roll":{"zoom":40.0}}"#,
         );
         let beside = Settings::load(Some(&file));
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(
-            beside.lane_height(),
+            beside.roll_zoom(),
             40.0,
             "kept beside a value it cannot read"
+        );
+    }
+
+    // The velocity lane's height an earlier build kept under "piano_roll" (its handle dragged
+    // it to 94; or no number) is read and ignored: not written again, the piano roll's other
+    // keys kept, so a section holding nothing else goes.
+    #[test]
+    fn a_kept_lane_height_is_read_and_not_written_again() {
+        for old in [
+            r#"{"piano_roll":{"lane_height":94.0}}"#,
+            r#"{"piano_roll":{"lane_height":"tall"}}"#,
+        ] {
+            let read: Settings = serde_json::from_str(old).expect("reads");
+            assert_eq!(
+                serde_json::to_string(&read).expect("writes"),
+                r#"{"midi_inputs":[]}"#,
+                "{old}"
+            );
+        }
+        let beside: Settings =
+            serde_json::from_str(r#"{"piano_roll":{"lane_height":40.0,"follow":false}}"#)
+                .expect("reads");
+        assert!(!beside.follows(Panel::PianoRoll));
+        assert_eq!(
+            serde_json::to_string(&beside).expect("writes"),
+            r#"{"midi_inputs":[],"piano_roll":{"follow":false}}"#
         );
     }
 
@@ -1520,14 +2148,46 @@ mod tests {
         );
     }
 
+    // The playlist's zoom under "playlist" as "zoom", pixels per bar, written only off the
+    // default 64 and beside the playlist's other keys; it reads back held to 16..256 (900 is 256,
+    // 2 is 16), and a value that is no number is the default, the other keys keeping theirs.
+    #[test]
+    fn the_playlist_zoom_is_kept_only_off_its_default() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.playlist_zoom(), 64.0);
+        settings.set_playlist_zoom(90.5);
+        settings.set_playlist_lanes(Lanes::Fixed(48.0));
+        let written = serde_json::to_string(&settings).expect("writes");
+        assert_eq!(
+            written,
+            r#"{"midi_inputs":[],"playlist":{"lane_height":48.0,"zoom":90.5}}"#
+        );
+        let read: Settings = serde_json::from_str(&written).expect("reads");
+        assert_eq!(read.playlist_zoom(), 90.5);
+        settings.set_playlist_zoom(64.0);
+        settings.set_playlist_lanes(Lanes::Fit);
+        assert_eq!(
+            serde_json::to_string(&settings).expect("writes"),
+            r#"{"midi_inputs":[]}"#
+        );
+        let read = |text: &str| -> Settings { serde_json::from_str(text).expect("reads") };
+        assert_eq!(read(r#"{"playlist":{"zoom":900}}"#).playlist_zoom(), 256.0);
+        assert_eq!(read(r#"{"playlist":{"zoom":2}}"#).playlist_zoom(), 16.0);
+        let odd = read(r#"{"playlist":{"zoom":"close","follow":false}}"#);
+        assert_eq!(odd.playlist_zoom(), 64.0);
+        assert!(!odd.follows(Panel::Playlist));
+    }
+
     // The mixer's height is written under "mixer" only when its handle left it
-    // off the default (225, its compact strip's least; was 310, and 400 before that); it
-    // reads back no lower than its least (225: the 12 here, and the 182 a
+    // off the default (235, its compact strip's least; 225 until its route button grew to a
+    // 24 px target, 310 and 400 before that); it reads back no lower than its least (235: the
+    // 12 here, and the 182 a
     // divider left under the old least of 180), a value that is no number is the
     // default, and the mixer's keys this build does not know stay. The old default, 310, is a
     // kept height now, written as one. The
     // playlist's lanes fit the panel unless a height was chosen, written only then and read back
-    // kept to 32..96; a choice that is no number fits. (Resizable dividers: the mixer's height is
+    // kept to 32..106 (32..96 until the lanes grew a tenth: 900 read back as 96); a choice
+    // that is no number fits. (Resizable dividers: the mixer's height is
     // one of the kept heights, read and written through them under the same key.)
     #[test]
     fn the_mixer_height_and_the_playlist_lanes_are_kept_only_off_their_defaults() {
@@ -1536,7 +2196,7 @@ mod tests {
             ..Kept::default()
         };
         let mut settings = Settings::default();
-        assert_eq!(settings.kept_heights().mixer_height(), 225.0);
+        assert_eq!(settings.kept_heights().mixer_height(), 235.0);
         assert_eq!(settings.playlist_lanes(), Lanes::Fit);
         settings.set_kept_heights(&mixer(312.0));
         settings.set_playlist_lanes(Lanes::Fixed(64.0));
@@ -1553,7 +2213,7 @@ mod tests {
             serde_json::to_string(&settings).expect("writes"),
             r#"{"midi_inputs":[],"playlist":{"lane_height":64.0},"mixer":{"height":310.0}}"#
         );
-        settings.set_kept_heights(&mixer(225.0));
+        settings.set_kept_heights(&mixer(235.0));
         settings.set_playlist_lanes(Lanes::Fit);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
@@ -1563,11 +2223,11 @@ mod tests {
             r#"{"mixer":{"height":12,"skin":"dark"},"playlist":{"lane_height":900}}"#,
         )
         .expect("reads");
-        assert_eq!(odd.kept_heights().mixer_height(), 225.0);
-        assert_eq!(odd.playlist_lanes(), Lanes::Fixed(96.0));
+        assert_eq!(odd.kept_heights().mixer_height(), 235.0);
+        assert_eq!(odd.playlist_lanes(), Lanes::Fixed(106.0));
         let owners: Settings =
             serde_json::from_str(r#"{"mixer":{"height":182.07361}}"#).expect("reads");
-        assert_eq!(owners.kept_heights().mixer_height(), 225.0);
+        assert_eq!(owners.kept_heights().mixer_height(), 235.0);
         let between: Settings =
             serde_json::from_str(r#"{"mixer":{"height":260.5}}"#).expect("reads");
         assert_eq!(between.kept_heights().mixer_height(), 260.5);
@@ -1575,7 +2235,7 @@ mod tests {
             r#"{"mixer":{"height":"tall","skin":"dark"},"playlist":{"lane_height":"x"}}"#,
         )
         .expect("reads");
-        assert_eq!(odd.kept_heights().mixer_height(), 225.0);
+        assert_eq!(odd.kept_heights().mixer_height(), 235.0);
         assert_eq!(odd.playlist_lanes(), Lanes::Fit);
         odd.set_kept_heights(&mixer(350.0));
         assert_eq!(
@@ -1585,10 +2245,11 @@ mod tests {
     }
 
     // Resizable dividers: the heights the dividers left are written in each panel's own
-    // section, the rack's under "rack", the piano roll's beside its lane's, the mixer's as
+    // section, the rack's under "rack", the piano roll's under "piano_roll", the mixer's as
     // before, only once kept (none is written as nothing), and read back as written; a value
     // that is no number, or under nothing, keeps none or none less than nothing, and the
-    // sections' keys this build does not know stay.
+    // sections' keys this build does not know stay. (Pin moved: the lane height an earlier
+    // build wrote beside the roll's height is read and no longer written back.)
     #[test]
     fn the_kept_panel_heights_round_trip_and_only_once_kept() {
         let kept = Kept {
@@ -1628,34 +2289,60 @@ mod tests {
         });
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"rack":{"height":100.0,"rows":3},"piano_roll":{"lane_height":96.0}}"#
+            r#"{"midi_inputs":[],"rack":{"height":100.0,"rows":3}}"#
         );
     }
 
-    // P2: the piano roll follows the playhead unless switched off, written only off, beside
-    // the lane's height. (P6, pin moved: the playlist has a switch of its own since; the mixer
-    // has none.)
+    // The roll player's Loop: on unless switched off, written only off, under "piano_roll"
+    // beside Follow; a value that is no switch reads as on.
+    #[test]
+    fn the_roll_player_loops_unless_switched_off() {
+        let mut settings = Settings::default();
+        assert!(settings.loops_roll_player());
+        settings.set_loops_roll_player(false);
+        settings.set_follows(Panel::PianoRoll, false);
+        let written = serde_json::to_string(&settings).expect("writes");
+        assert_eq!(
+            written,
+            r#"{"midi_inputs":[],"piano_roll":{"follow":false,"loop_player":false}}"#
+        );
+        let read: Settings = serde_json::from_str(&written).expect("reads");
+        assert!(!read.loops_roll_player());
+        settings.set_loops_roll_player(true);
+        settings.set_follows(Panel::PianoRoll, true);
+        assert_eq!(
+            serde_json::to_string(&settings).expect("writes"),
+            r#"{"midi_inputs":[]}"#
+        );
+        let odd: Settings =
+            serde_json::from_str(r#"{"piano_roll":{"loop_player":"often"}}"#).expect("reads");
+        assert!(odd.loops_roll_player());
+    }
+
+    // The piano roll follows the playhead unless switched off, written only off, beside
+    // its zoom. (Pin moved: the playlist has a switch of its own since; the mixer
+    // has none. Pin moved: beside the zoom, the lane's height no longer being kept.)
     #[test]
     fn the_piano_roll_follows_unless_switched_off() {
         let mut settings = Settings::default();
         assert!(settings.follows(Panel::PianoRoll));
         settings.set_follows(Panel::PianoRoll, false);
-        settings.set_lane_height(40.0);
+        settings.set_roll_zoom(32.0);
         let written = serde_json::to_string(&settings).expect("writes");
         assert_eq!(
             written,
-            r#"{"midi_inputs":[],"piano_roll":{"lane_height":40.0,"follow":false}}"#
+            r#"{"midi_inputs":[],"piano_roll":{"zoom":32.0,"follow":false}}"#
         );
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert!(!read.follows(Panel::PianoRoll));
         settings.set_follows(Panel::PianoRoll, true);
-        settings.set_lane_height(64.0);
+        settings.set_roll_zoom(16.0);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
             r#"{"midi_inputs":[]}"#
         );
         assert!(!settings.follows(Panel::Mixer));
-        // P6: the playlist's switch, apart from the roll's.
+        // The playlist's switch, apart from the roll's.
         settings.set_follows(Panel::Playlist, false);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
@@ -1664,7 +2351,7 @@ mod tests {
         assert!(settings.follows(Panel::PianoRoll) && !settings.follows(Panel::Playlist));
     }
 
-    // B8: the output device chosen is written by name, only when one is; the system default
+    // The output device chosen is written by name, only when one is; the system default
     // writes nothing; it loads back from a saved file, survives a value of another key this
     // build cannot read, and a value it cannot read itself is the default.
     #[test]
@@ -1782,12 +2469,18 @@ mod tests {
             maximized: false,
             popped: Vec::new(),
         };
-        assert_eq!(start_window(Some(&huge)).size, Size::new(7680.0, 900.0));
+        assert_eq!(
+            start_window(Some(&huge), crate::zoom::Zoom::DEFAULT).size,
+            Size::new(7680.0, 900.0)
+        );
         let tall = WindowLayout {
             height: f32::MAX,
             ..huge.clone()
         };
-        assert_eq!(start_window(Some(&tall)).size, Size::new(7680.0, 4320.0));
+        assert_eq!(
+            start_window(Some(&tall), crate::zoom::Zoom::DEFAULT).size,
+            Size::new(7680.0, 4320.0)
+        );
         let monitor = Size::new(1920.0, 1080.0);
         assert_eq!(
             fit_to_monitor(Size::new(7680.0, 900.0), monitor),
@@ -1843,7 +2536,7 @@ mod tests {
         );
     }
 
-    // 6d K1: the keyboard plays notes unless the file says false, and plays the piano row
+    // The keyboard plays notes unless the file says false, and plays the piano row
     // unless it names the two rows; each is written back as read, the switch only off, an id this
     // build does not know plays the piano row and is written back, and a value it cannot read
     // is the default without the other keys losing theirs.
@@ -1889,7 +2582,7 @@ mod tests {
         fs::remove_dir_all(&dir).expect("removed");
     }
 
-    // 6d K3: the shortcuts bound otherwise are written under `keys` by action name; the
+    // The shortcuts bound otherwise are written under `keys` by action name; the
     // defaults write nothing; a name this build does not know is kept through a rebind and a
     // reset; a value that is no map is the default, the other keys keeping theirs; the layout
     // chosen is written only when not the piano row.
@@ -1944,7 +2637,7 @@ mod tests {
         serde_json::from_str(&fs::read_to_string(file).expect("written")).expect("JSON")
     }
 
-    // 6d review 5: a value under `keys` that is no string (a list, as a later build might
+    // A value under `keys` that is no string (a list, as a later build might
     // write one) costs that entry alone: the others bind, and the file is written back with it
     // as it was. A rebind replaces the names this build knows and keeps the rest.
     #[test]
@@ -1970,7 +2663,7 @@ mod tests {
         fs::remove_dir_all(&dir).expect("removed");
     }
 
-    // 6d review 6: a chord on a key that types a letter outside ASCII is written as typed and
+    // A chord on a key that types a letter outside ASCII is written as typed and
     // loads back unchanged: Ctrl+ß (a German keyboard's key right of 0) is still Save's after
     // the file is saved and read again.
     #[test]
@@ -1997,7 +2690,7 @@ mod tests {
         fs::remove_dir_all(&dir).expect("removed");
     }
 
-    // 6d K4: the keyboard's first-run note, once put away, is written so and read back; the
+    // The keyboard's first-run note, once put away, is written so and read back; the
     // notes this build does not know stay; nothing is written before.
     #[test]
     fn the_keyboard_note_put_away_is_kept() {

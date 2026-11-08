@@ -20,7 +20,9 @@ use crate::plan::{
     PlayMode, PlayPlan, Playing, ProcessorSlot, Ramp, Rate, RuntimeDelta, SendPlan, ShapedSample,
     SongPlan, PLUGIN_CHANNELS, PROCESSOR_SLOTS, TABLE_SLOTS,
 };
-use crate::processor::{param_values, HostError, ProcessContext, Processor, Registry};
+use crate::processor::{
+    param_values, HostError, ProcessContext, Processor, ProcessorFactory, Registry,
+};
 use crate::project::{
     loop_text, AutomationId, AutomationPoint, AutomationTarget, ChannelId, ChannelKind, Clip,
     ClipId, ClipItem, ClipStretch, InsertId, Pattern, PatternId, ProcessorOwner, ProcessorRef,
@@ -225,6 +227,8 @@ pub struct Compiler {
     automation_points: BTreeMap<AutomationId, Arc<[AutomationPoint]>>,
     /// The channel live notes play, the next plan on.
     live_channel: Option<ChannelId>,
+    /// The sample rate the running processors were made at; `None` before the first compile.
+    rate: Option<u32>,
 }
 
 /// A processor as the player has it: its slot, the processor it is, and the values it was last
@@ -329,6 +333,7 @@ impl Compiler {
                 .collect(),
             automation_points: BTreeMap::new(),
             live_channel: None,
+            rate: None,
         }
     }
 
@@ -506,7 +511,10 @@ impl Compiler {
                     ),
                     // Its frames come from the player's input feed for the channel.
                     ChannelKind::Input => ChannelSound::Input,
-                    ChannelKind::Sampler | ChannelKind::Audio | ChannelKind::Plugin => {
+                    ChannelKind::Sampler
+                    | ChannelKind::Audio
+                    | ChannelKind::Plugin
+                    | ChannelKind::Synth => {
                         let sound = self.file_or_plugin_sound(id, channel, &voiced, &for_now);
                         match (sound, shape) {
                             (ChannelSound::Sampler(sample), Some(shape)) => {
@@ -519,9 +527,16 @@ impl Compiler {
                 // Muted is gain 0, so muting needs no pattern recompile either. Playing nothing
                 // of the document (a latency measurement) plays no input channel either: down a
                 // cable looped from the output into the input, one would feed itself back. Its
-                // device's recording is filled by the device callback, not by the plan.
-                let muted = channel.mute
-                    || (mode == PlayMode::Nothing && channel.kind == ChannelKind::Input);
+                // device's recording is filled by the device callback, not by the plan. Playing
+                // one channel alone plays no other input channel: an input sounds without notes,
+                // so leaving its notes out would not silence it.
+                let input_left_out = channel.kind == ChannelKind::Input
+                    && match mode {
+                        PlayMode::Nothing => true,
+                        PlayMode::Channel { channel: alone, .. } => alone != id,
+                        PlayMode::Pattern(_) | PlayMode::Song => false,
+                    };
+                let muted = channel.mute || input_left_out;
                 let gain = if muted { 0.0 } else { channel.volume };
                 ChannelPlan {
                     id,
@@ -571,6 +586,21 @@ impl Compiler {
                 .iter()
                 .position(|pattern| pattern.id == id)
                 .map_or(Playing::Nothing, Playing::Pattern),
+            // The plan holds the channel's notes of the pattern alone, so every other channel
+            // starts nothing while its sound, the mixer and the routing stay as they are: no
+            // mute or solo is touched (the piano roll's player).
+            PlayMode::Channel {
+                pattern,
+                channel,
+                once,
+            } => patterns.iter().find(|played| played.id == pattern).map_or(
+                Playing::Nothing,
+                |played| Playing::Channel {
+                    notes: channel_alone(played, channel),
+                    channel,
+                    once,
+                },
+            ),
             PlayMode::Song => Playing::Song,
             PlayMode::Nothing => Playing::Nothing,
         };
@@ -605,9 +635,9 @@ impl Compiler {
         })
     }
 
-    /// The sound of `channel` (`id`), a sampler, an audio or a plugin channel: its decoded file
-    /// through its edits (the one for now while the edited sound is made), its plugin's slot, or
-    /// (for an audio channel without notes) its clips alone.
+    /// The sound of `channel` (`id`), a sampler, an audio, a plugin or a synth channel: its
+    /// decoded file through its edits (the one for now while the edited sound is made), its
+    /// plugin's or synth's slot, or (for an audio channel without notes) its clips alone.
     fn file_or_plugin_sound(
         &self,
         id: ChannelId,
@@ -630,7 +660,8 @@ impl Compiler {
             ChannelKind::Audio
             | ChannelKind::Plugin
             | ChannelKind::Instrument
-            | ChannelKind::Input => None,
+            | ChannelKind::Input
+            | ChannelKind::Synth => None,
         }
         .map(ChannelSound::Sampler)
         .or_else(|| {
@@ -640,11 +671,12 @@ impl Compiler {
         .unwrap_or(match kind {
             ChannelKind::Audio => ChannelSound::Clips,
             // A sample still loading plays silence until the compile after it is in. (A plugin
-            // channel without a slot cannot get here: the compile was refused.)
+            // or a synth channel without a slot cannot get here: the compile was refused.)
             ChannelKind::Sampler
             | ChannelKind::Plugin
             | ChannelKind::Instrument
-            | ChannelKind::Input => ChannelSound::Sampler(SampleBuffer::from(Vec::new())),
+            | ChannelKind::Input
+            | ChannelKind::Synth => ChannelSound::Sampler(SampleBuffer::from(Vec::new())),
         })
     }
 
@@ -781,6 +813,14 @@ impl Compiler {
         project: &Project,
         touched: &Touched,
     ) -> Result<RuntimeDelta, MixerError> {
+        // Every processor was made for the rate it runs at (its lines and coefficients are sized
+        // and set from it), so a project at another rate gets every one made again. Why here:
+        // no edit changes a project's rate, but a compiler handed a project at another rate
+        // would leave its processors running at the old one.
+        if self.rate.is_some_and(|rate| rate != project.sample_rate) {
+            self.restart.extend(self.running.keys().copied());
+        }
+        self.rate = Some(project.sample_rate);
         let effects = project
             .mixer
             .inserts
@@ -871,8 +911,14 @@ impl Compiler {
         }
         let installed: BTreeSet<ProcessorSlot> =
             delta.install.iter().map(|&(slot, _)| slot).collect();
-        for id in &touched.effects {
-            let owner = ProcessorOwner::Effect(*id);
+        // The native processors whose values may have changed: the effects an edit touched, and
+        // the synths of the channels one touched (a slider, a preset, an undo).
+        let effects = touched.effects.iter().map(|&id| ProcessorOwner::Effect(id));
+        let synths = touched
+            .channels
+            .iter()
+            .map(|&id| ProcessorOwner::Channel(id));
+        for owner in effects.chain(synths) {
             let (Some(running), Some(reference)) =
                 (self.running.get_mut(&owner), wanted.get(&owner))
             else {
@@ -881,7 +927,7 @@ impl Compiler {
             if installed.contains(&running.slot) {
                 continue;
             }
-            let Some(factory) = self.registry.get(&reference.id) else {
+            let Some(factory) = native_for(&self.registry, owner, &reference.id) else {
                 continue;
             };
             let values = param_values(factory.params(), &reference.params);
@@ -910,31 +956,34 @@ impl Compiler {
     }
 
     /// A processor for `reference`, playing for `owner`, at `sample_rate`, the values it
-    /// starts with, and whether it stands in for a plugin: a native effect from the registry,
-    /// a plugin from its format's host, or one that changes nothing in place of a processor
-    /// this build cannot give (an effect passes its insert through, an instrument stays
-    /// silent). A plugin that is missing or fails is noted for
-    /// [`take_notices`](Self::take_notices); its reference is kept as it is.
+    /// starts with, and whether it stands in for a plugin: a native effect from the registry
+    /// for a slot, a native instrument for a channel, a plugin from its format's host, or one
+    /// that changes nothing in place of a processor this build cannot give (an effect passes
+    /// its insert through, an instrument stays silent). A plugin that is missing or fails is
+    /// noted for [`take_notices`](Self::take_notices); its reference is kept as it is.
     fn create(
         &mut self,
         owner: ProcessorOwner,
         reference: &ProcessorRef,
         sample_rate: u32,
     ) -> (Box<dyn Processor>, Vec<f32>, bool) {
-        if let (ProcessorOwner::Effect(_), Some(factory)) =
-            (owner, self.registry.get(&reference.id))
-        {
+        if let Some(factory) = native_for(&self.registry, owner, &reference.id) {
             let values = param_values(factory.params(), &reference.params);
             return (factory.create(sample_rate, &values), values, false);
+        }
+        // An instrument in an effect slot passes its insert through quietly, as an effect this
+        // build does not know does.
+        if let (ProcessorOwner::Effect(_), Some(_)) = (owner, self.registry.get(&reference.id)) {
+            return (Box::new(PassThrough), Vec::new(), false);
         }
         let failure = match self.registry.host(&reference.id) {
             Some(host) => match host.create(owner, reference, sample_rate) {
                 Ok(processor) => return (processor, Vec::new(), false),
                 Err(error) => Some(error),
             },
-            // A plugin id whose format this build does not host, or an instrument that names a
-            // native effect, is missing; an unknown native effect passes its audio through
-            // quietly, as it always has.
+            // A plugin id whose format this build does not host, or a channel that names a
+            // native effect (or a native id this build does not have), is missing; an unknown
+            // native effect passes its audio through quietly, as it always has.
             None if reference.format().is_some() || matches!(owner, ProcessorOwner::Channel(_)) => {
                 Some(HostError::Missing)
             }
@@ -1112,21 +1161,23 @@ impl Compiler {
             ),
             AutomationTarget::EffectParam { effect, key } => {
                 let (_, placed) = mixer.effect(*effect)?;
-                let factory = self.registry.get(&placed.processor.id)?;
-                let params = factory.params();
-                let index = params.iter().position(|info| info.key == key)?;
-                let info = params[index];
-                let stored = param_values(params, &placed.processor.params)[index];
-                Resolved {
-                    target: ParamTarget::Effect {
+                let owner = ProcessorOwner::Effect(*effect);
+                let factory = native_for(&self.registry, owner, &placed.processor.id)?;
+                resolve_native(factory, &placed.processor, key, |param| {
+                    ParamTarget::Effect {
                         effect: *effect,
-                        param: u16::try_from(index).ok()?,
-                    },
-                    rate: Rate::Control,
-                    lo: f64::from(info.min),
-                    hi: f64::from(info.max),
-                    stored,
-                }
+                        param,
+                    }
+                })?
+            }
+            AutomationTarget::InstrumentParam { channel, key } => {
+                let processor = project.channels.get(channel)?.processor.as_ref()?;
+                let owner = ProcessorOwner::Channel(*channel);
+                let factory = native_for(&self.registry, owner, &processor.id)?;
+                resolve_native(factory, processor, key, |param| ParamTarget::Instrument {
+                    channel: *channel,
+                    param,
+                })?
             }
             AutomationTarget::EffectPlugin { effect, param_id } => {
                 let (_, placed) = mixer.effect(*effect)?;
@@ -1164,6 +1215,39 @@ impl Compiler {
             stored,
         })
     }
+}
+
+/// The native factory that makes `id` for `owner`: an effect's for a mixer slot, an
+/// instrument's for a channel; `None` for a plugin, an id this build does not have, or one of
+/// the other kind.
+fn native_for<'a>(
+    registry: &'a Registry,
+    owner: ProcessorOwner,
+    id: &str,
+) -> Option<&'a dyn ProcessorFactory> {
+    let factory = registry.get(id)?;
+    let for_channel = matches!(owner, ProcessorOwner::Channel(_));
+    (factory.is_instrument() == for_channel).then_some(factory)
+}
+
+/// Parameter `key` of the native processor `reference` names, which `factory` makes: the
+/// target `target` gives for its index, its range, and its value now (Control rate).
+fn resolve_native(
+    factory: &dyn ProcessorFactory,
+    reference: &ProcessorRef,
+    key: &str,
+    target: impl FnOnce(u16) -> ParamTarget,
+) -> Option<Resolved> {
+    let params = factory.params();
+    let index = params.iter().position(|info| info.key == key)?;
+    let info = params[index];
+    Some(Resolved {
+        target: target(u16::try_from(index).ok()?),
+        rate: Rate::Control,
+        lo: f64::from(info.min),
+        hi: f64::from(info.max),
+        stored: param_values(params, &reference.params)[index],
+    })
 }
 
 /// What the user is told about a plugin that could not be created, or that failed.
@@ -1310,7 +1394,10 @@ fn voiced_files(project: &Project) -> BTreeSet<(&Path, &SoundEdits)> {
         .filter(|(id, channel)| match channel.kind {
             ChannelKind::Sampler => true,
             ChannelKind::Audio => noted.contains(id),
-            ChannelKind::Plugin | ChannelKind::Instrument | ChannelKind::Input => false,
+            ChannelKind::Plugin
+            | ChannelKind::Instrument
+            | ChannelKind::Input
+            | ChannelKind::Synth => false,
         })
         .map(|(_, channel)| (channel.sample.as_path(), &channel.edits))
         .collect()
@@ -1356,7 +1443,9 @@ fn attach_automation(
                     send.automation = Some(index);
                 }
             }
-            ParamTarget::Effect { .. } | ParamTarget::Plugin { .. } => {}
+            ParamTarget::Effect { .. }
+            | ParamTarget::Plugin { .. }
+            | ParamTarget::Instrument { .. } => {}
         }
     }
 }
@@ -1390,6 +1479,21 @@ fn automation_edges(automation: &[AutomationPlan]) -> Vec<Ticks> {
     edges.sort_unstable();
     edges.dedup();
     edges
+}
+
+/// `pattern`'s events of `channel` alone, in their order, as a pattern of its own: what
+/// [`PlayMode::Channel`] walks. A list of its own each compile; the pattern's list stays shared.
+fn channel_alone(pattern: &PatternPlan, channel: ChannelId) -> PatternPlan {
+    PatternPlan {
+        id: pattern.id,
+        length: pattern.length,
+        events: pattern
+            .events
+            .iter()
+            .filter(|event| event.channel == channel)
+            .copied()
+            .collect(),
+    }
 }
 
 /// A pattern's notes as events sorted by tick, each where the pattern's swing plays it

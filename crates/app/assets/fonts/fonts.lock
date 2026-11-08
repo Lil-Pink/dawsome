@@ -1,0 +1,20 @@
+# The fonts the app draws every window's text in, built into the programs (src/ui/fonts.rs
+# include_bytes! them): Inter 4.1's static Regular and SemiBold, unchanged, from the release zip's
+# extras/ttf/ folder. Inter is under the SIL Open Font License 1.1 (licenses/LICENSE-Inter.txt,
+# and NOTICES.txt through scripts/notices.py's FONTS); its license names no Reserved Font Name.
+# Why bundled: iced draws its default sans-serif in whatever the system offers (Noto Sans on one
+# Linux, an unknown face on Windows), so one look on every OS needs the app's own font. Why the
+# full files, not a subset: the pair is 831,384 bytes, under the 1.5 MB the UI clean-up set for
+# subsetting, and a full file never lacks a glyph a project name typed in another language needs.
+# Fetched 2026-11-04: the zip's SHA-256 matched the one Arch Linux's inter-font 4.1-1 package
+# pins for the same url (the upstream release publishes none), and its size the GitHub release's.
+# scripts/check.sh (tests/fixtures/gen_u1_expected.py --check) holds each file to its line here;
+# the app's tests hold the face the window resolves for "Inter" to the version below.
+release=4.1
+url=https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+zip=Inter-4.1.zip 33707794 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
+# The name table's version string (name ID 5) both files carry: 4.1's static faces say 4.001.
+version=Version 4.001;git-9221beed3
+# file.<name>=<path in the zip> <bytes> <SHA-256>
+file.Inter-Regular.ttf=extras/ttf/Inter-Regular.ttf 411640 40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82
+file.Inter-SemiBold.ttf=extras/ttf/Inter-SemiBold.ttf 419744 78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3

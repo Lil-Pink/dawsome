@@ -174,7 +174,12 @@ impl ProcessorHost for MockHost {
         Err(HostError::Missing)
     }
 
-    fn open_editor(&self, _owner: ProcessorOwner, _title: &str) -> Result<Editor, HostError> {
+    fn open_editor(
+        &self,
+        _owner: ProcessorOwner,
+        _title: &str,
+        _scale: f64,
+    ) -> Result<Editor, HostError> {
         Ok(Editor::Generic)
     }
 

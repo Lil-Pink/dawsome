@@ -7,14 +7,16 @@
 use std::collections::BTreeMap;
 
 use dawsome_engine::dsp::laws::fader_gain;
-use dawsome_engine::processor::Registry;
+use dawsome_engine::processor::{param_values, ProcessorFactory, Registry};
 use dawsome_engine::project::{
-    ChannelKind, ClipId, Effect, InsertId, PatternId, ProcessorOwner, Project,
+    ChannelId, ChannelKind, ClipId, Effect, InsertId, PatternId, ProcessorOwner, Project,
 };
-use dawsome_engine::time::{self, MilliBpm};
+use dawsome_engine::time::{self, MilliBpm, Ticks};
 
 use crate::app::SelectionLink;
 use crate::keys::{Action, Keys};
+use crate::ui::color_wheel::WheelPart;
+use crate::ui::fonts::size;
 use crate::ui::instrument_window::{Control, Flag};
 use crate::ui::key_names::key_name;
 use crate::ui::keys_page::KeysHit;
@@ -25,14 +27,17 @@ use crate::ui::mixer_layout::Hit as MixerHit;
 use crate::ui::mixer_state::{
     effect_param_text, effect_values, fader_text, is_choice, pan_text, percent_text, PLUGIN_KNOBS,
 };
+use crate::ui::note_gesture::Snap;
 use crate::ui::panels::Panel;
+use crate::ui::piano_roll::RollPlayer;
 use crate::ui::playlist_layout::{ClipPart, HeaderHit as TrackHit, RulerBand};
 use crate::ui::rack::swing_text;
 use crate::ui::rack_rows::{RackRow, RackRows};
 use crate::ui::sample_editor::{EditorOp, EditorPart};
 use crate::ui::settings_layout::Hit as SettingHit;
 use crate::ui::step_grid::{step_content, StepContent, StepGrid};
-use crate::ui::toolbar::panel_tip;
+use crate::ui::theme_page::ColorTarget;
+use crate::ui::toolbar::{format_length, panel_tip};
 
 /// The dot between a hint's parts.
 const DOT: &str = " \u{b7} ";
@@ -47,13 +52,13 @@ pub enum Hover {
     Tool(Tool),
     /// The rack header's controls.
     RackHeader(HeaderHit),
+    /// "+ Instrument…" under the rack's rows.
+    RackAdd,
     /// A control of the rack's row `row`.
     Rack {
         row: usize,
         part: RackPart,
     },
-    /// The "+" under the rack's rows.
-    RackAdd,
     Roll(RollPart),
     Ruler(RulerBand),
     Track(TrackHit),
@@ -71,6 +76,8 @@ pub enum Hover {
         upper: Panel,
         lower: Panel,
     },
+    /// The pop-out button at the right end of a stacked panel's header strip.
+    PopOut(Panel),
     Library(LibraryPart),
     Setting(SettingHit),
     /// A control of Settings' Keys page.
@@ -500,6 +507,17 @@ pub enum SoundPart {
     MidiOutLatency,
     /// The MIDI OUT group's Echo switch.
     MidiOutEcho,
+    /// A synth channel's knob (or choice's button) for parameter `index` of its instrument.
+    SynthParam {
+        channel: ChannelId,
+        index: usize,
+    },
+    /// The synth's preset list.
+    Presets,
+    /// Save preset….
+    SavePreset,
+    /// The box a preset's name is typed in.
+    PresetName,
 }
 
 impl SoundPart {
@@ -526,6 +544,13 @@ impl SoundPart {
             SoundPart::MidiOutProgram,
             SoundPart::MidiOutLatency,
             SoundPart::MidiOutEcho,
+            SoundPart::SynthParam {
+                channel: ChannelId(1),
+                index: 0,
+            },
+            SoundPart::Presets,
+            SoundPart::SavePreset,
+            SoundPart::PresetName,
         ];
         parts.extend(Control::ALL.map(SoundPart::Control));
         parts
@@ -627,10 +652,12 @@ pub enum RollPart {
     },
     /// A velocity stem.
     Stem,
+    /// The strip's Play / Stop: the roll's player.
+    Play,
+    /// The strip's Loop switch: the roll's player loops the pattern or plays it once.
+    Loop,
     Snap,
     Preview,
-    /// The drag handle between the grid and the velocity lane.
-    LaneHandle,
     /// The strip's Follow switch.
     Follow,
     /// The strip's Notes button: the notes' menu.
@@ -641,6 +668,11 @@ pub enum RollPart {
     Scale,
     ScaleRoot,
     Fold,
+    /// The strip's title: the name of `channel`, the one the roll edits, whole even where the
+    /// strip cuts it short.
+    Name {
+        channel: ChannelId,
+    },
 }
 
 /// The playlist header's controls.
@@ -671,6 +703,8 @@ pub enum LibraryPart {
         name: String,
         note: Option<&'static str>,
     },
+    /// Dawsome Synth.
+    Synth,
     /// "External input".
     ExternalInput,
     /// A group's label inside Instruments ("Plugins", a kind, a maker), by its label.
@@ -715,7 +749,17 @@ pub struct Context<'a> {
     pub link: Option<SelectionLink>,
     /// How late each plugin that says so plays its sound, in frames, by `ProcessorOwner`.
     pub latencies: BTreeMap<ProcessorOwner, u32>,
+    /// The piano roll's player: its Play's and Loop's state, and the toolbar's while it plays.
+    pub roll_player: RollPlayer,
+    /// The piano roll's snap and the length a click draws at it: the snap picker's hint says
+    /// both, so the length still shows where the strip folds its Len readout away.
+    pub roll_snap: Snap,
+    pub draw_length: Ticks,
 }
+
+/// What the toolbar's Play and the play mode's switch add while the piano roll's player has
+/// the transport.
+const ROLL_PLAYS: &str = "Playing the piano roll's channel; Play here switches back";
 
 /// What a plugin's hint value says of its format: "VST3", or "VST3 · delays its sound by N
 /// frames (M ms); not compensated" when it says so, for `owner`'s VST3 plugin; nothing for any
@@ -764,7 +808,7 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
             "plays every second 16th of this pattern late; drag or wheel, Shift for 0.1 %, \
              double-click for straight",
         ),
-        Hover::RackHeader(HeaderHit::AddSampler) | Hover::RackAdd => three(
+        Hover::RackAdd => three(
             "+ Instrument\u{2026}",
             None,
             "adds an instrument set, a starter kit sound, a plugin or a sound file of yours",
@@ -801,7 +845,7 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
                         ChannelKind::Sampler if channel.sample.as_os_str().is_empty() => {
                             "click: select \u{b7} double-click: choose its sound \u{b7} right-click: menu"
                         }
-                        ChannelKind::Sampler | ChannelKind::Instrument => {
+                        ChannelKind::Sampler | ChannelKind::Instrument | ChannelKind::Synth => {
                             "click: select \u{b7} double-click: instrument window \u{b7} right-click: menu"
                         }
                         ChannelKind::Plugin => {
@@ -906,8 +950,9 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
                     .to_owned(),
             ),
         ],
+        Hover::PopOut(panel) => three("Pop out", None, &crate::ui::pop_out::hint(*panel)),
         Hover::Library(part) => library_parts(part, context.keys),
-        Hover::Setting(hit) => setting_parts(*hit),
+        Hover::Setting(hit) => setting_parts(*hit, context.keys),
         Hover::Keys(hit) => keys_parts(*hit, context.keys),
         Hover::Menu(row) => menu_parts(*row, context.keys),
         Hover::Picker(part) => picker_parts(*part),
@@ -922,6 +967,9 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
             Some(device.clone()),
             Some("click: a new input channel plays it (the Library's External input)".to_owned()),
         ],
+        Hover::Sound(SoundPart::SynthParam { channel, index }) => {
+            synth_param_parts(*channel, *index, context)
+        }
         Hover::Sound(part) => sound_parts(*part),
         Hover::SampleEditor(part) => editor_parts(*part, context.keys),
         Hover::ScrollBar => three(
@@ -1258,7 +1306,38 @@ fn sound_parts(part: SoundPart) -> [Option<String>; 3] {
             "Echo".to_owned(),
             "on: notes played on the instrument's own keys are sent back to it too; off when it already plays them itself",
         ),
+        // Named with its value by `synth_param_parts`, which reads the channel.
+        SoundPart::SynthParam { .. } => [None, None, None],
+        SoundPart::Presets => three(
+            "Presets".to_owned(),
+            "pick one to load its sound into this synth: the starting sounds, then the ones you saved; one undo step",
+        ),
+        SoundPart::SavePreset => three(
+            "Save preset".to_owned(),
+            "keeps this synth's sound under a name of yours, to load into any synth channel",
+        ),
+        SoundPart::PresetName => three(
+            "Preset name".to_owned(),
+            "letters, digits, spaces, - and _; Enter saves, Esc cancels",
+        ),
     }
+}
+
+/// The hint over a synth channel's knob for parameter `index`: its name, its value as the knob
+/// shows it (the default's on a channel that is no synth's), and what a press does.
+fn synth_param_parts(channel: ChannelId, index: usize, context: &Context) -> [Option<String>; 3] {
+    let Some(factory) = context.registry.get(dawsome_engine::dsp::synth::ID) else {
+        return [None, None, None];
+    };
+    let saved = context
+        .project
+        .channels
+        .get(&channel)
+        .and_then(|shown| shown.processor.as_ref())
+        .map(|processor| processor.params.clone())
+        .unwrap_or_default();
+    let values = param_values(factory.params(), &saved);
+    native_knob_parts(factory, index, values.get(index).copied(), context)
 }
 
 fn on_off(on: bool) -> &'static str {
@@ -1290,8 +1369,10 @@ fn swing(context: &Context) -> Option<String> {
     Some(format!("{}{DOT}{heard}", swing_text(pattern.swing_tenths)))
 }
 
+/// The tempo as the toolbar's readout shows it ([`crate::ui::toolbar::format_tempo`]), and its
+/// unit.
 fn tempo_text(tempo: MilliBpm) -> String {
-    format!("{}.{:03} BPM", tempo.0 / 1000, tempo.0 % 1000)
+    format!("{} BPM", crate::ui::toolbar::format_tempo(tempo))
 }
 
 fn tool_parts(tool: Tool, context: &Context) -> [Option<String>; 3] {
@@ -1303,10 +1384,11 @@ fn tool_parts(tool: Tool, context: &Context) -> [Option<String>; 3] {
         .and_then(|id| context.project.patterns.get(&id))
         .map(|pattern| pattern.name.clone());
     let key = |action| context.keys.first(action);
+    let roll_plays = context.roll_player.playing.then(|| ROLL_PLAYS.to_owned());
     match tool {
         Tool::Play => three(
             "Play",
-            None,
+            roll_plays,
             &format!("{} plays and stops", key(Action::PlayStop)),
         ),
         Tool::Stop => three(
@@ -1366,7 +1448,7 @@ fn tool_parts(tool: Tool, context: &Context) -> [Option<String>; 3] {
         ),
         Tool::PatternMode => three(
             "Pattern mode",
-            None,
+            roll_plays,
             &format!(
                 "plays the selected pattern; {} switches",
                 key(Action::ToggleMode)
@@ -1374,7 +1456,7 @@ fn tool_parts(tool: Tool, context: &Context) -> [Option<String>; 3] {
         ),
         Tool::SongMode => three(
             "Song mode",
-            None,
+            roll_plays,
             &format!("plays the playlist; {} switches", key(Action::ToggleMode)),
         ),
         Tool::Loop => three(
@@ -1473,9 +1555,31 @@ fn roll_parts(part: RollPart, context: &Context) -> [Option<String>; 3] {
             None,
             "drag sets velocity (across stems paints them); Alt+drag draws a ramp",
         ),
+        RollPart::Play => {
+            let player = context.roll_player;
+            let name = if player.playing { "Stop" } else { "Play" };
+            let does = if player.recording && !player.playing {
+                "off while a take runs: recording is the toolbar's; stop the take first".to_owned()
+            } else {
+                format!(
+                    "plays this channel's notes of this pattern from the start; {} while the \
+                     piano roll has the keys",
+                    context.keys.first(Action::RollPlayStop)
+                )
+            };
+            three(name.to_owned(), None, &does)
+        }
+        RollPart::Loop => three(
+            "Loop".to_owned(),
+            Some(on_off(context.roll_player.looping).to_owned()),
+            "loops the pattern while playing from the roll; off, it plays once and stops",
+        ),
         RollPart::Snap => three(
-            "Snap".to_owned(),
-            None,
+            format!("Snap: {}", context.roll_snap),
+            Some(format!(
+                "draws {}",
+                format_length(context.draw_length, context.project.ppq)
+            )),
             "what notes land on when drawn or moved",
         ),
         RollPart::Preview => three(
@@ -1483,12 +1587,16 @@ fn roll_parts(part: RollPart, context: &Context) -> [Option<String>; 3] {
             Some(on_off(context.preview).to_owned()),
             "plays the notes you draw, press and move",
         ),
-        RollPart::LaneHandle => three(
-            "Velocity lane".to_owned(),
-            None,
-            "drag up or down to make the lane taller or shorter",
-        ),
         RollPart::Follow => three("Follow".to_owned(), None, FOLLOW_WORDS),
+        RollPart::Name { channel } => three(
+            context
+                .project
+                .channels
+                .get(&channel)
+                .map_or_else(String::new, |channel| channel.name.clone()),
+            None,
+            "the channel this roll edits",
+        ),
         RollPart::Scale => three(
             "Scale".to_owned(),
             None,
@@ -1556,7 +1664,7 @@ fn link_parts(context: &Context) -> [Option<String>; 3] {
     }
 }
 
-/// The link control's tip, in the spec's words: what the state means and what a click does,
+/// The link control's tip: what the state means and what a click does,
 /// for one selected clip or several.
 pub fn link_tip(project: &Project, link: &SelectionLink) -> String {
     match link {
@@ -1676,6 +1784,11 @@ fn mixer_parts(hit: MixerHit, context: &Context) -> [Option<String>; 3] {
             ),
         ),
         MixerHit::RouteLabel => three("Route".to_owned(), None, "where the selected channel plays"),
+        MixerHit::PopOut => three(
+            "Pop out".to_owned(),
+            None,
+            &crate::ui::pop_out::hint(Panel::Mixer),
+        ),
         MixerHit::Led(id) => three(
             name(id),
             None,
@@ -1771,22 +1884,15 @@ fn effect_parts(hit: MixerHit, effect: &Effect, context: &Context) -> [Option<St
 
 /// The hint over knob `knob` of `effect`: its setting's name and value, and what a press does
 /// (a choice's button steps to its next value).
+/// What a right press on a knob does, as a knob's hint says it.
+const AUTOMATE_OR_LINK: &str = "right-click to automate or link a controller";
+
 fn knob_parts(effect: &Effect, knob: usize, context: &Context) -> [Option<String>; 3] {
     let registry = context.registry;
-    let automate = "right-click to automate or link a controller";
+    let automate = AUTOMATE_OR_LINK;
     if let Some(factory) = registry.get(&effect.processor.id) {
-        let Some(info) = factory.params().get(knob) else {
-            return [None, None, None];
-        };
-        let value = effect_values(effect, registry)
-            .and_then(|values| values.get(knob).copied())
-            .and_then(|value| effect_param_text(factory, knob, value, context.project.sample_rate));
-        let does = if is_choice(factory, knob) {
-            format!("click picks the next; {automate}")
-        } else {
-            format!("drag; double-click resets; {automate}")
-        };
-        return [Some(info.label.to_owned()), value, Some(does)];
+        let value = effect_values(effect, registry).and_then(|values| values.get(knob).copied());
+        return native_knob_parts(factory, knob, value, context);
     }
     let owner = ProcessorOwner::Effect(effect.id);
     let Some(host) = registry.host(&effect.processor.id) else {
@@ -1807,19 +1913,42 @@ fn knob_parts(effect: &Effect, knob: usize, context: &Context) -> [Option<String
     [Some(param.name), value, Some(format!("drag; {automate}"))]
 }
 
+/// The hint over knob `knob` of a native processor (an effect's, the synth's) at `value`: its
+/// label, the value as the knob shows it, and what a press does.
+fn native_knob_parts(
+    factory: &dyn ProcessorFactory,
+    knob: usize,
+    value: Option<f32>,
+    context: &Context,
+) -> [Option<String>; 3] {
+    let automate = AUTOMATE_OR_LINK;
+    let Some(info) = factory.params().get(knob) else {
+        return [None, None, None];
+    };
+    let value = value
+        .and_then(|value| effect_param_text(factory, knob, value, context.project.sample_rate));
+    let does = if is_choice(factory, knob) {
+        format!("click picks the next; {automate}")
+    } else {
+        format!("drag; double-click resets; {automate}")
+    };
+    [Some(info.label.to_owned()), value, Some(does)]
+}
+
 fn library_parts(part: &LibraryPart, keys: &Keys) -> [Option<String>; 3] {
     let three = |name: &str, does: &str| [Some(name.to_owned()), None, Some(does.to_owned())];
     let enter = keys.first(Action::OpenSelected);
+    let instrument = || {
+        format!("click previews; double-click or {enter} adds it to the rack; right-click adds it and opens its instrument window; drag onto the rack or a track")
+    };
     match part {
         LibraryPart::Header(section) => three(section.title(), "click opens or closes it"),
         LibraryPart::Group(name) => three(
             name,
             &format!("click or {enter} folds or opens it; Left folds, Right opens"),
         ),
-        LibraryPart::Sound(name) | LibraryPart::Set(name) => three(
-            name,
-            &format!("click previews; double-click or {enter} adds it to the rack; right-click adds it and opens its instrument window; drag onto the rack or a track"),
-        ),
+        LibraryPart::Sound(name) | LibraryPart::Set(name) => three(name, &instrument()),
+        LibraryPart::Synth => three(dawsome_engine::dsp::synth::NAME, &instrument()),
         LibraryPart::Plugin { name, note } => [
             Some(name.clone()),
             note.map(str::to_owned),
@@ -1827,6 +1956,7 @@ fn library_parts(part: &LibraryPart, keys: &Keys) -> [Option<String>; 3] {
                 "double-click or {enter} adds it to the rack; drag onto the rack or a track"
             )),
         ],
+
         LibraryPart::ExternalInput => three(
             "External input",
             &format!("a channel playing an audio input live (a synth cabled into your interface); double-click or {enter} adds it; right-click adds it and opens its window; drag onto the rack or a track"),
@@ -1868,8 +1998,14 @@ fn device_parts(port: &Port) -> [Option<String>; 3] {
     [Some(port.name.clone()), goes, Some(does)]
 }
 
-fn setting_parts(hit: SettingHit) -> [Option<String>; 3] {
+fn setting_parts(hit: SettingHit, keys: &Keys) -> [Option<String>; 3] {
     let three = |name: &str, does: &str| [Some(name.to_owned()), None, Some(does.to_owned())];
+    let zoom = |does: &str, action: Action| {
+        three(
+            "Zoom",
+            &format!("{does}; {} in any window", keys.first(action)),
+        )
+    };
     match hit {
         SettingHit::AllPorts => three(
             "All ports",
@@ -1886,6 +2022,51 @@ fn setting_parts(hit: SettingHit) -> [Option<String>; 3] {
             "this line, naming what is under the cursor and what it does",
         ),
         SettingHit::Page(page) => three(page.title(), "shows this page of the settings"),
+        SettingHit::ZoomDown => zoom("every window a step smaller", Action::ZoomOut),
+        SettingHit::ZoomUp => zoom("every window a step larger", Action::ZoomIn),
+        SettingHit::ZoomValue => zoom(
+            "the size of every window's text and controls, on top of the system's display \
+             scale; double-click: 100 %",
+            Action::ZoomReset,
+        ),
+        SettingHit::Theme(theme) => three(
+            &format!("Theme: {}", theme.title()),
+            "every window's colours as one set; clips, notes, lights and meters keep theirs",
+        ),
+        SettingHit::ColorChoice => three(
+            "Colour to set",
+            "the accent, or the piano roll's notes: the wheel, the hex box and the key beside it \
+             set the one chosen",
+        ),
+        SettingHit::Wheel(ColorTarget::Accent, WheelPart::Ring) => three(
+            "Accent: hue",
+            "drag round the ring: the colour of what is lit and selected, in every window; clips, \
+             notes, lights and meters keep theirs",
+        ),
+        SettingHit::Wheel(ColorTarget::Notes, WheelPart::Ring) => three(
+            "Piano roll notes: hue",
+            "drag round the ring: the colour of the piano roll's notes and velocity stems; other \
+             channels' notes, the rack's steps and the clips keep theirs",
+        ),
+        SettingHit::Wheel(target, WheelPart::Square) => three(
+            &format!("{target}: saturation and value"),
+            "drag right for a stronger colour, up for a brighter one",
+        ),
+        SettingHit::Hex(target) => three(
+            &format!("{target} as hex"),
+            "type a colour as #RRGGBB and press Enter",
+        ),
+        SettingHit::OwnColor(ColorTarget::Accent) => {
+            three("Theme's own", "the theme's own accent in place of yours")
+        }
+        SettingHit::OwnColor(ColorTarget::Notes) => three(
+            "Channel's own",
+            "each channel's own colour for its notes in place of yours",
+        ),
+        SettingHit::ResetDefaults => three(
+            "Reset to defaults",
+            "restores the default looks and layout; devices and keys stay",
+        ),
         SettingHit::Measure => three(
             "Measure input latency",
             "plays clicks through the output and finds them in the line in: loop a cable from \
@@ -1968,7 +2149,7 @@ pub fn with_tip<'a>(
     words: impl iced::widget::text::IntoFragment<'a>,
 ) -> iced::Element<'a, crate::app::Message> {
     use iced::widget::{container, text, tooltip};
-    let tip = container(text(words).size(12))
+    let tip = container(text(words).size(size::LABEL))
         .padding([4, 8])
         .style(crate::ui::style::panel);
     tooltip(content, tip, tooltip::Position::Bottom).into()
@@ -2025,6 +2206,9 @@ mod tests {
             takes_open: false,
             link: None,
             latencies: BTreeMap::new(),
+            roll_player: RollPlayer::default(),
+            roll_snap: Snap::Line,
+            draw_length: Ticks(24),
         }
     }
 
@@ -2134,7 +2318,7 @@ mod tests {
         }
         // The rack and its header.
         let mut kinds = BTreeSet::new();
-        let size = layout::rack_canvas_size(f1.channels.len(), 16);
+        let size = layout::rack_size(f1.channels.len(), 16);
         for at in sweep(size) {
             if let Some(hit) = layout::hit_test(at, f1.channels.len(), 16) {
                 kinds.insert(format!("{:?}", std::mem::discriminant(&hit)));
@@ -2143,22 +2327,26 @@ mod tests {
         }
         assert_eq!(
             kinds.len(),
-            6,
-            "mute, name, pan, volume, step and add were all found"
+            5,
+            "mute, name, pan, volume and step were all found (no \"+\" row under the rows)"
         );
+        // The header's controls end at the bars' "+", 378.952 (layout's header test): swept to
+        // 400 (to 460 while "+ Instrument…" and the swing came first, the swing ending them at
+        // 484). "+ Instrument…" stands under the rows.
         let mut header = BTreeSet::new();
-        for at in sweep(Size::new(460.0, layout::RACK_HEADER_HEIGHT)) {
+        for at in sweep(Size::new(400.0, layout::RACK_HEADER_HEIGHT)) {
             if let Some(hit) = layout::header_hit_test(at) {
                 header.insert(format!("{hit:?}"));
                 hinted(&Hover::RackHeader(hit), &context);
             }
         }
-        assert_eq!(header.len(), 4, "\"−\", \"+\", add and swing: {header:?}");
+        assert_eq!(header.len(), 3, "\"−\", \"+\" and the swing: {header:?}");
+        hinted(&Hover::RackAdd, &context);
         // The piano roll: the key column, notes (bodies and edges), empty grid, the stems.
         let view = piano_layout::View {
             top: 69,
             scroll: Ticks(0),
-            zoom: piano_layout::DEFAULT_ZOOM,
+            zoom: piano_layout::ZOOM.default,
             step: Ticks(24),
             rows: crate::ui::piano_layout::Rows::ALL,
         };
@@ -2170,7 +2358,7 @@ mod tests {
             .collect();
         let mut roll = BTreeSet::new();
         for at in sweep(Size::new(600.0, 300.0)) {
-            if let Some(hover) = crate::ui::piano_roll::grid_hover(&view, notes.iter(), at) {
+            if let Some(hover) = crate::ui::piano_roll::grid_hover(&view, notes.iter(), at, 300.0) {
                 let Hover::Roll(part) = &hover else {
                     panic!("{hover:?}")
                 };
@@ -2183,6 +2371,9 @@ mod tests {
         }
         assert_eq!(roll.len(), 3, "keys, notes and empty grid");
         for part in [
+            RollPart::Name {
+                channel: ChannelId(1),
+            },
             RollPart::Snap,
             RollPart::Preview,
             RollPart::NotesMenu,
@@ -2195,12 +2386,15 @@ mod tests {
         }
         // The playlist: track headers, the ruler's bands, the clips of every kind and part,
         // empty lanes and the header's controls.
+        // A 400 px track area holds 12 rows of 32 whole (12 · 33 − 1 = 395): the 8 tracks and
+        // the "+ Track" row show.
         let grid = playlist_layout::Grid {
             scroll: Ticks(0),
-            zoom: playlist_layout::DEFAULT_ZOOM,
+            zoom: playlist_layout::ZOOM.default,
             bar: Ticks(384),
             top: 0,
             lane: playlist_layout::LANE_HEIGHT,
+            area: 400.0,
         };
         let mut tracks = BTreeSet::new();
         for at in sweep(Size::new(playlist_layout::TRACK_HEADER_WIDTH, 400.0)) {
@@ -2344,6 +2538,7 @@ mod tests {
             Item::Sound(0),
             Item::Set(set),
             Item::Rescan,
+            Item::Synth,
             Item::ExternalInput,
             Item::Tree(0),
             Item::Tree(1),
@@ -2358,10 +2553,17 @@ mod tests {
                 hinted(&hover, &context);
             }
         }
-        // The settings panel.
-        let settings = settings_layout::Layout { ports: 2, notes: 1 };
+        // The settings panel's General page, down to its audio section.
+        let settings = settings_layout::Layout {
+            ports: 2,
+            notes: 1,
+            outputs: 2,
+            output_lines: 1,
+            inputs: 2,
+            ..settings_layout::Layout::default()
+        };
         let mut hits = BTreeSet::new();
-        for at in sweep(Size::new(400.0, 260.0)) {
+        for at in sweep(Size::new(400.0, settings.audio().title().y)) {
             if let Some(hit) = settings.hit(at) {
                 hits.insert(format!("{:?}", std::mem::discriminant(&hit)));
                 hinted(&Hover::Setting(hit), &context);
@@ -2369,12 +2571,56 @@ mod tests {
         }
         assert_eq!(
             hits.len(),
-            5,
-            "all ports, a port, the stepper's two and the hints box"
+            8,
+            "all ports, a port, the octave's two, the hints box and the zoom's three"
         );
-        let latency = settings.audio(2).below(1, 2).latency_below(0);
+        // Its Theme page.
+        let (mut kinds, mut themes, mut wheel) =
+            (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+        let page = Size::new(
+            crate::ui::settings_panel::WINDOW_MIN.width,
+            crate::ui::theme_page::content_height(),
+        );
+        let targets = crate::ui::theme_page::ColorTarget::ALL;
+        for (at, target) in sweep(page).flat_map(|at| targets.map(|target| (at, target))) {
+            if let Some(hit) = crate::ui::theme_page::hit(at, target) {
+                kinds.insert(format!("{hit:?}"));
+                match hit {
+                    SettingHit::Theme(theme) => {
+                        themes.insert(theme.name());
+                    }
+                    SettingHit::Wheel(_, part) => {
+                        wheel.insert(format!("{part:?}"));
+                    }
+                    _ => {}
+                }
+                hinted(&Hover::Setting(hit), &context);
+            }
+        }
+        let others = kinds
+            .iter()
+            .filter(|kind| !kind.starts_with("Theme("))
+            .count();
+        assert_eq!(
+            others,
+            1 + 2 * 4,
+            "the menu, and for each target the wheel's two parts, the hex box and its own key: \
+             {kinds:?}"
+        );
+        assert_eq!(
+            themes.len(),
+            crate::ui::palette::ThemeId::ALL.len(),
+            "every theme's key: {themes:?}"
+        );
+        assert_eq!(wheel.len(), 2, "the wheel's ring and square: {wheel:?}");
+        assert_eq!(
+            words(&Hover::Setting(SettingHit::ZoomUp), &context),
+            "Zoom \u{b7} every window a step larger; Ctrl+= in any window"
+        );
+        let latency = settings.latency();
         let mut buttons = BTreeSet::new();
-        for at in sweep(Size::new(400.0, latency.bottom())) {
+        let buttons_foot = latency.line(2).y + settings_layout::ROW_HEIGHT;
+        for at in sweep(Size::new(400.0, buttons_foot)) {
             if let Some(hit) = latency.hit(at) {
                 buttons.insert(format!("{hit:?}"));
                 hinted(&Hover::Setting(hit), &context);
@@ -2389,6 +2635,41 @@ mod tests {
         for part in SoundPart::all() {
             hinted(&Hover::Sound(part), &context);
         }
+    }
+
+    // A synth's knob says its whole name (the knob shows "Attack" under "Amp env"), its value
+    // as the knob shows it and what a press does; a choice's button, that a click picks the
+    // next. On p33_sine: the cutoff at its default (20.00 kHz), the first wave set to the sine,
+    // the drive at its default (0%), the amp attack at its default (1.0 ms).
+    #[test]
+    fn a_synth_knob_says_its_whole_name_and_value() {
+        let synth = project("p33_sine.json");
+        let context = context(&synth);
+        let knob = |index| {
+            words(
+                &Hover::Sound(SoundPart::SynthParam {
+                    channel: dawsome_engine::project::ChannelId(1),
+                    index,
+                }),
+                &context,
+            )
+        };
+        assert_eq!(
+            knob(17),
+            "Cutoff \u{b7} 20.00 kHz \u{b7} drag; double-click resets; right-click to automate or link a controller"
+        );
+        assert_eq!(
+            knob(0),
+            "Osc 1 wave \u{b7} Sine \u{b7} click picks the next; right-click to automate or link a controller"
+        );
+        assert_eq!(
+            knob(21),
+            "Drive \u{b7} 0% \u{b7} drag; double-click resets; right-click to automate or link a controller"
+        );
+        assert_eq!(
+            knob(26),
+            "Amp attack \u{b7} 1.0 ms \u{b7} drag; double-click resets; right-click to automate or link a controller"
+        );
     }
 
     // v2: every control the instrument window's strip finds under the cursor, swept 2 px
@@ -2406,6 +2687,7 @@ mod tests {
             ChannelKind::Instrument,
             ChannelKind::Plugin,
             ChannelKind::Input,
+            ChannelKind::Synth,
         ] {
             let strip = Strip::of(kind, 536.0);
             let mut found = BTreeSet::new();
@@ -2502,7 +2784,7 @@ mod tests {
         }
     }
 
-    // Swing (spec swing.md §2.3 and §5): at PPQ 96 a 16th is 24 ticks and the second 16th of a
+    // Swing: at PPQ 96 a 16th is 24 ticks and the second 16th of a
     // pair plays floor(48·S/1000) − 24 ticks late: 8 at 66.7 %, 12 at 75 %, 1 at 52.1 %, none
     // at 52.0 % or straight. Without a pattern the hint has no value.
     #[test]
@@ -2534,6 +2816,103 @@ mod tests {
         assert_eq!(words(&hover, &none), format!("Swing \u{b7} {does}"));
     }
 
+    // The snap picker says the snap and the length a click draws at it, which the strip's Len
+    // readout says beside it until the strip folds it away: at Line with a step's draw length,
+    // 24 ticks at 96 a beat, "0:01:00" (no bar, one step, no tick); at Bar a bar's, 384,
+    // "1:00:00". Written by hand.
+    #[test]
+    fn the_snap_picker_says_the_length_a_click_draws() {
+        let p3 = project("p3_roll.json");
+        let snap = Hover::Roll(RollPart::Snap);
+        assert_eq!(
+            words(&snap, &context(&p3)),
+            "Snap: Line \u{b7} draws 0:01:00 \u{b7} what notes land on when drawn or moved"
+        );
+        let bar = Context {
+            roll_snap: Snap::Bar,
+            draw_length: Ticks(384),
+            ..context(&p3)
+        };
+        assert_eq!(
+            words(&snap, &bar),
+            "Snap: Bar \u{b7} draws 1:00:00 \u{b7} what notes land on when drawn or moved"
+        );
+    }
+
+    // The strip's title says the channel's name whole, which the strip cuts short where it runs
+    // out of room: p3_roll's channel 1, "lead", renamed "Bass 808 low" (cut to "Bas…" in a 604
+    // px window with a scale), and what the name is. Written by hand.
+    #[test]
+    fn the_strips_title_says_the_channels_name_whole() {
+        let mut p3 = project("p3_roll.json");
+        let name = Hover::Roll(RollPart::Name {
+            channel: ChannelId(1),
+        });
+        assert_eq!(
+            words(&name, &context(&p3)),
+            "lead \u{b7} the channel this roll edits"
+        );
+        p3.channels.get_mut(&ChannelId(1)).expect("channel 1").name = "Bass 808 low".to_owned();
+        assert_eq!(
+            words(&name, &context(&p3)),
+            "Bass 808 low \u{b7} the channel this roll edits"
+        );
+    }
+
+    // The roll's player, written by hand: the strip's Play names its key and becomes Stop while
+    // the roll plays, and says why it is off during a take; Loop says on or off; the toolbar's
+    // Play and the mode's switch say the roll's player has the transport while it does, and
+    // say nothing of it otherwise.
+    #[test]
+    fn the_roll_players_controls_say_what_they_do() {
+        let p3 = project("p3_roll.json");
+        let stopped = context(&p3);
+        let play = Hover::Roll(RollPart::Play);
+        assert_eq!(
+            words(&play, &stopped),
+            "Play \u{b7} plays this channel's notes of this pattern from the start; Shift+Space \
+             while the piano roll has the keys"
+        );
+        assert_eq!(
+            words(&Hover::Roll(RollPart::Loop), &stopped),
+            "Loop \u{b7} off \u{b7} loops the pattern while playing from the roll; off, it plays \
+             once and stops"
+        );
+        assert_eq!(
+            words(&Hover::Tool(Tool::Play), &stopped),
+            "Play \u{b7} Space plays and stops"
+        );
+        let recording = Context {
+            roll_player: RollPlayer {
+                recording: true,
+                ..RollPlayer::default()
+            },
+            ..context(&p3)
+        };
+        assert_eq!(
+            words(&play, &recording),
+            "Play \u{b7} off while a take runs: recording is the toolbar's; stop the take first"
+        );
+        let playing = Context {
+            roll_player: RollPlayer {
+                playing: true,
+                looping: true,
+                recording: false,
+            },
+            ..context(&p3)
+        };
+        assert!(words(&play, &playing).starts_with("Stop \u{b7} plays"));
+        assert!(words(&Hover::Roll(RollPart::Loop), &playing).starts_with("Loop \u{b7} on"));
+        for tool in [Tool::Play, Tool::PatternMode, Tool::SongMode] {
+            assert!(
+                words(&Hover::Tool(tool), &playing).contains(
+                    " \u{b7} Playing the piano roll's channel; Play here switches back \u{b7} "
+                ),
+                "{tool:?}"
+            );
+        }
+    }
+
     // Known answers, written by hand: a value with its unit between the name and the gestures.
     #[test]
     fn a_hint_names_the_control_its_value_and_its_gestures() {
@@ -2545,7 +2924,7 @@ mod tests {
         );
         assert_eq!(
             words(&Hover::Tool(Tool::Tempo), &context),
-            "Tempo \u{b7} 120.000 BPM \u{b7} drag left or right, or scroll; Shift for 0.001 steps"
+            "Tempo \u{b7} 120.0 BPM \u{b7} drag left or right, or scroll; Shift for 0.001 steps"
         );
         assert_eq!(
             words(&Hover::Roll(RollPart::Keys { key: 60 }), &context),
@@ -2556,19 +2935,14 @@ mod tests {
         assert_eq!(key_name(127), "G10");
     }
 
-    // 6d K3: every control of Settings' Keys page, swept 2 px apart, and each page's tab has a
+    // Every control of Settings' Keys page, swept 2 px apart, and each page's tab has a
     // hint naming it and what it does; every action's row is found.
-    // The velocity lane's handle, Follow, the scroll bars, Fit and the dividers each have a hint
-    // naming them and what they do.
+    // Follow, the scroll bars, Fit and the dividers each have a hint naming them and what they
+    // do. (The velocity lane's handle had one until the lane's height was fixed.)
     #[test]
-    fn the_lane_follow_scroll_and_divider_controls_have_hints() {
+    fn the_follow_scroll_and_divider_controls_have_hints() {
         let f1 = project("p3_roll.json");
         let context = context(&f1);
-        let handle = hinted(&Hover::Roll(RollPart::LaneHandle), &context);
-        assert_eq!(
-            handle,
-            "Velocity lane \u{b7} drag up or down to make the lane taller or shorter"
-        );
         for hover in [
             Hover::Roll(RollPart::Follow),
             Hover::ScrollBar,
@@ -2577,7 +2951,7 @@ mod tests {
         ] {
             hinted(&hover, &context);
         }
-        // The mixer's handle says what a drag does, as the lane's does. Pin moved: the handle
+        // The mixer's handle says what a drag does. Pin moved: the handle
         // is the divider over the mixer, as every
         // line between two stacked panels is; each names the two panels and the double-click,
         // and (pin moved again) the sideways drag that pops the lower one out.
@@ -2601,7 +2975,16 @@ mod tests {
         ] {
             hinted(&Hover::Divider { upper, lower }, &context);
         }
-        // P3: a channel's name says what a click, a double-click and a right-click do.
+        // The pop-out button on each of the four stacked panels' headers says it in the hint
+        // bar alone (no tip): it opens the panel in its own window.
+        assert_eq!(
+            hinted(&Hover::PopOut(Panel::PianoRoll), &context),
+            "Pop out \u{b7} opens the piano roll in its own window"
+        );
+        for panel in [Panel::Rack, Panel::Playlist, Panel::Mixer] {
+            hinted(&Hover::PopOut(panel), &context);
+        }
+        // A channel's name says what a click, a double-click and a right-click do.
         let name = Hover::Rack {
             row: 0,
             part: RackPart::Name,

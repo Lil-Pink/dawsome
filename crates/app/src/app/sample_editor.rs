@@ -1072,6 +1072,7 @@ impl App {
                     self.editor.place.size(PopOut::SampleEditor),
                     self.editor.place.position(),
                     level,
+                    self.zoom(),
                 );
                 let (id, opened) = window::open(settings);
                 self.editor.window = Some(id);
@@ -1116,7 +1117,7 @@ impl App {
 
     /// Keeps the editor's place in the settings for its next opening.
     pub(super) fn remember_sample_editor_place(&mut self) {
-        let place = Some(self.editor.place);
+        let place = Some(self.editor.place.system(self.zoom()));
         if self.settings.sample_editor_window != place {
             self.settings.sample_editor_window = place;
             self.save_settings();

@@ -624,7 +624,12 @@ impl ProcessorHost for Vst3Host {
 
     // The plugin's own editor in a window of ours; one an instance has open already stays as it
     // is. No editor (or one that will not take our window): the app's parameter window.
-    fn open_editor(&self, owner: ProcessorOwner, title: &str) -> Result<Editor, HostError> {
+    fn open_editor(
+        &self,
+        owner: ProcessorOwner,
+        title: &str,
+        scale: f64,
+    ) -> Result<Editor, HostError> {
         let instance = self.current(owner).ok_or(HostError::Missing)?;
         if instance.editor.borrow().is_some() {
             return Ok(Editor::Embedded);
@@ -632,7 +637,7 @@ impl ProcessorHost for Vst3Host {
         let Some(controller) = instance.parts.controller.clone() else {
             return Ok(Editor::Generic);
         };
-        let Some(opened) = view::open(&controller, title, || self.display())? else {
+        let Some(opened) = view::open(&controller, title, scale, || self.display())? else {
             return Ok(Editor::Generic);
         };
         if self.inner.above.get() {

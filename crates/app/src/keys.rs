@@ -35,10 +35,16 @@ pub enum Action {
     Panel(Panel),
     /// The Help window, opened or closed.
     Help,
+    /// The zoom a stop larger or smaller, or back to 100 % ([`crate::zoom::Zoom`]).
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
     LibraryUp,
     LibraryDown,
     LibraryClose,
     LibraryOpen,
+    /// The piano roll's Play / Stop, while the roll has the keys.
+    RollPlayStop,
     TransposeUp,
     TransposeDown,
     OctaveUp,
@@ -57,7 +63,7 @@ pub enum Action {
 impl Action {
     /// Every action, in the order the Keys page lists them; a chord two actions share runs the
     /// one listed first.
-    pub const ALL: [Action; 37] = [
+    pub const ALL: [Action; 41] = [
         Action::PlayStop,
         Action::ToggleMode,
         Action::ArmRecord,
@@ -78,10 +84,14 @@ impl Action {
         Action::Panel(Panel::Browser),
         Action::Panel(Panel::Settings),
         Action::Help,
+        Action::ZoomIn,
+        Action::ZoomOut,
+        Action::ZoomReset,
         Action::LibraryUp,
         Action::LibraryDown,
         Action::LibraryClose,
         Action::LibraryOpen,
+        Action::RollPlayStop,
         Action::TransposeUp,
         Action::TransposeDown,
         Action::OctaveUp,
@@ -111,6 +121,7 @@ impl Action {
             Action::Delete => "delete",
             Action::Duplicate => "duplicate",
             Action::SelectAll => "select_all",
+            Action::RollPlayStop => "roll_play",
             Action::TransposeUp => "transpose_up",
             Action::TransposeDown => "transpose_down",
             Action::OctaveUp => "octave_up",
@@ -129,6 +140,9 @@ impl Action {
             Action::Panel(Panel::Browser) => "library",
             Action::Panel(Panel::Settings) => "settings",
             Action::Help => "help",
+            Action::ZoomIn => "zoom_in",
+            Action::ZoomOut => "zoom_out",
+            Action::ZoomReset => "zoom_reset",
             Action::LibraryUp => "library_up",
             Action::LibraryDown => "library_down",
             Action::LibraryClose => "library_close",
@@ -159,6 +173,7 @@ impl Action {
             Action::Delete => "Delete the selection",
             Action::Duplicate => "Duplicate the selection",
             Action::SelectAll => "Select all notes",
+            Action::RollPlayStop => "Piano roll: play / stop",
             Action::TransposeUp => "Notes: up a semitone",
             Action::TransposeDown => "Notes: down a semitone",
             Action::OctaveUp => "Notes: up an octave",
@@ -172,6 +187,9 @@ impl Action {
             Action::OpenSelected => "Open or add what is selected",
             Action::Panel(panel) => panel.title(),
             Action::Help => "Help",
+            Action::ZoomIn => "Zoom in",
+            Action::ZoomOut => "Zoom out",
+            Action::ZoomReset => "Zoom to 100 %",
             Action::LibraryUp => "Library: up",
             Action::LibraryDown => "Library: down",
             Action::LibraryClose => "Library: close a folder",
@@ -197,6 +215,7 @@ impl Action {
             Action::Delete => "deletes the selection",
             Action::Duplicate => "duplicates the selection",
             Action::SelectAll => "selects all notes",
+            Action::RollPlayStop => "plays and stops the piano roll's notes",
             Action::TransposeUp => "moves the selected notes up a semitone",
             Action::TransposeDown => "moves the selected notes down a semitone",
             Action::OctaveUp => "moves the selected notes up an octave",
@@ -210,6 +229,9 @@ impl Action {
             Action::OpenSelected => "opens or adds what is selected",
             Action::Panel(_) => "shows or hides a panel",
             Action::Help => "opens or closes the Help window",
+            Action::ZoomIn => "makes every window larger a step",
+            Action::ZoomOut => "makes every window smaller a step",
+            Action::ZoomReset => "sets the zoom back to 100 %",
             Action::LibraryUp | Action::LibraryDown => "walks the Library",
             Action::LibraryClose => "closes a Library folder",
             Action::LibraryOpen => "opens a Library folder",
@@ -227,7 +249,8 @@ impl Action {
             | Action::LibraryDown
             | Action::LibraryClose
             | Action::LibraryOpen => Scope::Library,
-            Action::TransposeUp
+            Action::RollPlayStop
+            | Action::TransposeUp
             | Action::TransposeDown
             | Action::OctaveUp
             | Action::OctaveDown
@@ -260,6 +283,8 @@ impl Action {
             self,
             Action::Undo
                 | Action::Redo
+                | Action::ZoomIn
+                | Action::ZoomOut
                 | Action::Delete
                 | Action::SelectAll
                 | Action::TransposeUp
@@ -277,7 +302,7 @@ impl Action {
 
     /// The chords it has before the user changes them, written as the settings file writes
     /// them. Shift+Del deletes too: of the modifier variants the shortcuts ran before the table
-    /// matched chords exactly, the one a hand is likely to have learned (6d review).
+    /// matched chords exactly, the one a hand is likely to have learned.
     fn defaults(self) -> &'static [&'static str] {
         match self {
             Action::PlayStop => &["Space"],
@@ -292,7 +317,9 @@ impl Action {
             Action::Duplicate => &["Ctrl+B", "Ctrl+D"],
             Action::SelectAll => &["Ctrl+A"],
             // The piano roll's keys: the arrows while the roll has the keys; the
-            // Library's walk has them while it does (see [`Scope`]).
+            // Library's walk has them while it does (see [`Scope`]). Shift+Space: Space is the
+            // toolbar's Play / stop, Shift with it the roll's own.
+            Action::RollPlayStop => &["Shift+Space"],
             Action::TransposeUp => &["Up"],
             Action::TransposeDown => &["Down"],
             Action::OctaveUp => &["Shift+Up"],
@@ -314,6 +341,12 @@ impl Action {
             Action::Panel(Panel::Settings) => &["6", "F10"],
             // F1, help in most programs; free while the keyboard plays notes.
             Action::Help => &["F1"],
+            // A browser's zoom keys. Ctrl+Plus as well as Ctrl+=: where "=" takes Shift (a
+            // German keyboard) "+" has a key of its own, as on the number pad; and Ctrl+Shift+Plus
+            // is what Ctrl with the "+" printed over "=" types on a US keyboard.
+            Action::ZoomIn => &["Ctrl+=", "Ctrl+Plus", "Ctrl+Shift+Plus"],
+            Action::ZoomOut => &["Ctrl+-"],
+            Action::ZoomReset => &["Ctrl+0"],
             Action::LibraryUp => &["Up"],
             Action::LibraryDown => &["Down"],
             Action::LibraryClose => &["Left"],
@@ -378,6 +411,10 @@ const NAMED: [(Named, &str); 26] = [
     (Named::F12, "F12"),
 ];
 
+/// How a chord writes the plus key, which "+" between a chord's keys would make unreadable:
+/// "Ctrl+Plus".
+const PLUS: &str = "Plus";
+
 /// The key of a chord: a character, as the user's keyboard types it without modifiers (an
 /// ASCII letter kept in lower case, so it matches either case; any other character as typed, so
 /// it reads back as it was written: ß upper-cased is SS), or a named key.
@@ -422,8 +459,8 @@ impl Chord {
         })
     }
 
-    /// Reads a chord as [`Chord::label`] writes it ("Ctrl+Shift+Z"; the modifiers in any order
-    /// and case); none for text that is no chord.
+    /// Reads a chord as [`Chord::label`] writes it ("Ctrl+Shift+Z", "Ctrl+Plus"; the modifiers
+    /// in any order and case; "+" alone as the plus key too); none for text that is no chord.
     pub fn parse(text: &str) -> Option<Self> {
         let mut chord = Self {
             ctrl: false,
@@ -454,6 +491,7 @@ impl Chord {
         {
             Some(&(named, _)) => ChordKey::Named(named),
             None if rest.eq_ignore_ascii_case("Delete") => ChordKey::Named(Named::Delete),
+            None if rest.eq_ignore_ascii_case(PLUS) => ChordKey::Character("+".to_owned()),
             None if rest.chars().count() == 1 && rest != " " => {
                 ChordKey::Character(rest.to_ascii_lowercase())
             }
@@ -462,7 +500,8 @@ impl Chord {
         Some(chord)
     }
 
-    /// The chord as people read it and the settings file keeps it: "Ctrl+Shift+Z", "Del", "L".
+    /// The chord as people read it and the settings file keeps it: "Ctrl+Shift+Z", "Del", "L",
+    /// "Ctrl+Plus".
     pub fn label(&self) -> String {
         let mut words = String::new();
         for (held, name) in [
@@ -476,6 +515,7 @@ impl Chord {
             }
         }
         match &self.key {
+            ChordKey::Character(typed) if typed == "+" => words.push_str(PLUS),
             ChordKey::Character(typed) => words.push_str(&typed.to_ascii_uppercase()),
             ChordKey::Named(named) => {
                 let name = NAMED
@@ -783,8 +823,14 @@ mod tests {
             ("F8", Action::Panel(Panel::Browser)),
             ("6", Action::Panel(Panel::Settings)),
             ("F10", Action::Panel(Panel::Settings)),
-            // Help guide H1: F1 opens the Help window.
+            // F1 opens the Help window.
             ("F1", Action::Help),
+            // A browser's zoom keys, Ctrl+Plus beside Ctrl+=.
+            ("Ctrl+=", Action::ZoomIn),
+            ("Ctrl+Plus", Action::ZoomIn),
+            ("Ctrl+Shift+Plus", Action::ZoomIn),
+            ("Ctrl+-", Action::ZoomOut),
+            ("Ctrl+0", Action::ZoomReset),
             ("Up", Action::LibraryUp),
             ("Down", Action::LibraryDown),
             ("Left", Action::LibraryClose),
@@ -799,6 +845,8 @@ mod tests {
             ("Ctrl+O", Action::Open),
             ("Ctrl+S", Action::Save),
             ("Ctrl+Shift+S", Action::SaveAs),
+            // The roll player: Shift+Space, the piano roll's own Play / stop.
+            ("Shift+Space", Action::RollPlayStop),
         ];
         for (text, action) in table {
             assert_eq!(keys.action(&chord(text), false), Some(action), "{text}");
@@ -846,7 +894,10 @@ mod tests {
     }
 
     // Chords read back as they are written, modifiers in any order and case; the modifiers
-    // held must be exactly the chord's; a repeat runs only an action that repeats.
+    // held must be exactly the chord's; a repeat runs only an action that repeats. The zoom's
+    // keys: "=", "-" and "0" as typed, the plus key written "Plus" ("+" alone reads as it
+    // too), each run from what the key types: "=" with Ctrl, "+" with Ctrl (a key of its own, the
+    // number pad's) or with Ctrl and Shift (US: Shift with "="), "-" and "0" with Ctrl.
     #[test]
     fn chords_read_back_and_match_exactly() {
         for text in [
@@ -858,11 +909,20 @@ mod tests {
             ",",
             "Alt+Up",
             "Super+K",
+            "Ctrl+=",
+            "Ctrl+-",
+            "Ctrl+0",
+            "Ctrl+Plus",
+            "Ctrl+Shift+Plus",
+            "Plus",
         ] {
             assert_eq!(chord(text).label(), text);
         }
         assert_eq!(chord("shift+ctrl+z"), chord("Ctrl+Shift+Z"));
         assert_eq!(chord("Delete"), chord("Del"));
+        assert_eq!(chord("Ctrl++"), chord("Ctrl+Plus"));
+        assert_eq!(chord("ctrl+plus"), chord("Ctrl+Plus"));
+        assert_eq!(chord("Ctrl+Plus").key, ChordKey::Character("+".to_owned()));
         for text in ["", "Ctrl+", "Ctrl+Bogus", "Hyper+Z", "  "] {
             assert_eq!(Chord::parse(text), None, "{text:?}");
         }
@@ -882,6 +942,22 @@ mod tests {
         );
         assert_eq!(pressed("b", Modifiers::CTRL, true), None, "no repeat");
         assert_eq!(pressed("l", Modifiers::empty(), true), None);
+        for (typed, modifiers, action) in [
+            ("=", Modifiers::CTRL, Action::ZoomIn),
+            ("+", Modifiers::CTRL, Action::ZoomIn),
+            ("+", Modifiers::CTRL | Modifiers::SHIFT, Action::ZoomIn),
+            ("-", Modifiers::CTRL, Action::ZoomOut),
+            ("0", Modifiers::CTRL, Action::ZoomReset),
+        ] {
+            assert_eq!(pressed(typed, modifiers, false), Some(action), "{typed}");
+        }
+        assert_eq!(
+            pressed("=", Modifiers::CTRL, true),
+            Some(Action::ZoomIn),
+            "held, it zooms on"
+        );
+        assert_eq!(pressed("0", Modifiers::CTRL, true), None, "no repeat");
+        assert_eq!(pressed("=", Modifiers::empty(), false), None);
         assert_eq!(
             keys.action_of(Key::Named(Named::Escape), Modifiers::empty(), false),
             None,
@@ -889,7 +965,7 @@ mod tests {
         );
     }
 
-    // 6d review 6: a key typing a letter outside ASCII (ß on a German keyboard, é on a French
+    // A key typing a letter outside ASCII (ß on a German keyboard, é on a French
     // one, ü) is kept as typed: its chord is written as typed, reads back the same and runs
     // its action from what the key types. Only ASCII letters match either case.
     #[test]

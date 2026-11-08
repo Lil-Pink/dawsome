@@ -443,7 +443,7 @@ def nonzero(left, right):
 
 # ---------- the projects (the landed format: canonical field order, defaults left out) ----------
 def J(d): return json.dumps(d, separators=(",", ":"), ensure_ascii=False)
-def tracks(n=8): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, n + 1)]
+def tracks(n=6): return [{"id": i, "name": "Track %d" % i, "mute": False} for i in range(1, n + 1)]
 def instrument(i, name, path):
     return {"id": i, "name": name, "kind": "instrument", "instrument": path, "volume": 1.0,
             "pan": 0.0, "mute": False}
@@ -506,7 +506,7 @@ def after_set():
     clip = {"id": 1, "track": track, "start": start, "length": BAR, "kind": "pattern", "pattern": 1}
     added = dict(instrument(2, "Pad", "sets/pad/pad.sfz"), volume=NEW_CHANNEL_VOLUME)
     doc = project(BASE["channels"] + [added], BEAT,
-                  playlist={"next_track_id": 9, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]})
+                  playlist={"next_track_id": 7, "next_clip_id": 2, "tracks": tracks(), "clips": [clip]})
     return doc, {"set": "Pad", "track": track, "bar": bar, "tick": start, "selected_channel": 2,
                  "document": "p11_after_set.json"}
 

@@ -25,12 +25,13 @@ use iced::{mouse, Point, Rectangle, Size};
 use crate::app::ClipLink;
 use crate::ui::clip_gesture::{self, ClipSnap};
 use crate::ui::clips;
+use crate::ui::grid_rules::PIXELS_PER_NOTCH;
 use crate::ui::hint::{ClipRow, TrackRow};
 use crate::ui::note_gesture::{snap_down, snap_nearest};
 use crate::ui::playlist::{automation_handles, automation_points};
 use crate::ui::playlist_layout::{
     self, ClipPart, Grid, HeaderHit, Lanes, LoopEdge, RulerBand, EDGE_SCROLL_INSET,
-    GAIN_READOUT_WIDTH, LANE_HEIGHT, POINT_REACH, TITLE_HEIGHT, TRACK_HEADER_WIDTH, ZOOM_LEVELS,
+    GAIN_READOUT_WIDTH, LANE_HEIGHT, POINT_REACH, TITLE_HEIGHT, TRACK_HEADER_WIDTH,
 };
 use crate::ui::scroll::{self, BarMessage, Span};
 
@@ -52,8 +53,6 @@ const FINE_GAIN_DB_PER_PIXEL: f32 = 0.01;
 
 /// Tracks the wheel scrolls per notch.
 const TRACKS_PER_NOTCH: i64 = 1;
-/// Pixels of timeline Shift+wheel scrolls per notch, at any zoom.
-const PIXELS_PER_NOTCH: f32 = 64.0;
 
 /// What the playlist's canvases report. Points are in the reporting canvas's coordinates (see
 /// [`playlist_layout`]), so a test that sends them drives the real mapping.
@@ -69,6 +68,12 @@ pub enum PlaylistMessage {
     TracksDragged(Point),
     TracksReleased(Point),
     TracksScrolled {
+        at: Point,
+        delta: mouse::ScrollDelta,
+    },
+    /// The wheel over the ruler, which does what it does over the lanes (Ctrl zooms around
+    /// the tick under it).
+    RulerScrolled {
         at: Point,
         delta: mouse::ScrollDelta,
     },
@@ -279,7 +284,7 @@ pub struct Arranger {
 impl Arranger {
     /// A playlist at the default zoom and snap, scrolled to the start, for a project at `ppq`,
     /// drawing its tracks into an area of `tracks_size`, its lanes `lanes` (fitted once it has
-    /// seen the project: [`Arranger::refresh`]).
+    /// seen the project: [`Arranger::refresh`]). [`Arranger::with_zoom`] gives it another zoom.
     pub fn new(ppq: u16, tracks_size: Size, lanes: Lanes) -> Self {
         let lane = match lanes {
             Lanes::Fit => LANE_HEIGHT,
@@ -287,10 +292,11 @@ impl Arranger {
         };
         let grid = Grid {
             scroll: Ticks(0),
-            zoom: playlist_layout::DEFAULT_ZOOM,
+            zoom: playlist_layout::ZOOM.default,
             bar: time::bars_to_ticks(1, ppq),
             top: 0,
             lane,
+            area: tracks_size.height,
         };
         Self {
             grid,
@@ -310,6 +316,22 @@ impl Arranger {
             bar_held: false,
             lanes,
         }
+    }
+
+    /// This playlist at `px` pixels per bar (kept to the zoom's ends): the zoom the settings
+    /// keep.
+    pub fn with_zoom(mut self, px: f32) -> Self {
+        self.grid.zoom = playlist_layout::ZOOM.kept(px);
+        self.press_view = self.grid;
+        self
+    }
+
+    /// The view as a first start has it: the lanes fitting the panel, the zoom its default, the
+    /// scroll kept inside what there is to show (Settings' "Reset to defaults").
+    pub fn reset_view(&mut self, project: &Project) {
+        self.lanes = Lanes::Fit;
+        self.grid.zoom = playlist_layout::ZOOM.default;
+        self.clamp(project);
     }
 
     /// Whether the lanes fit the track area or keep a height chosen.
@@ -363,8 +385,9 @@ impl Arranger {
     }
 
     /// While the song plays, the view jumps a page when the song position `at` leaves it,
-    /// starting at the bar that holds it; not while the scroll bar's thumb is held, nor while a
-    /// drag that scrolled the view past an edge is. Returns whether the view moved.
+    /// starting at the bar that holds it (at the cell that holds it when a bar is wider than the
+    /// view, so the song position stays in view); not while the scroll bar's thumb is held, nor
+    /// while a drag that scrolled the view past an edge is. Returns whether the view moved.
     pub fn follow(&mut self, project: &Project, at: Ticks) -> bool {
         if self.bar_held || (self.edge_scrolled && self.gesture.is_some()) {
             return false;
@@ -375,7 +398,7 @@ impl Arranger {
             return false;
         };
         let before = self.grid.scroll;
-        self.grid.scroll = Ticks(offset as i64);
+        self.grid.scroll = self.grid.cell_start(Ticks(offset as i64));
         self.clamp(project);
         self.grid.scroll != before
     }
@@ -568,15 +591,31 @@ impl Arranger {
     }
 
     /// Where something let go of at tracks point `at` lands: the index (in track order) of the
-    /// row there, which may be past the last track, and the tick there floored to the snap.
-    /// `None` on the track headers.
+    /// row there, which may be past the last track (a row shown under it, or the "+ Track"
+    /// row's band across the lanes, where a track is added), and the tick there floored to the
+    /// snap. `None` on the track headers and under the rows shown.
     pub fn drop_point(&self, project: &Project, at: Point) -> Option<(usize, Ticks)> {
         if at.x < TRACK_HEADER_WIDTH {
             return None;
         }
-        let index = usize::try_from(self.grid.track_index_at(at.y)).ok()?;
+        let index = self
+            .grid
+            .shown_index_at(at.y)
+            .or_else(|| self.add_track_band(project, at.y))?;
         let tick = snap_down(self.grid.tick_at(at.x), self.unit(project));
         (tick.0 >= 0).then_some((index, tick))
+    }
+
+    /// The index past the last track while tracks y `y` is in the "+ Track" row's band, which
+    /// shows ([`Grid::shows_add_track`]): a drop there adds a track, as a drop on an empty row
+    /// under the last track does. Why: the "+ Track" row takes its own 24 px now, not a lane's,
+    /// so with fitted lanes no empty row is shown under the last track.
+    fn add_track_band(&self, project: &Project, y: f32) -> Option<usize> {
+        let tracks = project.playlist.tracks.len();
+        let below = tracks.checked_sub(self.grid.top)?;
+        let top = self.grid.row_top(below);
+        let band = top..top + playlist_layout::ADD_TRACK_HEIGHT;
+        (self.grid.shows_add_track(below) && band.contains(&y)).then_some(tracks)
     }
 
     /// Handles one canvas or header message; `brush` is the pattern a press on empty lane
@@ -607,11 +646,11 @@ impl Arranger {
                 None
             }
             PlaylistMessage::ZoomIn => {
-                self.grid.zoom = (self.grid.zoom + 1).min(ZOOM_LEVELS.len() - 1);
+                self.step_zoom(true);
                 None
             }
             PlaylistMessage::ZoomOut => {
-                self.grid.zoom = self.grid.zoom.saturating_sub(1);
+                self.step_zoom(false);
                 None
             }
             PlaylistMessage::ToggleFit => {
@@ -622,7 +661,8 @@ impl Arranger {
                 self.clamp(project);
                 None
             }
-            PlaylistMessage::TracksScrolled { at, delta } => {
+            PlaylistMessage::TracksScrolled { at, delta }
+            | PlaylistMessage::RulerScrolled { at, delta } => {
                 self.scroll(project, at, delta, modifiers);
                 None
             }
@@ -684,14 +724,23 @@ impl Arranger {
                 self.properties = None;
                 None
             }
+            // The thumb dragged moves the view smoothly while held and lands it on a whole
+            // cell when let go of; a page or a wheel notch over the bar lands at once.
             PlaylistMessage::Bar(BarMessage::To { offset, held }) => {
                 self.bar_held = held;
-                self.grid.scroll = Ticks(offset.round() as i64);
+                let to = Ticks(offset.round() as i64);
+                self.grid.scroll = if held {
+                    to
+                } else {
+                    self.grid.landed_towards(to)
+                };
                 self.clamp(project);
                 None
             }
             PlaylistMessage::Bar(BarMessage::LetGo) => {
                 self.bar_held = false;
+                self.grid.scroll = self.grid.landed(self.grid.scroll);
+                self.clamp(project);
                 None
             }
         }
@@ -808,7 +857,7 @@ impl Arranger {
             }
             return self.press_header(project, at, double);
         }
-        let index = usize::try_from(self.grid.track_index_at(at.y)).ok()?;
+        let index = self.grid.shown_index_at(at.y)?;
         clip_gesture::track_at(project, index)?;
         let under = self.clip_under(project, at);
         if let Some((id, part)) = under {
@@ -1323,9 +1372,11 @@ impl Arranger {
             .collect()
     }
 
-    /// The wheel over the tracks: tracks, Shift (or a wheel across, a trackpad's) for time, Ctrl
-    /// to zoom around the cursor, Alt for the lane height. One step per wheel event, whatever
-    /// its size.
+    /// The wheel over the tracks (or the ruler): tracks, Shift (or a wheel across, a trackpad's)
+    /// for time, landing on a whole cell, Ctrl to zoom a quarter of a doubling around the
+    /// cursor, Alt for the lane height. One step per wheel event, whatever its size. Why the
+    /// zoom does not land: the tick under the cursor stays under it, which a landed view could
+    /// not keep.
     fn scroll(
         &mut self,
         project: &Project,
@@ -1344,25 +1395,13 @@ impl Arranger {
             self.grid.lane = self.grid.stepped_lane(up);
             self.lanes = Lanes::Fixed(self.grid.lane);
         } else if modifiers.command() && !across {
-            let zoom = if up {
-                (self.grid.zoom + 1).min(ZOOM_LEVELS.len() - 1)
-            } else {
-                self.grid.zoom.saturating_sub(1)
-            };
-            // Keep the tick under the cursor where it is: the new scroll puts it back under x.
-            let under = self.grid.tick_at(at.x);
-            let unscrolled = Grid {
-                zoom,
-                scroll: Ticks(0),
-                ..self.grid
-            };
-            self.grid.zoom = zoom;
-            self.grid.scroll = Ticks((under.0 - unscrolled.tick_at(at.x).0).max(0));
+            let zoom = playlist_layout::ZOOM.wheeled(self.grid.zoom, up);
+            self.grid = self.grid.zoomed_at(zoom, at.x);
         } else if modifiers.shift() || across {
             let ticks = (f64::from(PIXELS_PER_NOTCH) * self.grid.bar.0 as f64
                 / f64::from(self.grid.px_per_bar())) as i64;
             let moved = self.grid.scroll.0 + if up { -ticks } else { ticks };
-            self.grid.scroll = Ticks(moved.max(0));
+            self.grid.scroll = self.grid.landed_towards(Ticks(moved.max(0)));
         } else {
             let rows = if up {
                 -TRACKS_PER_NOTCH
@@ -1374,15 +1413,23 @@ impl Arranger {
         self.clamp(project);
     }
 
+    /// − or +: the zoom halved or doubled, the view keeping its start, landed on a whole cell
+    /// of the new zoom (a beat's start is no bar's once beats are no longer drawn).
+    fn step_zoom(&mut self, closer: bool) {
+        self.grid.zoom = playlist_layout::ZOOM.stepped(self.grid.zoom, closer);
+        self.grid.scroll = self.grid.landed(self.grid.scroll);
+    }
+
     /// Keeps the view on the song (no further than its longest possible end) and on the tracks
     /// (the last one can scroll up to the top row, no further).
-    /// Keeps the view on the tracks and the song, and fitted lanes fitted to the tracks there
-    /// are and the track area's height.
+    /// Keeps the view on the tracks and the song, fitted lanes fitted to the tracks there are
+    /// and the track area's height, and the rows shown those the area holds whole.
     fn clamp(&mut self, project: &Project) {
         let tracks = project.playlist.tracks.len();
         if self.lanes == Lanes::Fit {
             self.grid.lane = playlist_layout::fitted_lane(tracks, self.tracks_size.height);
         }
+        self.grid.area = self.tracks_size.height;
         let last = tracks.saturating_sub(1);
         self.grid.top = self.grid.top.min(last);
         let most = max_song_tick(project.ppq).0;
@@ -1744,7 +1791,11 @@ mod tests {
     }
 
     // The wheel scrolls one track; Shift scrolls 64 px of time (one bar at 64 px per bar);
-    // Ctrl zooms in keeping the tick under the cursor: x 248 is tick 768 at 64 and at 128 px.
+    // Ctrl zooms a quarter of a doubling a notch, keeping the tick under the cursor: x 248 is
+    // tick 768 at 64 px a bar. By hand (scroll = 768 − 128·384/zoom, to whole ticks, from the
+    // tick each notch found there): 76.109 px from 122, 90.510 from 225, 107.635 from 311, and
+    // the fourth notch is 128 px from 384, where x 248 is 768 again. From there − gives 64, 32,
+    // 16 and 16 again; + nine times ends at 256.
     #[test]
     fn the_wheel_scrolls_tracks_and_time_and_zooms() {
         let project = load(P4_TWO_CLIPS);
@@ -1762,16 +1813,26 @@ mod tests {
         assert_eq!(arranger.grid.scroll, Ticks(384));
         arranger.update(wheel(1.0), &project, None, Modifiers::SHIFT);
         assert_eq!(arranger.grid.scroll, Ticks(0));
-        arranger.update(wheel(1.0), &project, None, Modifiers::CTRL);
-        assert_eq!(arranger.grid.px_per_bar(), 128.0);
+        let mut scrolls = Vec::new();
+        for _ in 0..4 {
+            arranger.update(wheel(1.0), &project, None, Modifiers::CTRL);
+            scrolls.push(arranger.grid.scroll.0);
+        }
+        assert!(
+            (arranger.grid.zoom - 128.0).abs() < 1e-5,
+            "{}",
+            arranger.grid.zoom
+        );
+        assert_eq!(scrolls, [122, 225, 311, 384]);
         assert_eq!(arranger.grid.tick_at(248.0), Ticks(768));
-        arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
-        arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
-        arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
-        arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
+        let mut zooms = Vec::new();
+        for _ in 0..4 {
+            arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
+            zooms.push(arranger.grid.px_per_bar());
+        }
         assert_eq!(
-            arranger.grid.px_per_bar(),
-            16.0,
+            zooms,
+            [64.0, 32.0, 16.0, 16.0],
             "16 px per bar is the farthest out"
         );
         for _ in 0..9 {
@@ -1780,7 +1841,72 @@ mod tests {
         assert_eq!(arranger.grid.px_per_bar(), 256.0);
     }
 
-    // P6, by hand on p4_two_clips (the song ends at 1152): zoomed to 256 px a bar a 1000 px
+    // The buttons' step law from the default: + gives 128, + again 256, + again stays 256. The
+    // wheel over the ruler zooms as over the lanes: four Ctrl notches at the ruler's x 248 from
+    // 64 px a bar land on 128 with tick 768 under x 248.
+    #[test]
+    fn the_buttons_double_and_the_ruler_takes_ctrl_wheel() {
+        let project = load(P4_TWO_CLIPS);
+        let mut arranger = opened();
+        let mut zooms = Vec::new();
+        for _ in 0..3 {
+            arranger.update(PlaylistMessage::ZoomIn, &project, None, NONE);
+            zooms.push(arranger.grid.zoom);
+        }
+        assert_eq!(zooms, [128.0, 256.0, 256.0]);
+        let mut arranger = opened();
+        let notch = PlaylistMessage::RulerScrolled {
+            at: Point::new(248.0, 6.0),
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        };
+        for _ in 0..4 {
+            arranger.update(notch.clone(), &project, None, Modifiers::CTRL);
+        }
+        assert!((arranger.grid.zoom - 128.0).abs() < 1e-5);
+        assert_eq!(arranger.grid.tick_at(248.0), Ticks(768));
+    }
+
+    // Scrolls along time land on whole cells. At 256 px a bar (beats drawn, 96 ticks, 64 px):
+    // the thumb held at tick 462 (52 px into the beat at 384) stays there while held and lands
+    // on 480 when let go of; at 16 px a bar (no beats drawn; bars, 384 ticks, 24 ticks a pixel)
+    // the thumb let go of 7 px in (tick 168) lands on bar 1 and 9 px in (216) on bar 2. A page
+    // or a wheel notch over the bar lands at once. Shift+wheel's 64 px is a beat at 256 px a bar,
+    // and lands; − and + land the view's start on the new zoom's cells: a beat's start (480)
+    // at 32 px a bar, where beats are drawn, stays; at 16 px it lands on bar 2's, 384.
+    #[test]
+    fn a_scroll_along_time_lands_on_a_whole_cell() {
+        let project = load(P4_TWO_CLIPS);
+        let mut arranger = opened().with_zoom(256.0);
+        let to = |offset, held| PlaylistMessage::Bar(BarMessage::To { offset, held });
+        let let_go = PlaylistMessage::Bar(BarMessage::LetGo);
+        arranger.update(to(462.0, true), &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(462), "smooth while held");
+        arranger.update(let_go.clone(), &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(480));
+        arranger.update(to(414.0, false), &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(384), "a page lands at once");
+        let shift = PlaylistMessage::TracksScrolled {
+            at: Point::new(248.0, 100.0),
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+        };
+        arranger.update(shift, &project, None, Modifiers::SHIFT);
+        assert_eq!(arranger.grid.scroll, Ticks(480));
+        let mut arranger = opened().with_zoom(16.0);
+        arranger.update(to(168.0, true), &project, None, NONE);
+        arranger.update(let_go.clone(), &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(0));
+        arranger.update(to(216.0, true), &project, None, NONE);
+        arranger.update(let_go, &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(384));
+        let mut arranger = opened().with_zoom(64.0);
+        arranger.update(to(480.0, false), &project, None, NONE);
+        arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(480), "32 px a bar draws beats");
+        arranger.update(PlaylistMessage::ZoomOut, &project, None, NONE);
+        assert_eq!(arranger.grid.scroll, Ticks(384), "16 px a bar draws bars");
+    }
+
+    // By hand on p4_two_clips (the song ends at 1152): zoomed to 256 px a bar a 1000 px
     // canvas shows 1320 ticks; playing, the view stays while the song position is in it, jumps to
     // bar 4's start (1152) when it reaches 1320, back to 0 when the song wraps; not while the
     // bar's thumb is held. A wheel across scrolls time 64 px, a bar here at 64 px a bar.
@@ -1796,7 +1922,7 @@ mod tests {
         assert_eq!((arranger.grid.scroll, arranger.grid.top), (Ticks(384), 0));
         let to = |offset, held| PlaylistMessage::Bar(BarMessage::To { offset, held });
         arranger.update(to(0.0, false), &project, None, NONE);
-        arranger.grid.zoom = 4;
+        arranger.grid.zoom = 256.0;
         let span = arranger.span(&project);
         assert_eq!((span.content, span.view), (2688.0, 1320.0));
         assert!(!arranger.follow(&project, Ticks(1319)));
@@ -2051,7 +2177,7 @@ mod tests {
     fn follow_waits_while_a_drag_scrolls_past_an_edge() {
         let project = load(P4_TWO_CLIPS);
         let mut arranger = opened();
-        arranger.grid.zoom = 4;
+        arranger.grid.zoom = 256.0;
         arranger.update(press((500.0, 50.0)), &project, None, Modifiers::CTRL);
         arranger.update(drag((700.0, 40.0)), &project, None, NONE);
         assert!(

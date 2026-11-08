@@ -359,9 +359,9 @@ impl ClapHost {
         instance.close_editor(self.inner.display.borrow().as_ref());
     }
 
-    /// Opens `instance`'s interface: embedded in a window of ours when the plugin can, else
-    /// floating, else not at all.
-    fn open(&self, instance: &mut Instance, title: &str) -> Result<Editor, HostError> {
+    /// Opens `instance`'s interface: embedded in a window of ours drawn at `scale` when the
+    /// plugin can, else floating, else not at all.
+    fn open(&self, instance: &mut Instance, title: &str, scale: f64) -> Result<Editor, HostError> {
         let Some(gui) = instance.extensions.gui else {
             return Ok(Editor::Generic);
         };
@@ -372,6 +372,13 @@ impl ClapHost {
             is_floating: false,
         };
         if gui.is_api_supported(&handle, embedded) && gui.create(&handle, embedded).is_ok() {
+            // The scale first, as the gui extension orders an embedded interface's opening
+            // (clack-extensions 0.2.0 src/gui.rs:36-37), so the size it gives is at that scale.
+            // X11 and Win32 use physical pixels (src/gui.rs:340, :356), so the host sets it
+            // (src/gui/host.rs:94). A floating window is the plugin's own (src/gui.rs:33): none.
+            if gui.set_scale(&handle, scale).is_err() {
+                eprintln!("plugin window {title:?}: keeps its own scale, not {scale}");
+            }
             let size = gui.get_size(&handle).unwrap_or(GuiSize {
                 width: 640,
                 height: 480,
@@ -851,7 +858,12 @@ impl ProcessorHost for ClapHost {
         }
     }
 
-    fn open_editor(&self, owner: ProcessorOwner, title: &str) -> Result<Editor, HostError> {
+    fn open_editor(
+        &self,
+        owner: ProcessorOwner,
+        title: &str,
+        scale: f64,
+    ) -> Result<Editor, HostError> {
         let mut instances = self.inner.instances.borrow_mut();
         let instance = instances
             .iter_mut()
@@ -861,7 +873,7 @@ impl ProcessorHost for ClapHost {
         if let Some(editor) = instance.editor {
             return Ok(editor.kind);
         }
-        self.open(instance, title)
+        self.open(instance, title, scale)
     }
 
     fn tick(&self) -> Vec<HostNotice> {

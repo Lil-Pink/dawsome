@@ -15,7 +15,7 @@ use crate::project::{
 };
 use crate::source::{ClipSource, SourceSlot};
 use crate::time::Ticks;
-use crate::transport::ParamTarget;
+use crate::transport::{ParamTarget, TempoSegment};
 
 /// What a plan plays. Playback state, like Play and Stop: it is never saved or undone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,16 @@ pub enum PlayMode {
     /// channel, while the transport runs on (a recording's clock, previews and live notes as
     /// ever). What an input latency measurement plays under its clicks.
     Nothing,
+    /// Play one channel's notes of one pattern, looping it as `Pattern` does, or `once`: then
+    /// the transport stops where the pattern's pass ends. Every other channel's notes, every
+    /// clip and every other input channel are left out; the channel's sound, the mixer and the
+    /// routing play as ever. The piano roll's player: the one transport in another mode, so it
+    /// can never play beside the toolbar's.
+    Channel {
+        pattern: PatternId,
+        channel: ChannelId,
+        once: bool,
+    },
 }
 
 /// A compiled song: each channel's sound and gain, every pattern as a sorted timeline of note
@@ -112,10 +122,17 @@ pub(crate) struct AutomationWindow {
 }
 
 /// What the player renders from a plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Playing {
     /// Loop the pattern at this index into `PlayPlan::patterns`.
     Pattern(usize),
+    /// [`PlayMode::Channel`]: `notes` are the pattern's events of `channel` alone, a list of
+    /// their own (the pattern's own list stays shared), looped or played `once`.
+    Channel {
+        notes: PatternPlan,
+        channel: ChannelId,
+        once: bool,
+    },
     /// Play `PlayPlan::song`.
     Song,
     /// A pattern the project no longer has: silence.
@@ -249,7 +266,8 @@ pub(crate) enum ChannelSound {
     /// The decoded sound, shared with the compiler's cache and with other plans.
     Sampler(SampleBuffer),
     /// The plugin instrument in this slot of the player's processor table, sent the channel's
-    /// notes.
+    /// notes. A native instrument (a synth channel's) is one too: it is sent the same events
+    /// (notes, the pedal's held-back note-offs, pitch bend, the mod wheel) and plays them alike.
     Plugin(ProcessorSlot),
     /// An audio channel with no notes: only its audio clips sound, so its file is not decoded
     /// for voices (a long one streams).
@@ -567,7 +585,7 @@ impl fmt::Debug for RuntimeDelta {
 }
 
 /// One pattern as a timeline: events sorted by tick, each inside `0..length`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PatternPlan {
     pub(crate) id: PatternId,
     pub(crate) length: Ticks,
@@ -634,7 +652,9 @@ impl PlayPlan {
     }
 
     /// The compiled events of pattern `id`, sorted by tick. Plans compiled by one
-    /// [`crate::compile::Compiler`] share this list until an edit touches the pattern.
+    /// [`crate::compile::Compiler`] share this list until an edit touches the pattern. Why
+    /// public: `tests/edits.rs` reads it to see that sharing, and an integration test cannot
+    /// reach the `pub(crate)` field `patterns`.
     pub fn pattern_events(&self, id: PatternId) -> Option<&Arc<[NoteEvent]>> {
         let index = self.patterns.binary_search_by_key(&id, |p| p.id).ok()?;
         self.patterns.get(index).map(|pattern| &pattern.events)
@@ -695,8 +715,40 @@ impl PlayPlan {
     pub(crate) fn wrap(&self) -> Option<(Ticks, Ticks)> {
         match self.playing {
             Playing::Song => self.song.wrap(),
-            Playing::Pattern(_) | Playing::Nothing => None,
+            Playing::Pattern(_) | Playing::Channel { .. } | Playing::Nothing => None,
         }
+    }
+
+    /// The pattern pattern playback walks: the one Pattern mode loops, or Channel mode's notes.
+    pub(crate) fn pattern_played(&self) -> Option<&PatternPlan> {
+        match &self.playing {
+            Playing::Pattern(index) => self.patterns.get(*index),
+            Playing::Channel { notes, .. } => Some(notes),
+            Playing::Song | Playing::Nothing => None,
+        }
+    }
+
+    /// While a pattern plays once: the sample of `timeline` where the pass holding song sample
+    /// `position` ends (the first pass start after it), where the transport stops.
+    ///
+    /// Why the pass the playhead is in and not the first pass: the loop switched off while
+    /// looping finishes the pass it hears; play started at tick 0 stops at the pattern's end.
+    /// Why from the first tick after `position`: a live tempo change starts on a tick after the
+    /// playhead, and the samples before it have no tick of the new segment.
+    pub(crate) fn once_end(&self, timeline: &TempoSegment, position: u64) -> Option<u64> {
+        let Playing::Channel {
+            notes, once: true, ..
+        } = &self.playing
+        else {
+            return None;
+        };
+        let length = notes.length.0.max(1);
+        let next = timeline.first_tick_from(position.checked_add(1)?)?.0;
+        let end = next
+            .checked_add(length - 1)?
+            .div_euclid(length)
+            .checked_mul(length)?;
+        timeline.tick_to_sample(Ticks(end))
     }
 }
 

@@ -39,10 +39,29 @@ pub struct Script {
     pub dump_params: Option<PathBuf>,
     /// Start the transport at start, as Play would.
     pub play: bool,
+    /// Play the piano roll's channel of its pattern at start, as the roll's Play would.
+    pub play_roll: bool,
     /// Rehearse a take at start: these MIDI messages played into a take (`--rehearse`).
     pub rehearse: Option<PathBuf>,
     /// Play through no device: a thread calls the player in real time (`--null-output`).
     pub null_output: bool,
+    /// Every window at this zoom for the run, never kept (`--zoom`).
+    pub zoom: Option<crate::zoom::Zoom>,
+    /// Every window in this theme for the run, never kept (`--theme`).
+    pub theme: Option<crate::ui::palette::ThemeId>,
+    /// Every window's accent this colour for the run, never kept (`--accent`).
+    pub accent: Option<crate::ui::palette::Rgb>,
+    /// The piano roll's notes this colour for the run, never kept (`--note-color`).
+    pub note_color: Option<crate::ui::palette::Rgb>,
+    /// The piano roll's scale chosen at start, as its Scale chooser would (`--roll-scale`).
+    pub roll_scale: Option<crate::ui::scale::ScaleMode>,
+    /// Write where the shot window's text and controls lie as the screenshot is taken
+    /// (`--dump-layout`, [`crate::app::layout_dump`]).
+    pub dump_layout: Option<PathBuf>,
+    /// The Settings window's size: a scripted run's `--window-size`, which `main` sets once the
+    /// run is known to be scripted (never parsed on its own). Why: a shot of the Settings window
+    /// is of the size its stage names, not of a share of the main window's.
+    pub settings_size: Option<iced::Size>,
 }
 
 /// Save the window as a PNG at `path`, `after` start.
@@ -144,6 +163,21 @@ impl Runner {
     /// The screenshot is of `window`.
     pub fn shoot(&mut self, window: ShotWindow) {
         self.window = window;
+    }
+
+    /// The window the screenshot is of.
+    pub fn shot_window(&self) -> ShotWindow {
+        self.window
+    }
+
+    /// Where the shot window's layout is written as the shot is taken (`--dump-layout`).
+    pub fn dump_layout(&self) -> Option<&Path> {
+        self.script.dump_layout.as_deref()
+    }
+
+    /// The size a scripted run gives the Settings window (its `--window-size`), none else.
+    pub fn settings_size(&self) -> Option<iced::Size> {
+        self.script.settings_size
     }
 
     pub fn subscription(&self) -> Subscription<Message> {

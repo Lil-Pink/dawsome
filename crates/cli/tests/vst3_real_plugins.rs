@@ -352,8 +352,8 @@ fn dexed_and_js80p_are_listed_as_their_moduleinfo_says_and_sound() {
 // DPF-Plugins 1.7's 3-Band EQ, one DSP built as a CLAP and as a VST3 (DPF's own VST3 code, not
 // the SDK's): the scan lists it once in each format, and the impulse fixture (p27_vst3_fx: one
 // sample of 1.0 at 44.1 kHz through an insert) renders through either at its defaults. The two
-// renders were expected bit-identical (a guess before the first run, recorded in the spec's
-// Decisions either way).
+// renders were expected bit-identical (a guess made before the first
+// run).
 #[test]
 fn dpf_3band_eq_renders_alike_as_clap_and_as_vst3() {
     let Some(folder) = vst3_test("dpf", "3BandEQ.vst3/Contents/x86_64-linux/3BandEQ.so") else {

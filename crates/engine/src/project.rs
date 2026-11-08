@@ -98,11 +98,20 @@ pub const MIDI_OUT_FORMAT_VERSION: u32 = 7;
 /// it reads past it, as it reads past every field beside the ops, since it plays nothing.
 pub const EDITS_FORMAT_VERSION: u32 = 8;
 
+/// The `format_version` this build writes for a project with a synth channel
+/// ([`ChannelKind::Synth`]); it reads as version 8 does, with the channel kind `synth`. A project
+/// without one keeps writing 2, 4, 5, 6, 7 or 8, so its bytes do not change. Why its own version:
+/// a build that knows only 8 would fail on `"kind":"synth"` as a kind it cannot read, an error
+/// that names no version; by the version it refuses the file saying which versions it reads (it
+/// reads the version before anything else). Why not read past: such a build could only drop the
+/// channel's sound, and lose it on save.
+pub const SYNTH_FORMAT_VERSION: u32 = 9;
+
 /// The most tracks a playlist holds: the range of the project-file playlist item's track index.
 pub const MAX_TRACKS: usize = 500;
 
 /// Tracks the playlist of a new project has.
-pub const DEFAULT_TRACKS: u32 = 8;
+pub const DEFAULT_TRACKS: u32 = 6;
 
 /// The most patterns a project gets by adding them. It counts patterns, not IDs: a deleted
 /// pattern's ID is never given out again, so a new pattern's ID can be past 999.
@@ -202,14 +211,16 @@ pub struct Project {
 
 /// A rack channel: a sampler, which plays one sound file from its start on every note at the
 /// speed the note's key sets; an audio channel, whose file the playlist's audio clips play; a
-/// plugin instrument, which is sent the notes; or an instrument set, whose zones the notes play.
+/// plugin instrument, which is sent the notes; an instrument set, whose zones the notes play; or
+/// a native instrument (the synth), which is sent the notes as a plugin is.
 ///
-/// The file names a sampler's or an audio channel's `sample`, a plugin channel's `processor`,
-/// an instrument channel's `instrument` and an input channel's `input`, one of them: a sampler
-/// is written `"kind":"sampler","sample":...` exactly as before other kinds existed, an audio
-/// channel `"kind":"audio","sample":...`, a plugin channel `"kind":"plugin","processor":{...}`,
-/// an instrument channel `"kind":"instrument","instrument":...` and an input channel
-/// `"kind":"input","input":{...}`.
+/// The file names a sampler's or an audio channel's `sample`, a plugin or a synth channel's
+/// `processor`, an instrument channel's `instrument` and an input channel's `input`, one of
+/// them: a sampler is written `"kind":"sampler","sample":...` exactly as before other kinds
+/// existed, an audio channel `"kind":"audio","sample":...`, a plugin channel
+/// `"kind":"plugin","processor":{...}`, an instrument channel
+/// `"kind":"instrument","instrument":...`, an input channel `"kind":"input","input":{...}` and
+/// a synth channel `"kind":"synth","processor":{"id":"dawsome.synth","params":{...}}`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "ChannelFile<PathBuf, ProcessorRef>")]
 pub struct Channel {
@@ -288,6 +299,11 @@ impl SoundSource {
         Channel::input("", input).source()
     }
 
+    /// Dawsome Synth at its defaults, as [`Channel::synth`] has it.
+    pub fn synth() -> Self {
+        Channel::synth("").source()
+    }
+
     /// The plugin that makes this sound, by its registry key; none for a sampler or a set.
     pub fn plugin_id(&self) -> Option<&str> {
         self.processor
@@ -322,6 +338,11 @@ pub enum ChannelKind {
     Instrument,
     /// Plays an audio input (a device's channels) as its sound; notes on it play nothing.
     Input,
+    /// Plays a native instrument of this build (Dawsome Synth), saved as a native effect is: its
+    /// `processor` names it by id with its parameter values by key. Why not a plugin channel: a
+    /// plugin channel's processor comes from a plugin host and its parameters by the plugin's
+    /// own numbers; this one's from the registry and by key.
+    Synth,
 }
 
 impl ChannelKind {
@@ -392,6 +413,16 @@ impl Channel {
         }
     }
 
+    /// A synth channel playing Dawsome Synth with every parameter at its default, as
+    /// [`sampler`](Self::sampler) makes one.
+    pub fn synth(name: impl Into<String>) -> Self {
+        Self {
+            kind: ChannelKind::Synth,
+            processor: Some(ProcessorRef::new(crate::dsp::synth::ID)),
+            ..Self::sampler(name, "")
+        }
+    }
+
     /// The channel as an add puts it in the rack: one that plays notes at
     /// [`NEW_CHANNEL_VOLUME`], an audio or an input channel as it is.
     pub fn as_added(self) -> Self {
@@ -420,8 +451,9 @@ impl Channel {
 
     /// Whether the channel names what its kind needs and nothing else: a sampler or an audio
     /// channel no plugin, a plugin channel a plugin and no sample file, an instrument channel
-    /// neither, an input channel its input and none of them; only an instrument channel names a
-    /// set and only an input channel an input.
+    /// neither, an input channel its input and none of them, a synth channel a native processor
+    /// (a `dawsome.` id) and none of them; only an instrument channel names a set and only an
+    /// input channel an input.
     pub(crate) fn sound_is_consistent(&self) -> bool {
         let no_set = self.instrument.as_os_str().is_empty();
         let no_sample = self.sample.as_os_str().is_empty();
@@ -433,6 +465,14 @@ impl Channel {
             ChannelKind::Plugin => self.processor.is_some() && no_sample && no_set && !input,
             ChannelKind::Instrument => self.processor.is_none() && no_sample && !input,
             ChannelKind::Input => self.processor.is_none() && no_sample && no_set && input,
+            ChannelKind::Synth => {
+                self.processor
+                    .as_ref()
+                    .is_some_and(|processor| processor.id.starts_with(NATIVE_ID_PREFIX))
+                    && no_sample
+                    && no_set
+                    && !input
+            }
         }
     }
 
@@ -482,7 +522,7 @@ impl Channel {
 }
 
 /// A channel as the file writes it: `sample` for a sampler or an audio channel, `processor` for a
-/// plugin channel, `instrument` for an instrument channel.
+/// plugin or a synth channel, `instrument` for an instrument channel.
 #[derive(Serialize, Deserialize)]
 struct ChannelFile<Sample, Processor> {
     name: String,
@@ -577,7 +617,7 @@ impl TryFrom<ChannelFile<PathBuf, ProcessorRef>> for Channel {
             (ChannelKind::Sampler | ChannelKind::Audio, Some(sample), None, None, None) => {
                 (sample, None, PathBuf::new(), None)
             }
-            (ChannelKind::Plugin, None, Some(processor), None, None) => {
+            (ChannelKind::Plugin | ChannelKind::Synth, None, Some(processor), None, None) => {
                 (PathBuf::new(), Some(processor), PathBuf::new(), None)
             }
             (ChannelKind::Instrument, None, None, Some(instrument), None) => {
@@ -607,6 +647,12 @@ impl TryFrom<ChannelFile<PathBuf, ProcessorRef>> for Channel {
             (ChannelKind::Input, ..) => {
                 return Err(format!(
                     "channel '{}': an input channel names an input and no sample, processor or instrument",
+                    file.name
+                ))
+            }
+            (ChannelKind::Synth, ..) => {
+                return Err(format!(
+                    "channel '{}': a synth channel names a processor and no sample",
                     file.name
                 ))
             }
@@ -1005,7 +1051,7 @@ pub enum LoadError {
     #[error("not a valid project file: {0}")]
     Json(#[from] serde_json::Error),
     #[error(
-        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7 and 8)"
+        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8 and 9)"
     )]
     UnsupportedVersion(u32),
     #[error("tempo_bpm {0} is not a positive tempo")]
@@ -1324,17 +1370,19 @@ impl Project {
         let mut project = match format_version {
             1 => serde_json::from_str::<v1::ProjectFile>(text)?.into_project()?,
             // Version 4 added the instrument channel, 5 the sound settings, 6 the input channel,
-            // 7 its MIDI out and 8 a sound's edits, and nothing else, so they read with the same
-            // shape; a version 2 file is a version 4 file without an instrument channel, a
-            // version 4 file a version 5 file without sound settings, a version 5 file a version
-            // 6 file without an input channel, a version 6 file a version 7 file without a MIDI
-            // out, and a version 7 file a version 8 file without edits.
+            // 7 its MIDI out, 8 a sound's edits and 9 the synth channel, and nothing else, so
+            // they read with the same shape; a version 2 file is a version 4 file without an
+            // instrument channel, a version 4 file a version 5 file without sound settings, a
+            // version 5 file a version 6 file without an input channel, a version 6 file a
+            // version 7 file without a MIDI out, a version 7 file a version 8 file without edits,
+            // and a version 8 file a version 9 file without a synth channel.
             FORMAT_VERSION
             | INSTRUMENT_FORMAT_VERSION
             | SOUND_FORMAT_VERSION
             | INPUT_FORMAT_VERSION
             | MIDI_OUT_FORMAT_VERSION
-            | EDITS_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
+            | EDITS_FORMAT_VERSION
+            | SYNTH_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
             other => return Err(LoadError::UnsupportedVersion(other)),
         };
         project.mixer.adopt_former_native_ids();
@@ -1385,7 +1433,8 @@ impl Project {
 
     /// The canonical JSON text of this project, in the current format (version 2; 4 when it has
     /// an instrument channel, 5 when a channel holds sound settings, 6 when it has an input
-    /// channel, 7 when one of those has a MIDI out, 8 when a sound has edits): compact, fields in a fixed order, channels and patterns by
+    /// channel, 7 when one of those has a MIDI out, 8 when a sound has edits, 9 when it has a
+    /// synth channel): compact, fields in a fixed order, channels and patterns by
     /// ID, notes by (tick, channel, key). Equal projects give identical bytes, so an undo can be
     /// checked byte for byte.
     ///
@@ -1418,7 +1467,13 @@ impl Project {
             .channels
             .values()
             .any(|channel| !channel.edits.is_empty());
-        let format_version = if edits {
+        let synths = self
+            .channels
+            .values()
+            .any(|channel| channel.kind == ChannelKind::Synth);
+        let format_version = if synths {
+            SYNTH_FORMAT_VERSION
+        } else if edits {
             EDITS_FORMAT_VERSION
         } else if midi_outs {
             MIDI_OUT_FORMAT_VERSION
@@ -1560,10 +1615,10 @@ impl Project {
             .map(|(&id, _)| id)
     }
 
-    /// Whether what `target` names is in the project: its channel (a plugin channel, for an
-    /// instrument parameter), insert, send or effect. A parameter key or number is not checked
-    /// here (the processor's own list is), so a target whose parameter the processor lacks
-    /// does nothing, like one whose effect is gone.
+    /// Whether what `target` names is in the project: its channel (a plugin channel for a
+    /// plugin's instrument parameter, a synth channel for the synth's), insert, send or effect. A
+    /// parameter key or number is not checked here (the processor's own list is), so a target
+    /// whose parameter the processor lacks does nothing, like one whose effect is gone.
     pub fn has_target(&self, target: &AutomationTarget) -> bool {
         let mixer = &self.mixer;
         match target {
@@ -1574,6 +1629,10 @@ impl Project {
                 .channels
                 .get(channel)
                 .is_some_and(|channel| channel.kind == ChannelKind::Plugin),
+            AutomationTarget::InstrumentParam { channel, .. } => self
+                .channels
+                .get(channel)
+                .is_some_and(|channel| channel.kind == ChannelKind::Synth),
             AutomationTarget::InsertFader(id) | AutomationTarget::InsertPan(id) => {
                 mixer.get(*id).is_some()
             }
@@ -2298,22 +2357,22 @@ mod tests {
         project.playlist.clips.get_mut(&ClipId(1)).expect("clip 1")
     }
 
-    // A new playlist: 8 tracks "Track 1".."Track 8" (ids 1-8, unmuted), no clips, no loop, next ids
-    // 9 and 1; a file without a playlist loads it, and it is not written back.
+    // A new playlist: 6 tracks "Track 1".."Track 6" (ids 1-6, unmuted), no clips, no loop, next ids
+    // 7 and 1; a file without a playlist loads it, and it is not written back.
     #[test]
     fn a_project_without_a_playlist_has_the_default_one_and_writes_none() {
         let project = Project::load_json(P2_THREE).expect("fixture loads");
         let playlist = &project.playlist;
         assert_eq!(
             (playlist.next_track_id, playlist.next_clip_id),
-            (TrackId(9), ClipId(1))
+            (TrackId(7), ClipId(1))
         );
         let tracks: Vec<(u32, &str, bool)> = playlist
             .tracks
             .iter()
             .map(|(id, track)| (id.0, track.name.as_str(), track.mute))
             .collect();
-        let expected: Vec<(u32, String, bool)> = (1..=8)
+        let expected: Vec<(u32, String, bool)> = (1..=6)
             .map(|id| (id, format!("Track {id}"), false))
             .collect();
         let expected: Vec<(u32, &str, bool)> = expected
@@ -2327,8 +2386,8 @@ mod tests {
         assert!(!saved.contains("playlist"), "{saved}");
         // The default playlist written out in full still loads as the default.
         let explicit = saved.trim_end_matches('}').to_owned()
-            + r#","playlist":{"next_track_id":9,"next_clip_id":1,"tracks":["#
-            + &(1..=8)
+            + r#","playlist":{"next_track_id":7,"next_clip_id":1,"tracks":["#
+            + &(1..=6)
                 .map(|id| format!(r#"{{"id":{id},"name":"Track {id}","mute":false}}"#))
                 .collect::<Vec<_>>()
                 .join(",")

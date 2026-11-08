@@ -152,8 +152,16 @@ impl App {
         }
     }
 
-    /// What the player plays: the selected pattern in pattern mode, else the song.
+    /// What the player plays: the roll's channel of its pattern while the roll's player plays,
+    /// else the selected pattern in pattern mode, else the song.
     pub(super) fn plan_mode(&self) -> plan::PlayMode {
+        if let Some((pattern, channel)) = self.roll_target().filter(|_| self.roll_plays) {
+            return plan::PlayMode::Channel {
+                pattern,
+                channel,
+                once: !self.settings.loops_roll_player(),
+            };
+        }
         match (self.mode, self.pattern) {
             (PlayMode::Pattern, Some(pattern)) => plan::PlayMode::Pattern(pattern),
             _ => plan::PlayMode::Song,

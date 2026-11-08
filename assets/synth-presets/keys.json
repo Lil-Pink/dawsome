@@ -1,0 +1,14 @@
+{
+  "synth": "dawsome.synth",
+  "name": "Keys",
+  "params": {
+    "osc1_wave": 1,
+    "osc2_width": 0.3,
+    "osc2_level": 0.4,
+    "osc_mix": 0.35,
+    "cutoff": 0.6,
+    "vel_cutoff": 0.5,
+    "amp_decay": 0.75,
+    "amp_sustain": 0.4
+  }
+}

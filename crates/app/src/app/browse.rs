@@ -116,6 +116,8 @@ pub(super) enum Held {
     Device(String),
     /// "External input": a new input channel.
     Input,
+    /// Dawsome Synth: a new synth channel.
+    Synth,
 }
 
 /// A press held on a Library row.
@@ -279,11 +281,17 @@ impl Browse {
     }
 
     /// Whether what is dragged lands on a playlist lane (and on a channel's header): a sound
-    /// file, a plugin, a set or the external input.
+    /// file, a plugin, a set, the synth or the external input.
     pub(super) fn dragging_to_tracks(&self) -> bool {
         matches!(
             self.dragged(),
-            Some(Held::File(_) | Held::Plugin(_) | Held::Instrument { .. } | Held::Input)
+            Some(
+                Held::File(_)
+                    | Held::Plugin(_)
+                    | Held::Instrument { .. }
+                    | Held::Input
+                    | Held::Synth
+            )
         )
     }
 
@@ -870,6 +878,7 @@ impl App {
             Held::Instrument { sfz, name } => self.drop_instrument(&sfz, &name),
             Held::Device(port) => self.drop_device(&port),
             Held::Input => self.drop_input(),
+            Held::Synth => self.drop_synth(),
             Held::Folder => {}
         }
     }

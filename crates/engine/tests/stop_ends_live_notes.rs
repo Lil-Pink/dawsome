@@ -3,7 +3,7 @@
 //! holds (one whose release never arrived) cannot sound on. Play and Seek still strike a held key
 //! again after their reset, as before, and a pedal down at Stop lifts.
 //!
-//! Expected events come from the spec, not from running the engine: a live note is sent on frame
+//! Expected events come from these rules, not from running the engine: a live note is sent on frame
 //! 0 of the call it is handed in before; Stop ends it in the call after; a jump resets the
 //! processor before the call's events reach it; the plugin's clock counts the frames rendered
 //! since the last Play, Seek or Stop and stands still while stopped.
@@ -102,7 +102,12 @@ impl ProcessorHost for RecordingHost {
         Err(HostError::Missing)
     }
 
-    fn open_editor(&self, _owner: ProcessorOwner, _title: &str) -> Result<Editor, HostError> {
+    fn open_editor(
+        &self,
+        _owner: ProcessorOwner,
+        _title: &str,
+        _scale: f64,
+    ) -> Result<Editor, HostError> {
         Ok(Editor::Generic)
     }
 

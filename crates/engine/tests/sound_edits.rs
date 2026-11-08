@@ -1,4 +1,4 @@
-//! A sound's edits in the engine (the sample editor, P1a): each list of
+//! A sound's edits in the engine (the sample editor's): each list of
 //! tests/fixtures/gen_p30_expected.py gives the frames it states (p30_expected.json), the
 //! zero-crossing search snaps where it says, every p30 project reads and writes back byte for
 //! byte at its version (8 only with edits), an op appended through `sound_edits::append` moves

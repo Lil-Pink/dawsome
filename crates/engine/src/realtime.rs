@@ -1099,6 +1099,11 @@ impl Player {
             let (_, later) = rest.split_at_mut(len);
             self.output_frames = self.output_frames.saturating_add(len as u64);
             rest = later;
+            // A pattern played once stops where its pass ends, as Stop stops it: the rest of
+            // the call renders stopped, and the playhead the UI reads is back at play-from.
+            if self.played_out() {
+                self.stop();
+            }
         }
         self.retire_finished_preview();
         self.publish();
@@ -1193,6 +1198,9 @@ impl Player {
             .and_then(|frames| usize::try_from(frames).ok())
             .map_or(out.len(), |frames| frames.min(out.len()))
             .min(CHUNK);
+        if let Some(frames) = self.frames_to_once_end() {
+            len = len.min(frames);
+        }
         if song {
             if let Some(frames) = self.frames_to_automation_edge(position) {
                 len = len.min(frames);
@@ -1237,6 +1245,28 @@ impl Player {
         }
         self.transport.advance(len);
         len
+    }
+
+    /// Frames from the playhead to where a pattern played once ends its pass
+    /// ([`PlayPlan::once_end`]): never 0, as that end lies after the playhead.
+    fn frames_to_once_end(&self) -> Option<usize> {
+        let position = self.transport.position();
+        let end = self.plan.once_end(self.transport.timeline(), position)?;
+        usize::try_from(end.checked_sub(position)?).ok()
+    }
+
+    /// Whether a pattern played once has just played its pass to the end: the playhead has
+    /// moved since the last jump and stands where the pass holding the frame before it ends
+    /// ([`frames_to_once_end`](Self::frames_to_once_end) cut the piece there). Why the clock:
+    /// a seek onto a pass's start has played nothing of it yet.
+    fn played_out(&self) -> bool {
+        let position = self.transport.position();
+        self.transport.playing()
+            && self.transport.clock() > 0
+            && position
+                .checked_sub(1)
+                .and_then(|last| self.plan.once_end(self.transport.timeline(), last))
+                == Some(position)
     }
 
     /// Where song playback wraps: the plan's loop or song end. Recording plays straight
@@ -1401,21 +1431,29 @@ impl Player {
                         }
                     }
                 }
-                // A jump (Play, Stop, Seek) leaves nothing ringing from the old position: no
-                // voice, no effect tail, no ramp half way, no automated parameter held. Stop ends
-                // the live notes too, so the jump's reset strikes no held key again: a key whose
-                // release never arrived (a plugin note that came back on every Play)
-                // stops for good at Stop, as every note does.
+                Control::Stop => self.stop(),
+                // A jump (Play, Seek, and Stop's in `stop`) leaves nothing ringing from the old
+                // position: no voice, no effect tail, no ramp half way, no automated parameter
+                // held.
                 other => {
-                    if matches!(other, Control::Stop) {
-                        self.end_recording();
-                        self.end_every_live_note();
-                    }
                     if self.transport.apply(other) {
                         self.jumped(self.output_frames);
                     }
                 }
             }
+        }
+    }
+
+    /// Stops, as Stop does and as a pattern played once does where its pass ends: the
+    /// recording and every live note end, then the playhead jumps back to the play-from tick.
+    /// Why the live notes: the jump's reset then strikes no held key again, so a key whose
+    /// release never arrived (a plugin note that came back on every Play) stops for good at
+    /// Stop, as every note does.
+    fn stop(&mut self) {
+        self.end_recording();
+        self.end_every_live_note();
+        if self.transport.apply(Control::Stop) {
+            self.jumped(self.output_frames);
         }
     }
 
@@ -2046,7 +2084,9 @@ impl Player {
                     send.amount.retarget(clamp(SEND_RANGE), at_once);
                 }
             }
-            ParamTarget::Effect { .. } | ParamTarget::Plugin { .. } => {
+            ParamTarget::Effect { .. }
+            | ParamTarget::Plugin { .. }
+            | ParamTarget::Instrument { .. } => {
                 self.runtime.set_processor_param(&self.plan, target, value);
             }
         }

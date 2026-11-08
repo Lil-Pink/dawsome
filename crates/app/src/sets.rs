@@ -688,7 +688,7 @@ mod tests {
         );
     }
 
-    // B6: a set's kind is its set.json's `category` (any case), else the kit's kind for its
+    // A set's kind is its set.json's `category` (any case), else the kit's kind for its
     // folder's name; a set with neither, or a category the Library does not know, has none.
     #[test]
     fn a_sets_kind_is_its_category_else_the_kits_for_its_folder() {

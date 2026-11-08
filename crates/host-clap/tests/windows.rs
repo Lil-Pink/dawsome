@@ -51,6 +51,11 @@ fn p29() -> Value {
         .expect("p29_expected.json parses")
 }
 
+/// The scale every interface here is opened at (p29's "scale"): a desktop at 150 %.
+fn scale() -> f64 {
+    p29()["scale"].as_f64().expect("a scale")
+}
+
 fn texts(value: &Value) -> Vec<String> {
     value
         .as_array()
@@ -346,7 +351,7 @@ impl Opened {
         let reference = ProcessorRef::plugin(format!("clap:{id}"), name);
         let audio = host.create(OWNER, &reference, 48_000).expect("creates");
         oracle.clear();
-        assert_eq!(host.open_editor(OWNER, name), Ok(Editor::Embedded));
+        assert_eq!(host.open_editor(OWNER, name, scale()), Ok(Editor::Embedded));
         let log = oracle.log();
         let child = oracle.window();
         assert_ne!(child, 0, "the interface made its window");
@@ -457,7 +462,10 @@ fn c1_an_interface_opens_embedded_in_our_window() {
     assert!(opened.host.needs_ticks(), "an open interface is ticked");
     opened.oracle.clear();
     let name = clap["name"].as_str().expect("a name");
-    assert_eq!(opened.host.open_editor(OWNER, name), Ok(Editor::Embedded));
+    assert_eq!(
+        opened.host.open_editor(OWNER, name, scale()),
+        Ok(Editor::Embedded)
+    );
     assert!(opened.oracle.log().is_empty(), "nothing called again");
     opened.x.close(opened.ours);
     let notices = until(&opened.host, "the interface closed", || {

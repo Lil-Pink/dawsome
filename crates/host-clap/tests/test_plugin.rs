@@ -595,7 +595,7 @@ fn dropping_the_player_keeps_every_instance() {
         host.capture_state(SINE).expect("captures").state,
         "T1RQMQAAAAAAAOA/"
     );
-    assert_eq!(host.open_editor(SINE, "Sine"), Ok(Editor::Generic));
+    assert_eq!(host.open_editor(SINE, "Sine", 1.0), Ok(Editor::Generic));
 }
 
 // The instances a session's own handle created go with that session (a new document replaced

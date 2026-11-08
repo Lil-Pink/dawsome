@@ -93,7 +93,7 @@ fn number(value: &Value) -> f64 {
 }
 
 /// Asserts `frames` is render `name` of the generator: length, probes and sounding frames to the
-/// bit, the hash of every frame, and the spec's own words: no frame past the ceiling, the first
+/// bit, the hash of every frame, and the limiter's rule itself: no frame past the ceiling, the first
 /// frame the mix took past it exactly on it.
 fn assert_render(name: &str, frames: &[[f32; 2]], want: &Value) {
     assert_eq!(

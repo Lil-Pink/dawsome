@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use dawsome_engine::dsp::synth::NAME as SYNTH;
 use dawsome_host_clap::catalogue::{Offered, PluginFormat};
 use iced::alignment::Vertical;
 use iced::widget::canvas::{self, Cache, Event, Frame, Geometry, Path as Shape, Stroke, Text};
@@ -18,9 +19,12 @@ use crate::app::Message;
 use crate::sets::size_text;
 use crate::starter_kit;
 use crate::ui::browser_model::{Browser, Playing, Row, RowKind};
+use crate::ui::fonts::size;
+use crate::ui::grip::{Seam, SEAM_WIDTH};
 use crate::ui::hint::{hover_change, Hover, LibraryPart};
 use crate::ui::library::{InstrumentSet, Item, Port, Section, EXTERNAL_INPUT};
 use crate::ui::menu;
+use crate::ui::panels::Panel;
 use crate::ui::style;
 use crate::ui::text_fit::{fit_width, text_width};
 
@@ -35,17 +39,14 @@ pub const WELL: Rectangle = Rectangle {
     width: 288.0,
     height: 20.0,
 };
-/// Where the first row starts, and each row's height.
+/// Where the first row starts, and each row's height: 24 px (was 22), a press's whole target.
 pub const ROWS_TOP: f32 = 52.0;
-pub const ROW_HEIGHT: f32 = 22.0;
+pub const ROW_HEIGHT: f32 = 24.0;
 /// How far each level is indented, and where level 0's glyph starts.
 pub const INDENT: f32 = 14.0;
 pub const ROW_LEFT: f32 = 8.0;
 /// From a row's glyph to its name.
 const NAME_OFFSET: f32 = 12.0;
-const NAME_SIZE: f32 = 12.0;
-/// The size of the dim labels: group names, makers and hints.
-const LABEL_SIZE: f32 = 11.0;
 /// An average glyph of the name font, to cut names that would run past the panel.
 const CHAR_WIDTH: f32 = 6.6;
 /// The previewing row's left bar.
@@ -119,6 +120,8 @@ pub enum Pick {
     /// An instrument set.
     Set(InstrumentSet),
     Plugin(Offered),
+    /// Dawsome Synth: a synth channel.
+    Synth,
     /// Rescan, under the plugins.
     Rescan,
     /// "External input": an input channel.
@@ -237,14 +240,19 @@ impl<'a> BrowserPanel<'a> {
         let search = text_input("Search", &self.browser.search)
             .id(Id::new(SEARCH_INPUT))
             .on_input(|text| Message::Browser(BrowserMessage::Search(text)))
-            .size(NAME_SIZE)
+            .size(size::LABEL)
             .padding([2, 6])
             .width(WELL.width)
             .style(style::search_box);
         let menu = self.row_menu();
         let rows = canvas::Canvas::new(self).width(Fill).height(Fill);
-        let mut layers: Vec<Element<'a, Message>> =
-            vec![rows.into(), pin(search).x(WELL.x).y(WELL.y).into()];
+        // Over the rows' last pixels, right of their margin and the search box.
+        let seam = canvas::Canvas::new(Seam).width(SEAM_WIDTH).height(Fill);
+        let mut layers: Vec<Element<'a, Message>> = vec![
+            rows.into(),
+            pin(search).x(WELL.x).y(WELL.y).into(),
+            pin(seam).x(WIDTH - SEAM_WIDTH).into(),
+        ];
         layers.extend(menu);
         container(stack(layers)).width(WIDTH).height(Fill).into()
     }
@@ -266,7 +274,14 @@ impl<'a> BrowserPanel<'a> {
     fn draw_group(&self, frame: &mut Frame, item: &Item, name: &str, x: f32, center: f32) {
         disclosure(frame, x, center, self.group_open(item));
         let name_x = x + NAME_OFFSET;
-        fitted(frame, name, name_x, center, style::TEXT_DIM, LABEL_SIZE);
+        fitted(
+            frame,
+            name,
+            name_x,
+            center,
+            style::palette().text_secondary,
+            size::LABEL,
+        );
     }
 
     /// Whether group label `item` shows its rows: not folded, or a search runs.
@@ -277,21 +292,21 @@ impl<'a> BrowserPanel<'a> {
 
     fn draw_body(&self, frame: &mut Frame) {
         let size = frame.size();
-        frame.fill_rectangle(Point::ORIGIN, size, style::PANEL);
+        frame.fill_rectangle(Point::ORIGIN, size, style::palette().panel);
         frame.fill_rectangle(
             Point::ORIGIN,
             Size::new(size.width, HEADER_HEIGHT),
-            style::HEADER,
+            style::palette().raised,
         );
         frame.fill_text(Text {
-            content: "Library".to_owned(),
+            content: Panel::Browser.title().to_owned(),
             position: Point::new(ROW_LEFT, HEADER_HEIGHT / 2.0),
-            color: style::TEXT,
-            size: NAME_SIZE.into(),
+            color: style::palette().text,
+            size: size::PANEL_TITLE.into(),
             align_y: Vertical::Center,
             ..Text::default()
         });
-        frame.fill_rectangle(WELL.position(), WELL.size(), style::RACK_WELL);
+        frame.fill_rectangle(WELL.position(), WELL.size(), style::palette().bg);
         let shown = self
             .items
             .iter()
@@ -321,7 +336,14 @@ impl<'a> BrowserPanel<'a> {
             }
             Item::Hint(line) => {
                 let x = ROW_LEFT + INDENT;
-                fitted(frame, line, x, center, style::TEXT_DIM, LABEL_SIZE);
+                fitted(
+                    frame,
+                    line,
+                    x,
+                    center,
+                    style::palette().text_secondary,
+                    size::LABEL,
+                );
             }
             Item::Rescan => {
                 let words = if self.scanning {
@@ -329,11 +351,17 @@ impl<'a> BrowserPanel<'a> {
                 } else {
                     "Rescan"
                 };
-                // A button, as the rack's own add buttons are: an action, not a hint line.
+                // A button, as the rack's add button is: an action, not a hint line.
                 let button = rescan_rect(rect, words);
-                frame.fill_rectangle(button.position(), button.size(), style::BUTTON);
+                frame.fill_rectangle(button.position(), button.size(), style::palette().button);
                 let at = Point::new(button.x + BUTTON_PADDING, center);
-                label(frame, words, at, style::TEXT_DIM, NAME_SIZE);
+                label(
+                    frame,
+                    words,
+                    at,
+                    style::palette().text_secondary,
+                    size::LABEL,
+                );
             }
             Item::Sound(index) => {
                 let Some(sound) = starter_kit::SOUNDS.get(*index) else {
@@ -363,6 +391,12 @@ impl<'a> BrowserPanel<'a> {
                 }
                 fitted_to(frame, &plugin.plugin.name, x + NAME_OFFSET, right, center);
             }
+            Item::Synth => {
+                let x = ROW_LEFT + INDENT;
+                plug_glyph(frame, x, center);
+                let right = self.mark_playing(frame, item, rect);
+                fitted_to(frame, SYNTH, x + NAME_OFFSET, right, center);
+            }
             Item::ExternalInput => {
                 let x = ROW_LEFT + INDENT;
                 jack_glyph(frame, x, center);
@@ -378,7 +412,11 @@ impl<'a> BrowserPanel<'a> {
                 if previewing {
                     draw_previewing(frame, rect);
                 } else if self.browser.selected == Some(*index) {
-                    frame.fill_rectangle(rect.position(), rect.size(), style::BROWSER_SELECTED);
+                    frame.fill_rectangle(
+                        rect.position(),
+                        rect.size(),
+                        style::palette().browser_selected,
+                    );
                 }
                 draw_row(frame, row, rect);
             }
@@ -398,9 +436,9 @@ impl<'a> BrowserPanel<'a> {
         {
             return right;
         }
-        let x = right - text_width(PLAYING_MARK, LABEL_SIZE);
+        let x = right - text_width(PLAYING_MARK, size::LABEL);
         let at = Point::new(x, rect.center_y());
-        label(frame, PLAYING_MARK, at, style::ACCENT, LABEL_SIZE);
+        label(frame, PLAYING_MARK, at, style::accent(), size::LABEL);
         x - NAME_OFFSET / 2.0
     }
 
@@ -440,6 +478,7 @@ impl<'a> BrowserPanel<'a> {
             Item::Sound(index) => picked(Pick::Sound(*index)),
             Item::Set(set) => picked(Pick::Set(set.clone())),
             Item::Plugin(plugin) => picked(Pick::Plugin(plugin.clone())),
+            Item::Synth => picked(Pick::Synth),
             Item::ExternalInput => picked(Pick::ExternalInput),
             Item::Rescan if left => picked(Pick::Rescan),
             Item::Group(_) | Item::Kind(_) | Item::Maker(_) if left => {
@@ -497,7 +536,7 @@ impl<'a> BrowserPanel<'a> {
     fn tip_at(&self, at: Point, height: f32) -> Option<&'static str> {
         let row = self.row_at(at, height)?;
         match self.items.get(row)? {
-            Item::Sound(_) | Item::Set(_) | Item::Plugin(_) | Item::ExternalInput => {
+            Item::Sound(_) | Item::Set(_) | Item::Plugin(_) | Item::Synth | Item::ExternalInput => {
                 Some(SOUND_TIP)
             }
             Item::Tree(index) => {
@@ -522,6 +561,7 @@ pub fn hover_of_item(item: &Item, rows: &[Row], on_tick: bool) -> Option<Hover> 
             name: plugin.plugin.name.clone(),
             note: plugin_note(plugin),
         },
+        Item::Synth => LibraryPart::Synth,
         Item::ExternalInput => LibraryPart::ExternalInput,
         Item::Rescan => LibraryPart::Rescan,
         Item::Tree(index) => {
@@ -556,7 +596,7 @@ fn draw_header(frame: &mut Frame, rect: Rectangle, title: &str, count: usize, op
         Point::new(rect.x, rect.y + 1.0),
         Size::new(rect.width, rect.height - 2.0),
     );
-    frame.fill_rectangle(band.position(), band.size(), style::BUTTON);
+    frame.fill_rectangle(band.position(), band.size(), style::palette().button);
     disclosure(frame, ROW_LEFT, rect.center_y(), open);
     let words = format!("{title} \u{b7} {count}");
     let x = ROW_LEFT + NAME_OFFSET;
@@ -566,7 +606,7 @@ fn draw_header(frame: &mut Frame, rect: Rectangle, title: &str, count: usize, op
         x,
         rect.center_y(),
         style::BROWSER_ROOT,
-        NAME_SIZE,
+        size::LABEL,
     );
 }
 
@@ -581,13 +621,13 @@ fn draw_port(frame: &mut Frame, port: &Port, rect: Rectangle) {
         frame.stroke_rectangle(
             tick.position(),
             tick.size(),
-            Stroke::default().with_color(style::KNOB_RING),
+            Stroke::default().with_color(style::palette().knob_ring),
         );
     } else {
         let fill = if port.plays {
-            style::ACCENT
+            style::accent()
         } else {
-            style::KNOB_RING
+            style::palette().knob_ring
         };
         frame.fill_rectangle(tick.position(), tick.size(), fill);
     }
@@ -603,49 +643,54 @@ fn draw_port(frame: &mut Frame, port: &Port, rect: Rectangle) {
     if let Some(link) = port.arrow() {
         // At most half the row, so the device's own name keeps room.
         let room = (right - PORT_NAME_X) / 2.0;
-        if let Some(link) = fit_width(&link, room, NAME_SIZE) {
-            let width = text_width(&link, NAME_SIZE);
+        if let Some(link) = fit_width(&link, room, size::LABEL) {
+            let width = text_width(&link, size::LABEL);
             // Lit for a link of the document's own: a channel linked to the device, or a MIDI
             // out sending to it while nothing else is said.
             let linked = port.channel.is_some() || (port.goes.is_none() && port.out.is_some());
             let color = if port.silent.is_some() {
                 style::WARNING
-            } else if port.unplugged || port.loopback || !linked {
-                style::TEXT_DIM
+            } else if port.unplugged || port.loopback {
+                style::palette().text_disabled
+            } else if !linked {
+                style::palette().text_secondary
             } else {
-                style::ACCENT
+                style::accent()
             };
             label(
                 frame,
                 &link,
                 Point::new(right - width, center),
                 color,
-                NAME_SIZE,
+                size::LABEL,
             );
             right -= width + 6.0;
         }
     }
     let (name, color) = if port.unplugged {
-        (format!("{} (unplugged)", port.name), style::TEXT_DIM)
+        (
+            format!("{} (unplugged)", port.name),
+            style::palette().text_disabled,
+        )
     } else if port.loopback {
-        (port.name.clone(), style::TEXT_DIM)
+        (port.name.clone(), style::palette().text_disabled)
     } else {
-        (port.name.clone(), style::TEXT)
+        (port.name.clone(), style::palette().text)
     };
-    if let Some(name) = fit_width(&name, right - PORT_NAME_X, NAME_SIZE) {
+    if let Some(name) = fit_width(&name, right - PORT_NAME_X, size::LABEL) {
         label(
             frame,
             &name,
             Point::new(PORT_NAME_X, center),
             color,
-            NAME_SIZE,
+            size::LABEL,
         );
     }
 }
 
 /// The Rescan button on the row `rect`, holding `words`.
 fn rescan_rect(rect: Rectangle, words: &str) -> Rectangle {
-    let width = text_width(words, NAME_SIZE) + 2.0 * BUTTON_PADDING;
+    let width = text_width(words, size::LABEL) + 2.0 * BUTTON_PADDING;
     Rectangle::new(
         Point::new(ROW_LEFT + INDENT, rect.y + 2.0),
         Size::new(width, rect.height - 4.0),
@@ -653,11 +698,15 @@ fn rescan_rect(rect: Rectangle, words: &str) -> Rectangle {
 }
 
 fn draw_previewing(frame: &mut Frame, rect: Rectangle) {
-    frame.fill_rectangle(rect.position(), rect.size(), style::BROWSER_PREVIEWING);
+    frame.fill_rectangle(
+        rect.position(),
+        rect.size(),
+        style::palette().browser_previewing,
+    );
     frame.fill_rectangle(
         rect.position(),
         Size::new(PREVIEW_BAR, rect.height),
-        style::ACCENT,
+        style::accent(),
     );
 }
 
@@ -667,6 +716,7 @@ pub fn plays(playing: &Playing, item: &Item) -> bool {
         (Playing::KitSound(index), Item::Sound(row)) => index == row,
         (Playing::Set(sfz), Item::Set(set)) => *sfz == set.sfz,
         (Playing::Plugin(id), Item::Plugin(plugin)) => *id == plugin.processor_id(),
+        (Playing::Synth, Item::Synth) => true,
         _ => false,
     }
 }
@@ -675,13 +725,13 @@ pub fn plays(playing: &Playing, item: &Item) -> bool {
 /// row's name must stop.
 fn mark_format(frame: &mut Frame, format: PluginFormat, right: f32, center: f32) -> f32 {
     let words = crate::ui::picker::format_name(format);
-    let x = right - text_width(words, LABEL_SIZE);
+    let x = right - text_width(words, size::LABEL);
     label(
         frame,
         words,
         Point::new(x, center),
-        style::TEXT_DIM,
-        LABEL_SIZE,
+        style::palette().text_secondary,
+        size::LABEL,
     );
     x - NAME_OFFSET / 2.0
 }
@@ -698,8 +748,14 @@ pub fn plugin_note(plugin: &Offered) -> Option<&'static str> {
 
 /// A row's name from `x`, cut with an ellipsis where it would pass `right`.
 fn fitted_to(frame: &mut Frame, words: &str, x: f32, right: f32, center: f32) {
-    if let Some(words) = fit_width(words, right - x, NAME_SIZE) {
-        label(frame, &words, Point::new(x, center), style::TEXT, NAME_SIZE);
+    if let Some(words) = fit_width(words, right - x, size::LABEL) {
+        label(
+            frame,
+            &words,
+            Point::new(x, center),
+            style::palette().text,
+            size::LABEL,
+        );
     }
 }
 
@@ -733,8 +789,8 @@ fn draw_row(frame: &mut Frame, row: &Row, rect: Rectangle) {
     }
     let (name_x, color) = match row.kind {
         RowKind::Root { .. } => (x + NAME_OFFSET, style::BROWSER_ROOT),
-        RowKind::AddFolder => (x, style::TEXT_DIM),
-        RowKind::Folder { .. } | RowKind::File => (x + NAME_OFFSET, style::TEXT),
+        RowKind::AddFolder => (x, style::palette().text_secondary),
+        RowKind::Folder { .. } | RowKind::File => (x + NAME_OFFSET, style::palette().text),
     };
     let room = ((WIDTH - name_x - 4.0) / CHAR_WIDTH).max(1.0) as usize;
     let name = cut(&row.name, room);
@@ -743,7 +799,7 @@ fn draw_row(frame: &mut Frame, row: &Row, rect: Rectangle) {
         content: name,
         position: Point::new(name_x, center),
         color,
-        size: NAME_SIZE.into(),
+        size: size::LABEL.into(),
         align_y: Vertical::Center,
         ..Text::default()
     });
@@ -753,8 +809,8 @@ fn draw_row(frame: &mut Frame, row: &Row, rect: Rectangle) {
             frame.fill_text(Text {
                 content: cut(parent, room),
                 position: Point::new(name_x + (used + 2) as f32 * CHAR_WIDTH, center),
-                color: style::TEXT_DIM,
-                size: (NAME_SIZE - 1.0).into(),
+                color: style::palette().text_secondary,
+                size: size::LABEL.into(),
                 align_y: Vertical::Center,
                 ..Text::default()
             });
@@ -787,12 +843,12 @@ fn disclosure(frame: &mut Frame, x: f32, center: f32, open: bool) {
             (x + 1.0, center + 4.0),
         ]
     };
-    frame.fill(&triangle(corners), style::TEXT_DIM);
+    frame.fill(&triangle(corners), style::palette().text_secondary);
 }
 
 fn glyph_stroke() -> Stroke<'static> {
     Stroke::default()
-        .with_color(style::TEXT_DIM)
+        .with_color(style::palette().text_secondary)
         .with_width(1.0)
 }
 
@@ -885,7 +941,7 @@ fn tip_rect(words: &str, at: Point, bounds: Size) -> Rectangle {
 fn tip_rect_lines(lines: &[String], at: Point, bounds: Size) -> Rectangle {
     let widest = lines
         .iter()
-        .map(|line| text_width(line, LABEL_SIZE))
+        .map(|line| text_width(line, size::LABEL))
         .fold(0.0, f32::max);
     let width = (widest + 12.0).min(bounds.width - 8.0);
     let height = TIP_HEIGHT * lines.len() as f32;
@@ -975,16 +1031,16 @@ impl canvas::Program<Message> for BrowserPanel<'_> {
             .filter(|(_, lines)| !lines.is_empty());
         if let Some((at, lines)) = shown {
             let rect = tip_rect_lines(&lines, at, bounds.size());
-            tip.fill_rectangle(rect.position(), rect.size(), style::LCD);
+            tip.fill_rectangle(rect.position(), rect.size(), style::palette().lcd);
             for (index, line) in lines.iter().enumerate() {
-                if let Some(words) = fit_width(line, rect.width - 12.0, LABEL_SIZE) {
+                if let Some(words) = fit_width(line, rect.width - 12.0, size::LABEL) {
                     let y = rect.y + TIP_HEIGHT * (index as f32 + 0.5);
                     label(
                         &mut tip,
                         &words,
                         Point::new(rect.x + 6.0, y),
-                        style::LCD_TEXT,
-                        LABEL_SIZE,
+                        style::palette().lcd_text,
+                        size::LABEL,
                     );
                 }
             }
@@ -1016,17 +1072,18 @@ impl canvas::Program<Message> for BrowserPanel<'_> {
 mod tests {
     use super::*;
 
-    // With the panel under the 64 px toolbar, row r's text box spans window y 122 + 22r .. 132 +
-    // 22r, inside row r's rectangle (window y 116 + 22r .. 138 + 22r), and the well is window y
-    // 90..110. (Pins moved 16 px down from the 56 px toolbar's, then 8 px up from the 72 px
+    // With the panel under the 64 px toolbar, row r's text box spans window y 122 + 24r .. 134 +
+    // 24r, inside row r's rectangle (window y 116 + 24r .. 140 + 24r: 24 px rows,
+    // were 22), and the well is window y 90..110; a 504 px panel shows (504 − 52) / 24 = 18.8, so
+    // 18 whole rows (were 20). (Pins moved 16 px down from the 56 px toolbar's, then 8 px up from the 72 px
     // one's.)
     #[test]
     fn rows_start_under_the_search_well() {
         let toolbar = crate::ui::layout::TOOLBAR_HEIGHT;
         for row in 0..3 {
             let rect = row_rect(row, 0).expect("shown");
-            assert_eq!(rect.y + toolbar, 116.0 + 22.0 * row as f32);
-            assert_eq!(rect.height, 22.0);
+            assert_eq!(rect.y + toolbar, 116.0 + 24.0 * row as f32);
+            assert_eq!(rect.height, 24.0);
         }
         assert_eq!(
             (WELL.y + toolbar, WELL.y + WELL.height + toolbar),
@@ -1034,7 +1091,7 @@ mod tests {
         );
         assert_eq!((WELL.x, WELL.x + WELL.width), (6.0, 294.0));
         assert_eq!(row_rect(0, 1), None, "scrolled out of view");
-        assert_eq!(visible_rows(504.0), 20);
+        assert_eq!(visible_rows(504.0), 18);
     }
 
     #[test]
@@ -1270,7 +1327,7 @@ mod tests {
     fn the_hint_lines_fit_their_rows() {
         let room = WIDTH - RIGHT_MARGIN - (ROW_LEFT + INDENT);
         for line in PLUGIN_HINT.iter().chain(DEVICE_HINT) {
-            assert!(text_width(line, LABEL_SIZE) <= room, "{line}");
+            assert!(text_width(line, size::LABEL) <= room, "{line}");
         }
     }
 

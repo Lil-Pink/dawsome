@@ -19,12 +19,15 @@ UNLICENSE*, and the manifest's license-file) from its folder in the cargo regist
 A crate with none on disk gets the line "license text: see the crate's repository": no text is
 made up for it, since a standard license's text without the crate's own copyright line would
 state a notice nobody wrote. The C and C++ libraries the crates' build scripts compile in are in
-C_LIBRARIES below, their texts read from the crate that vendors them; then Surge XT, which ships
-beside the programs, points at LICENSE-SURGE and SOURCES.md.
+C_LIBRARIES below, their texts read from the crate that vendors them; the fonts built into the
+app are in FONTS, their texts read from this repository (no crate vendors them, so
+scripts/license-check.sh, which reads crates, never sees them); then Surge XT, which ships beside
+the programs, points at LICENSE-SURGE and SOURCES.md.
 
 --check: the file is made in memory and compared with the committed one; exit 1 with what
 differs, so a Cargo.lock change without a new licenses/NOTICES.txt fails scripts/check.sh. Exit 2 when it
-cannot run (cargo fails, a C library's files are not where C_LIBRARIES says).
+cannot run (cargo fails, a C library's or a font's files are not where C_LIBRARIES or FONTS
+says).
 
 Why not cargo-about: one more tool for every contributor to install, and it reads the network.
 This needs neither: cargo metadata runs offline and the registry holds every crate's files once
@@ -98,15 +101,33 @@ C_LIBRARIES = (
     },
 )
 
+# The fonts built into dawsome-app (crates/app/src/ui/fonts.rs include_bytes!s the files; each
+# is pinned in crates/app/assets/fonts/fonts.lock). "files" and "texts" are paths in this
+# repository; a missing one stops the script, and so does a font file in FONT_FOLDER that no
+# entry names, so a font moved, or added without its license text, is noticed.
+FONT_FOLDER = "crates/app/assets/fonts"
+FONTS = (
+    {
+        "name": "Inter 4.1",
+        "license": "OFL-1.1",
+        "what": "the text of every window, unchanged from the release's extras/ttf/",
+        "repository": "https://github.com/rsms/inter",
+        "files": ("crates/app/assets/fonts/Inter-Regular.ttf",
+                  "crates/app/assets/fonts/Inter-SemiBold.ttf"),
+        "texts": ("licenses/LICENSE-Inter.txt",),
+    },
+)
+
 HEADER = """\
 Dawsome {version} bundles these works; each keeps its own license.
 
 Dawsome itself is GPL-3.0-or-later: NOTICE holds its notice and LICENSE the license. This file
 holds the license and notice texts of the works built into its two programs, dawsome and
-dawsome-app, word for word as each ships them, in three parts:
+dawsome-app, word for word as each ships them, in four parts:
 
   Rust crates: {crates} ({counts})
   C and C++ libraries the crates' build scripts compile in: {libraries}
+  Fonts built into dawsome-app: {fonts}
   Beside the programs: Surge XT, a separate plugin
 
 A crate whose folder holds no license file is listed with its license and repository, where the
@@ -225,7 +246,7 @@ def make():
     counts = ", ".join(f"{len(built)} on {PLATFORMS.get(target, target)}"
                        for target, built in by_target.items())
     lines = HEADER.format(version=version, crates=len(crates), counts=counts,
-                          libraries=len(C_LIBRARIES)).split("\n")
+                          libraries=len(C_LIBRARIES), fonts=len(FONTS)).split("\n")
     lines = lines[:-1]
     lines += [RULE, "Rust crates", RULE]
     without_text = []
@@ -268,6 +289,23 @@ def make():
                   f"Platforms: {', '.join(sorted(platforms))}"]
         lines += texts_block(files) if files else [
             "license text: see the library's repository"]
+    lines += ["", "", RULE, "Fonts built into dawsome-app", RULE]
+    named = {path for font in FONTS for path in font["files"]}
+    for name in sorted(os.listdir(os.path.join(ROOT, FONT_FOLDER))):
+        path = f"{FONT_FOLDER}/{name}"
+        if name.lower().endswith((".ttf", ".otf", ".ttc", ".woff", ".woff2")) and path not in named:
+            raise Problem(f"{path} is a font no entry of FONTS names: add it with its license text")
+    for font in FONTS:
+        for path in font["files"] + font["texts"]:
+            if not os.path.isfile(os.path.join(ROOT, path)):
+                raise Problem(f"FONTS names {path} ({font['name']}), which is not there")
+        built = ", ".join(os.path.basename(path) for path in font["files"])
+        lines += ["", LINE, font["name"], f"License: {font['license']}",
+                  f"Repository: {font['repository']}",
+                  f"Built in: {built}, {font['what']}",
+                  "Platforms: Linux, Windows"]
+        lines += texts_block([(os.path.basename(path), os.path.join(ROOT, path))
+                              for path in font["texts"]])
     surge = surge_version()
     lines += ["", "", RULE, "Beside the programs: Surge XT", RULE, "",
               f"Surge XT {surge}, the Surge Synth Team's synthesizer, GPL-3.0-or-later, ships as a",

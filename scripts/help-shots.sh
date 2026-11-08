@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Help window's pictures (help guide H4), made again: builds the app, then
+# The Help window's pictures, made again: builds the app, then
 # scripts/help_shots.py takes each screenshot assets/help/source/shots.json lists, headless and
 # one window at a time, in per-user folders of their own under <target dir>/help-shots (never
 # the user's settings; no audio or MIDI device opened), with the sets the programs ship staged

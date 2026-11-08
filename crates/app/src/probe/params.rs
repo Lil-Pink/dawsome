@@ -44,7 +44,7 @@ fn size(shot: &Screenshot) -> (f32, f32) {
     )
 }
 
-// P1: p27_vst3_fx's VST3 test gain on Insert 1, opened by --open-plugin effect:1 (it has no
+// p27_vst3_fx's VST3 test gain on Insert 1, opened by --open-plugin effect:1 (it has no
 // editor). The heading's place is drawn in the text's color; row 0 (Gain, 0.5) has its name in
 // the text's color, its slider filled to its middle and its value written right of it; row 1
 // (Steps, 4 of 0..4) is filled to its end; row 2 (Steps heard, read-only, 0) has its name dim and
@@ -61,19 +61,25 @@ fn p1_the_parameter_window_heads_its_list_and_draws_its_rows() {
         "the parameter window at its first size"
     );
     let names = PADDING..PADDING + NAME_WIDTH;
-    let heading = count(&shot, names.clone(), 8.0..32.0, style::TEXT, GLYPH);
+    let heading = count(
+        &shot,
+        names.clone(),
+        8.0..32.0,
+        style::palette().text,
+        GLYPH,
+    );
     println!("heading: {heading} pixels of text");
     assert!(heading > 10, "the place is written");
     let band = |row: usize| {
         let middle = row_middle(row);
         (middle - ROW_HEIGHT / 2.0 + 2.0)..(middle + ROW_HEIGHT / 2.0 - 2.0)
     };
-    let gain_name = count(&shot, names.clone(), band(0), style::TEXT, GLYPH);
+    let gain_name = count(&shot, names.clone(), band(0), style::palette().text, GLYPH);
     let gain_value = count(
         &shot,
         (SLIDER_X + SLIDER_WIDTH + 8.0)..(SLIDER_X + SLIDER_WIDTH + 60.0),
         band(0),
-        style::TEXT,
+        style::palette().text,
         GLYPH,
     );
     println!("Gain: name {gain_name} pixels, value {gain_value} pixels");
@@ -82,7 +88,10 @@ fn p1_the_parameter_window_heads_its_list_and_draws_its_rows() {
     let slider = |row: usize, along: f32| {
         shot.pixel(Point::new(SLIDER_X + SLIDER_WIDTH * along, row_middle(row)))
     };
-    let (fill, track) = (rgb8(style::SLIDER_FILL), rgb8(style::FADER_TRACK));
+    let (fill, track) = (
+        rgb8(style::slider_fill()),
+        rgb8(style::palette().fader_track),
+    );
     println!(
         "sliders: {:02X?} {:02X?} {:02X?} {:02X?}",
         slider(0, 0.25),
@@ -98,19 +107,19 @@ fn p1_the_parameter_window_heads_its_list_and_draws_its_rows() {
     assert!(
         near(
             shot.pixel(Point::new(SLIDER_X + 2.0, top_of_slider - 3.0)),
-            rgb8(style::PANEL),
+            rgb8(style::palette().panel),
             FACE
         ),
         "the slider is {SLIDER_HEIGHT} px tall in its row"
     );
-    let bright = count(&shot, names.clone(), band(2), style::TEXT, 30);
-    let dim = count(&shot, names, band(2), style::TEXT_DIM, GLYPH);
+    let bright = count(&shot, names.clone(), band(2), style::palette().text, 30);
+    let dim = count(&shot, names, band(2), style::palette().text_disabled, GLYPH);
     println!("Steps heard: {bright} bright and {dim} dim pixels");
     assert_eq!(bright, 0, "a read-only row is dim");
     assert!(dim > 5, "its name is written");
     let under = Point::new(SLIDER_X + SLIDER_WIDTH / 2.0, row_middle(5));
     assert!(
-        near(shot.pixel(under), rgb8(style::PANEL), FACE),
+        near(shot.pixel(under), rgb8(style::palette().panel), FACE),
         "no row 3"
     );
     let foot = height - HINT_HEIGHT;
@@ -118,7 +127,7 @@ fn p1_the_parameter_window_heads_its_list_and_draws_its_rows() {
         &shot,
         (width - 100.0)..(width - PADDING),
         (foot - 34.0)..foot,
-        style::BUTTON,
+        style::palette().button,
         FACE,
     );
     println!("Close: {close} pixels of the button's face");
@@ -126,14 +135,14 @@ fn p1_the_parameter_window_heads_its_list_and_draws_its_rows() {
     assert!(
         near(
             shot.pixel(Point::new(width - 4.0, height - HINT_HEIGHT / 2.0)),
-            rgb8(style::WINDOW),
+            rgb8(style::palette().window),
             FACE
         ),
         "the foot line"
     );
 }
 
-// P2: Surge XT's VST3 (775 parameters) with --open-params channel:1 --scroll end: the list starts
+// Surge XT's VST3 (775 parameters) with --open-params channel:1 --scroll end: the list starts
 // at its end, so the scroller's thumb sits at the foot of its rail (the rail's last pixel is
 // lighter than its first), and the rows are built there: slider bands (track or fill) run all
 // the way down the list, at least 14 of them, the last within a row of the list's foot.
@@ -143,7 +152,7 @@ fn p2_a_long_list_scrolled_to_its_end_builds_its_last_rows() {
     let shot = read_ui_shot();
     let (width, height) = size(&shot);
     assert_eq!((width, height), (WINDOW_SIZE.width, WINDOW_SIZE.height));
-    let ground = rgb8(style::PANEL);
+    let ground = rgb8(style::palette().panel);
     let edge = width - 3.0;
     let rail: Vec<f32> = (0..(height * 2.0) as usize)
         .map(|half| half as f32 / 2.0)
@@ -160,7 +169,10 @@ fn p2_a_long_list_scrolled_to_its_end_builds_its_last_rows() {
     let (first, last) = (luminance(top + 1.0), luminance(bottom - 1.0));
     println!("rail {top}..{bottom}: {first} at its top, {last} at its foot");
     assert!(last > first + 30, "the thumb at the rail's foot");
-    let (fill, track) = (rgb8(style::SLIDER_FILL), rgb8(style::FADER_TRACK));
+    let (fill, track) = (
+        rgb8(style::slider_fill()),
+        rgb8(style::palette().fader_track),
+    );
     let x = SLIDER_X + SLIDER_WIDTH - 2.0;
     let mut bands: Vec<(f32, f32)> = Vec::new();
     let mut y = top;

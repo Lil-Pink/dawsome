@@ -615,11 +615,14 @@ mod tests {
         assert_eq!(plays, [None, None, Some(PatternId(1)), Some(PatternId(2))]);
     }
 
-    // P2: the roll opened on a shared clip (double-clicked) has no chain in its strip any more:
-    // swept leftwards from the strip's right end, the first control is Notes ▾ and the next
-    // the Fold switch, nothing between them. The roll still edits the clip.
+    // The roll opened on a shared clip (double-clicked) has no chain in its strip any more:
+    // swept leftwards from the strip's right end, the first control is the pop-out button (the
+    // roll is docked), then the roll's Loop and Play, then Notes ▾ and the Fold switch, nothing
+    // between them. The roll still edits the clip. (Pins moved: Notes ▾ was first, before the
+    // pop-out button; then Notes ▾ came right after the button, until Play and Loop moved
+    // right of Notes.)
     #[test]
-    fn the_roll_strip_ends_with_notes_again() {
+    fn the_roll_strip_ends_with_its_player_and_notes() {
         let (mut app, _player) = five();
         let mut window = Window::new(&app);
         let third = on_clip(&app, ClipId(3));
@@ -634,10 +637,13 @@ mod tests {
         let y = TOOLBAR_HEIGHT + STRIP_HEIGHT / 2.0;
         let width = app.window_size.width;
         let met = swept(&mut app, &mut window, y, width - 1.0, 0.0);
-        let first: Vec<&Hover> = met.iter().take(2).map(|(hover, _)| hover).collect();
+        let first: Vec<&Hover> = met.iter().take(5).map(|(hover, _)| hover).collect();
         assert_eq!(
             first,
             [
+                &Hover::PopOut(Panel::PianoRoll),
+                &Hover::Roll(RollPart::Loop),
+                &Hover::Roll(RollPart::Play),
                 &Hover::Roll(RollPart::NotesMenu),
                 &Hover::Roll(RollPart::Fold)
             ],
@@ -767,7 +773,7 @@ mod tests {
         );
     }
 
-    // The control's words, as the spec words them, in its tip and the hint bar: one selected
+    // The control's words in its tip and the hint bar: one selected
     // clip in the roll's control's words, several counted.
     #[test]
     fn the_link_control_says_what_a_click_does() {

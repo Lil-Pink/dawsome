@@ -60,11 +60,11 @@ fn m1_the_midi_out_group_lines_up_under_the_input() {
     let right = width - PADDING - 3.0;
     // Under the channel's name (15 px words) and its strip: nothing of the group is higher.
     let top = PADDING + 15.0 + STRIP_HEIGHT;
-    let rule = runs(&shot, right, (top, foot), rgb8(style::ACCENT), 12);
+    let rule = runs(&shot, right, (top, foot), rgb8(style::accent()), 12);
     let &(_, rule_end) = rule
         .first()
         .expect("the MIDI OUT group's accent rule at the window's right edge");
-    let face = rgb8(style::BUTTON);
+    let face = rgb8(style::palette().button);
     let edge = runs(&shot, right, (rule_end + 1.0, foot), face, FACE);
     println!("width {width}, rule {rule:?}, faces at the right edge {edge:?}");
     let [port, echo, close] = edge[..] else {

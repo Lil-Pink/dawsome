@@ -112,7 +112,7 @@ The rules:
                    [2100, 2414], 315 frames, 157.5 at 48 kHz; p24_seam96.json plays it at 48 kHz
   p24_expected.json  each case: its inputs and what the tests compare
 
-The cases (the spec's five, and the loops'):
+The cases (five, and the loops'):
   (1) burst     every frame at C or under, the first frame past C exactly on C, the recovery
                 frame by frame (hash and probes), and the same with ceiling 0 dB, release 1 ms
   (2) chord     two full-scale notes summed, then limited: to the bit

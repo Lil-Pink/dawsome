@@ -160,7 +160,7 @@ fn a_song_take_with_no_note_is_taken_back_whole() {
 #[test]
 fn a_song_take_with_no_free_track_adds_one_and_the_armed_track_wins() {
     let mut project = fixture("p17_song.json");
-    for track in 2..=8 {
+    for track in 2..=6 {
         let clip = dawsome_engine::project::Clip::of_pattern(
             PatternId(1),
             TrackId(track),
@@ -180,10 +180,10 @@ fn a_song_take_with_no_free_track_adds_one_and_the_armed_track_wins() {
     let before = json(&project);
     let take =
         takes::song_take(&project, "Kick take 1".into(), Ticks(384), None, 1).expect("builds");
-    assert_eq!((take.track, take.added_track), (TrackId(9), true));
+    assert_eq!((take.track, take.added_track), (TrackId(7), true));
     let mut history = History::default();
     history.apply(&mut project, take.edit).expect("applies");
-    assert_eq!(project.playlist.tracks.len(), 9);
+    assert_eq!(project.playlist.tracks.len(), 7);
     assert!(history.undo(&mut project).expect("undoes").is_some());
     assert_eq!(json(&project), before);
     let armed = takes::song_take(
@@ -205,7 +205,7 @@ fn a_song_take_with_no_free_track_adds_one_and_the_armed_track_wins() {
     .expect("builds");
     assert_eq!(
         gone.track,
-        TrackId(9),
+        TrackId(7),
         "an armed track the project lacks counts for nothing"
     );
 }

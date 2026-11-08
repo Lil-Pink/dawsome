@@ -12,7 +12,7 @@
 //! scrolled out of the panel (they were: the desk was laid out from the kept height while the
 //! stack showed less). Alone, the mixer fills the area under the toolbar. The canvas
 //! reports the height it got, which every hit test uses. Its strips' fader track takes what the
-//! height leaves ([`fader_bottom`]): 50 px at the least desk, 200 px at most, from a 369 px desk
+//! height leaves ([`fader_bottom`]): 50 px at the least desk, 200 px at most, from a 379 px desk
 //! (the controls keep their sizes).
 //!
 //! The desk, top to bottom, mixer y: the header (0..24) with the channel routing control at
@@ -21,17 +21,19 @@
 //! window, where the strips scroll under it).
 //!
 //! A strip is 60 px wide: the master at x 4, insert k at x 12 + 62k, all moved left by the
-//! scroll. Within a strip at x (mixer y, the least desk, 219 px): body 26..217, name 28..44,
+//! scroll. Within a strip at x (mixer y, the least desk, 229 px): body 26..227, name 28..44,
 //! mute light centered at (x+12, 51), pan knob 28 px from (x+16, 58), fader track x+12..x+18
 //! over 96..146 with the cap centered on y = 146 − 50·fader, meters x+36..x+42 and x+45..x+51
-//! over 96..146, the master's clip light at (x+44, 90), route button x+16..x+44 over 155..169,
-//! send knob 24 px from (x+18, 173), label 199..215. A taller desk moves the fader's foot, the
+//! over 96..146, the master's clip light at (x+44, 90), route button x+16..x+44 over 155..179,
+//! send knob 24 px from (x+18, 183), label 209..225. A taller desk moves the fader's foot, the
 //! route button, the send knob, the label and the body's foot down together (the fader growing
 //! to 200 px), and past that the label and the body's foot alone. Why so close together: for
 //! a mixer half as tall; the strip was 304 px with a 100 px fader and roomier gaps, and every
 //! part stays, whole.
 //!
-//! The effects area (mixer y): the selected insert's name 24..48, then its effects from 52 as
+//! The effects area (mixer y): from 28, 4 px under the header (from 52 while 24..48 held the
+//! selected insert's name, and while that row stood empty after the header's routing control,
+//! centred, named the insert alone), the selected insert's effects as
 //! blocks in chain order, left to right in lines as wide as the area, each line under the one
 //! before ([`chain_rects`]); after the last block, while the insert has room, the add tile. A
 //! block is its head (the effect's light, its name, the arrows moving it a place earlier or
@@ -44,7 +46,14 @@
 use dawsome_engine::project::{InsertId, EFFECT_SLOTS};
 use iced::{Point, Rectangle, Size};
 
-/// The mixer panel's height until the divider over it is dragged: its least, 225 px, every
+use crate::ui::panels::Panel;
+
+use crate::ui::knob_block::{
+    self, block_size, head_rect, knob_at, knob_cell, BLOCK_FOOT, BLOCK_HEAD, BLOCK_INSET,
+    KNOB_ROW_HEIGHT, KNOB_SIZE, KNOB_WIDTH, MOST_KNOBS_IN_A_ROW,
+};
+
+/// The mixer panel's height until the divider over it is dragged: its least, 235 px, every
 /// strip whole with a 50 px fader and a line of the effects' blocks. Why its least (310 before,
 /// and 400 and 504 before that, each made smaller in turn): it had been dragged down to 182 px,
 /// as short as the divider let it go. Half of 310, the height aimed at, cannot hold a whole
@@ -59,10 +68,10 @@ pub const DEFAULT_HEIGHT: f32 = LEAST_HEIGHT;
 pub const HANDLE_HEIGHT: f32 = 6.0;
 
 /// The desk's least height: a strip with a 50 px fader track and the controls under it
-/// (96 + 50 + 73 = 219). The effects area beside the strips scrolls its own lines.
+/// (96 + 50 + 83 = 229; 219 until the route button grew to 24 px). The effects area beside the strips scrolls its own lines.
 pub const LEAST_DESK: f32 = FADER_TOP + LEAST_FADER_SPAN + UNDER_FADER;
 
-/// The mixer panel's least height, its top edge over the least desk: 6 + 219 = 225 px. The
+/// The mixer panel's least height, its top edge over the least desk: 6 + 229 = 235 px. The
 /// panel stack never shows it shorter ([`crate::ui::panels::min_height`]).
 pub const LEAST_HEIGHT: f32 = HANDLE_HEIGHT + LEAST_DESK;
 
@@ -70,8 +79,8 @@ pub const LEAST_HEIGHT: f32 = HANDLE_HEIGHT + LEAST_DESK;
 const LEAST_FADER_SPAN: f32 = 50.0;
 
 // The least desk holds a whole line of the tallest block (two knob rows, the EQ's ten knobs:
-// 22 + 2 × 58 + 4 = 142) between the blocks' first line (52) and the strips' foot (2 px over
-// the desk's): 52 + 142 = 194 ≤ 217. So the strips set the least height, not the blocks: a
+// 22 + 2 × 58 + 4 = 142) between the blocks' first line (28) and the strips' foot (2 px over
+// the desk's): 28 + 142 = 170 ≤ 227. So the strips set the least height, not the blocks: a
 // shorter knob row would take nothing off it.
 const _: () =
     assert!(BLOCKS_TOP + BLOCK_HEAD + 2.0 * KNOB_ROW_HEIGHT + BLOCK_FOOT <= LEAST_DESK - BODY_FOOT);
@@ -83,10 +92,16 @@ pub fn desk_height(height: f32) -> f32 {
 
 pub const HEADER_HEIGHT: f32 = 24.0;
 
-/// The routing control in the header: the "−" button, the label, the "+" button.
-pub const ROUTE_CONTROL_LEFT: f32 = 560.0;
-pub const ROUTE_CONTROL_RIGHT: f32 = 790.0;
-pub const ROUTE_ARROW_WIDTH: f32 = 20.0;
+/// Where the header's title starts: the strips' side padding, as the other headers'.
+pub const TITLE_X: f32 = 12.0;
+
+/// The routing control in the header: the "−" button, the label, the "+" button, 230 px in all,
+/// the panel's title gap past "Mixer" ([`route_left`]). The buttons are 24 px wide (were 20)
+/// and the header's 20 tall inside it: a 24 px circle round each stays inside the 24 px header,
+/// WCAG 2.2's spacing exception.
+pub const ROUTE_ARROW_WIDTH: f32 = 24.0;
+/// The routing control's width.
+const ROUTE_SPAN: f32 = 230.0;
 
 pub const STRIP_WIDTH: f32 = 60.0;
 pub const MASTER_LEFT: f32 = 4.0;
@@ -103,7 +118,6 @@ pub const SELECTED_OUTLINE: f32 = 2.0;
 
 pub const NAME_TOP: f32 = 28.0;
 pub const NAME_HEIGHT: f32 = 16.0;
-pub const NAME_SIZE: f32 = 12.0;
 
 pub const LED_OFFSET: f32 = 12.0;
 pub const LED_Y: f32 = 51.0;
@@ -123,9 +137,10 @@ pub const FADER_TRACK_WIDTH: f32 = 6.0;
 pub const FADER_TOP: f32 = 96.0;
 pub const MAX_FADER_SPAN: f32 = 200.0;
 /// What a strip needs under its fader's foot: the route button 9 px down (4 px under the cap
-/// at fader 0) and 14 tall, 4 px, the send knob (24), 2 px, the label (16), the body's 2 px and
-/// the desk's [`BODY_FOOT`] under it: 9 + 14 + 4 + 24 + 2 + 16 + 2 + 2 = 73.
-const UNDER_FADER: f32 = 73.0;
+/// at fader 0) and 24 tall (WCAG 2.2's target size; 14 before), 4 px, the send knob (24), 2 px, the
+/// label (16), the body's 2 px and the desk's [`BODY_FOOT`] under it:
+/// 9 + 24 + 4 + 24 + 2 + 16 + 2 + 2 = 83.
+const UNDER_FADER: f32 = 83.0;
 pub const CAP_OFFSET: f32 = 1.0;
 pub const CAP_WIDTH: f32 = 28.0;
 pub const CAP_HEIGHT: f32 = 10.0;
@@ -147,51 +162,31 @@ pub const CLIP_RADIUS: f32 = 3.0;
 pub const ROUTE_OFFSET: f32 = 16.0;
 const ROUTE_UNDER_FADER: f32 = 9.0;
 pub const ROUTE_WIDTH: f32 = 28.0;
-pub const ROUTE_HEIGHT: f32 = 14.0;
+pub const ROUTE_HEIGHT: f32 = 24.0;
 
 pub const SEND_OFFSET: f32 = 18.0;
-const SEND_UNDER_FADER: f32 = 27.0;
+const SEND_UNDER_FADER: f32 = 37.0;
 pub const SEND_SIZE: f32 = 24.0;
 
 /// The insert's number, 2 px above the body's foot.
 pub const LABEL_HEIGHT: f32 = 16.0;
 
-/// The effects area: the selected insert's name, mixer y.
-pub const TITLE_TOP: f32 = HEADER_HEIGHT;
-pub const TITLE_HEIGHT: f32 = 24.0;
-/// The blocks' first line, mixer y.
-pub const BLOCKS_TOP: f32 = 52.0;
-/// The blocks' and the title's margin from the area's left edge.
+/// The blocks' first line, mixer y: 4 px under the header, the gap they had under the 24 px
+/// row the selected insert's name held, level with the strips' names ([`NAME_TOP`]). Why not
+/// 52, where they stood: the name went (the header's routing control names the insert) and its
+/// row stayed an empty band over the blocks until they moved up into it.
+pub const BLOCKS_TOP: f32 = HEADER_HEIGHT + 4.0;
+/// The blocks' margin from the area's left edge.
 pub const EFFECTS_INSET: f32 = 6.0;
 /// The area's right margin, where the marks of lines scrolled out of view show.
 pub const MARKS_WIDTH: f32 = 14.0;
-/// The space between two blocks, across and down.
-pub const BLOCK_GAP: f32 = 6.0;
-/// A block's head: its light, its name, its arrows and its remove cross.
-pub const BLOCK_HEAD: f32 = 22.0;
-/// The knobs' margin inside a block, either side, and the block's foot under its last row.
-pub const BLOCK_INSET: f32 = 6.0;
-pub const BLOCK_FOOT: f32 = 4.0;
-/// One knob's place in a block: its label, the knob and its value under it.
-pub const KNOB_WIDTH: f32 = 60.0;
-pub const KNOB_ROW_HEIGHT: f32 = 58.0;
-/// The effects' knobs are the size of a strip's pan knob.
-pub const KNOB_SIZE: f32 = PAN_SIZE;
-/// The knob's top, its label's and its value's middles, down from the top of its place.
-const KNOB_TOP: f32 = 14.0;
-const KNOB_LABEL_Y: f32 = 7.0;
-const KNOB_VALUE_Y: f32 = 50.0;
-/// A choice's button (the filter's type, the phaser's stages): across its place, at the
-/// knob's middle.
-pub const CHOICE_HEIGHT: f32 = 18.0;
-const CHOICE_INSET: f32 = 4.0;
-/// The most knobs a block's row holds, and the fewest columns a block has (room in its head for
-/// a name such as "Stereo width" beside the arrows).
-pub const MOST_KNOBS_IN_A_ROW: usize = 5;
-pub const LEAST_KNOB_COLUMNS: usize = 3;
-/// The remove cross, at the head's right end, and the two arrows left of it.
-pub const REMOVE_SIZE: f32 = 16.0;
-pub const ARROW_WIDTH: f32 = 14.0;
+// The effects' knobs are the size of a strip's pan knob.
+const _: () = assert!(KNOB_SIZE == PAN_SIZE);
+/// The remove cross, at the head's right end, and the two arrows left of it: each a target this
+/// wide across the head's height, the glyph drawn in its middle at the size it always had. Why
+/// 24: WCAG 2.2's target size, met by the spacing exception (centres 24 apart, the head 22
+/// tall); the cross was 16 px and the arrows 14 before.
+pub const HEAD_TARGET: f32 = 24.0;
 /// The effects area's least width: the widest block (five columns) and the margins.
 pub const EFFECTS_MIN_WIDTH: f32 =
     EFFECTS_INSET + MOST_KNOBS_IN_A_ROW as f32 * KNOB_WIDTH + 2.0 * BLOCK_INSET + MARKS_WIDTH;
@@ -202,8 +197,6 @@ pub const EFFECTS_SCROLL_PER_NOTCH: f32 = 48.0;
 pub const MENU_INSET: f32 = 6.0;
 /// The menus' rows' width: the add menu's longest row, "Compressor (Pressure4)", and a margin.
 pub const MENU_WIDTH: f32 = 180.0;
-
-pub const TEXT_SIZE: f32 = 11.0;
 
 /// Pixels the wheel scrolls the strips per notch: one strip.
 pub const SCROLL_PER_NOTCH: f32 = STRIP_PITCH;
@@ -235,7 +228,7 @@ pub fn max_scroll(last: InsertId, width: f32) -> f32 {
 
 /// The fader track's foot, mixer y, in a desk `desk` tall: what the controls under it leave,
 /// at most [`MAX_FADER_SPAN`] under [`FADER_TOP`]. (146 at the least desk, the default; 296,
-/// the most, from a 369 px desk on.)
+/// the most, from a 379 px desk on.)
 pub fn fader_bottom(desk: f32) -> f32 {
     (desk.max(LEAST_DESK) - UNDER_FADER).min(FADER_TOP + MAX_FADER_SPAN)
 }
@@ -339,25 +332,6 @@ pub fn meter_height(level: f32, span: f32) -> f32 {
     span * meter_fraction(level)
 }
 
-/// How a block lays out `count` knobs: (columns, rows). One row of up to five; more go in two
-/// rows, the first as long as the second or one longer (the EQ's ten: five and five, the
-/// phaser's six: three and three); never under three columns. An effect with none (a plugin
-/// with no parameters, one this build does not know) keeps one row for its words.
-pub fn knob_grid(count: usize) -> (usize, usize) {
-    let rows = count.div_ceil(MOST_KNOBS_IN_A_ROW).max(1);
-    (count.div_ceil(rows).max(LEAST_KNOB_COLUMNS), rows)
-}
-
-/// The size of the block of an effect with `count` knobs; the add tile is the size of a block
-/// of none.
-pub fn block_size(count: usize) -> Size {
-    let (columns, rows) = knob_grid(count);
-    Size::new(
-        columns as f32 * KNOB_WIDTH + 2.0 * BLOCK_INSET,
-        BLOCK_HEAD + rows as f32 * KNOB_ROW_HEIGHT + BLOCK_FOOT,
-    )
-}
-
 /// The rectangle the effects' lines show in, on `desk`: the area under its title, inside its
 /// margins, down to the strips' foot.
 pub fn blocks_view(desk: Desk) -> Rectangle {
@@ -389,25 +363,11 @@ pub fn shown_tile(tile: Rectangle, view: Rectangle) -> Option<Rectangle> {
 }
 
 /// Where the blocks of `chain` (each effect's knob count, in chain order) and then the add
-/// tile sit, unscrolled, from the top left of `view`: left to right, a block that would cross
-/// the right edge starting the next line (unless it is the line's first), each line as tall as
-/// its tallest block. With the bottom of the last line.
+/// tile sit, unscrolled, from the top left of `view`, in lines ([`knob_block::flow`]). With
+/// the bottom of the last line.
 fn flow(chain: &[usize], view: Rectangle) -> (Vec<Rectangle>, f32) {
     let tile = has_add_tile(chain.len()).then_some(0);
-    let mut rects = Vec::with_capacity(chain.len() + 1);
-    let (mut x, mut y, mut line) = (view.x, view.y, 0.0f32);
-    for count in chain.iter().copied().chain(tile) {
-        let size = block_size(count);
-        if x > view.x && x + size.width > view.x + view.width {
-            x = view.x;
-            y += line + BLOCK_GAP;
-            line = 0.0;
-        }
-        rects.push(Rectangle::new(Point::new(x, y), size));
-        x += size.width + BLOCK_GAP;
-        line = line.max(size.height);
-    }
-    (rects, y + line)
+    knob_block::flow(chain.iter().copied().chain(tile).map(block_size), view)
 }
 
 /// How far the effects' lines of `chain` can scroll on `desk`: until the last line's foot meets
@@ -439,9 +399,11 @@ pub const SHOW_ADDED: f32 = f32::INFINITY;
 /// ([`shown_tile`]), else its head alone; none while they show from the top, so the first
 /// block stays there. As far as the lines go when no line's top shows its head (its line is
 /// the last and the one over it is two knob rows tall). Why whole lines, not the lines' end:
-/// the least desk's view (165 px) holds less than two lines (84 + 6 + 84), so the end cut the
+/// the least desk's view (165 px then, 175 once the route button was 24 px tall) held less
+/// than two lines (84 + 6 + 84), so the end cut the
 /// line over the last to its foot, and a block's head and knobs are drawn only while whole:
-/// three effects left the first two as bare strips.
+/// three effects left the first two as bare strips. Its 199 px since the blocks moved up to 28
+/// hold two lines of one knob row, still not a two-row block's line (142) and another.
 fn added_scroll(chain: &[usize], desk: Desk) -> f32 {
     let view = blocks_view(desk);
     let (rects, bottom) = flow(chain, view);
@@ -499,33 +461,28 @@ pub fn effect_led_center(block: Rectangle) -> Point {
     Point::new(block.x + LED_OFFSET, block.y + BLOCK_HEAD / 2.0)
 }
 
+/// The [`HEAD_TARGET`]-wide target of the block at `block`'s head `places` targets in from its
+/// right end, across the head's height.
+fn head_target(block: Rectangle, places: f32) -> Rectangle {
+    Rectangle::new(
+        Point::new(block.x + block.width - places * HEAD_TARGET, block.y),
+        Size::new(HEAD_TARGET, BLOCK_HEAD),
+    )
+}
+
 /// The remove cross of the block at `block`, at its head's right end.
 pub fn remove_rect(block: Rectangle) -> Rectangle {
-    Rectangle::new(
-        Point::new(
-            block.x + block.width - REMOVE_SIZE - 4.0,
-            block.y + (BLOCK_HEAD - REMOVE_SIZE) / 2.0,
-        ),
-        Size::new(REMOVE_SIZE, REMOVE_SIZE),
-    )
+    head_target(block, 1.0)
 }
 
 /// The arrow moving the block at `block` a place later in the chain (›), left of its remove
 /// cross, and the one moving it a place earlier (‹), left of that.
 pub fn later_rect(block: Rectangle) -> Rectangle {
-    let cross = remove_rect(block);
-    Rectangle::new(
-        Point::new(cross.x - 2.0 - ARROW_WIDTH, cross.y),
-        Size::new(ARROW_WIDTH, REMOVE_SIZE),
-    )
+    head_target(block, 2.0)
 }
 
 pub fn earlier_rect(block: Rectangle) -> Rectangle {
-    let later = later_rect(block);
-    Rectangle::new(
-        Point::new(later.x - ARROW_WIDTH, later.y),
-        Size::new(ARROW_WIDTH, REMOVE_SIZE),
-    )
+    head_target(block, 3.0)
 }
 
 /// The name of the block at `block`: its head between the light and the arrows, where a drag
@@ -586,64 +543,51 @@ fn before_middle(rects: &[Rectangle], index: usize, at: Point) -> bool {
     at.y < rect.y || (at.y < line_foot(rects, index) && at.x < rect.center_x())
 }
 
-/// The place of knob `index` of the `count` in the block at `block`: row by row, left to
-/// right.
-pub fn knob_cell(block: Rectangle, count: usize, index: usize) -> Rectangle {
-    let (columns, _) = knob_grid(count);
-    let (row, column) = (index / columns, index % columns);
-    Rectangle::new(
-        Point::new(
-            block.x + BLOCK_INSET + column as f32 * KNOB_WIDTH,
-            block.y + BLOCK_HEAD + row as f32 * KNOB_ROW_HEIGHT,
-        ),
-        Size::new(KNOB_WIDTH, KNOB_ROW_HEIGHT),
-    )
-}
-
-/// The knob in its place `cell`, centered across it under its label.
-pub fn knob_rect(cell: Rectangle) -> Rectangle {
-    Rectangle::new(
-        Point::new(cell.center_x() - KNOB_SIZE / 2.0, cell.y + KNOB_TOP),
-        Size::new(KNOB_SIZE, KNOB_SIZE),
-    )
-}
-
-/// A choice's button in its place `cell`: across it, at the knob's middle.
-pub fn choice_rect(cell: Rectangle) -> Rectangle {
-    let middle = knob_rect(cell).center_y();
-    Rectangle::new(
-        Point::new(cell.x + CHOICE_INSET, middle - CHOICE_HEIGHT / 2.0),
-        Size::new(KNOB_WIDTH - 2.0 * CHOICE_INSET, CHOICE_HEIGHT),
-    )
-}
-
-/// The middles of a knob's label, over it, and of its value, under it, in its place `cell`.
-pub fn knob_label_center(cell: Rectangle) -> Point {
-    Point::new(cell.center_x(), cell.y + KNOB_LABEL_Y)
-}
-
-pub fn knob_value_center(cell: Rectangle) -> Point {
-    Point::new(cell.center_x(), cell.y + KNOB_VALUE_Y)
-}
-
 /// Where the menu of the block (or add tile) at `block` opens: under its head, [`MENU_INSET`]
 /// in. The menu is drawn on the window's top layer from there ([`crate::ui::menu`]).
 pub fn menu_anchor(block: Rectangle) -> Point {
     Point::new(block.x + MENU_INSET, block.y + BLOCK_HEAD)
 }
 
-/// The header's "−" and "+" buttons and the label between them.
-pub fn route_down_rect() -> Rectangle {
-    header_rect(ROUTE_CONTROL_LEFT, ROUTE_ARROW_WIDTH)
+/// Where the routing control starts on a desk `width` wide: centred in the header, (width −
+/// [`ROUTE_SPAN`]) / 2, the title at the left and the pop-out button at the right as before.
+/// Why centred: it names the selected insert and where it goes, the mixer's one line of state,
+/// and the effects area's title that named the insert again went; it stood the
+/// title gap past the title before, and at x 560 before that. Never closer to the title than
+/// that gap ([`Panel::after_title`]: 12 + 37.112 for "Mixer" at 14 px + 48 = 97.112, a desk
+/// under 424.224 px); on a desk too narrow for it and the pop-out button ([`pop_out_rect`])
+/// with the strips' side padding between them (under 375 px), further left: its right end then
+/// stands that padding left of the button. Why: it ran under the button there.
+pub fn route_left(width: f32) -> f32 {
+    let room = pop_out_rect(width).x - crate::ui::pop_out::STRIP_RIGHT - ROUTE_SPAN;
+    ((width - ROUTE_SPAN) / 2.0)
+        .max(Panel::Mixer.after_title(TITLE_X))
+        .min(room)
 }
 
-pub fn route_up_rect() -> Rectangle {
-    header_rect(ROUTE_CONTROL_RIGHT - ROUTE_ARROW_WIDTH, ROUTE_ARROW_WIDTH)
+pub fn route_down_rect(width: f32) -> Rectangle {
+    header_rect(route_left(width), ROUTE_ARROW_WIDTH)
 }
 
-pub fn route_label_rect() -> Rectangle {
-    let left = ROUTE_CONTROL_LEFT + ROUTE_ARROW_WIDTH;
-    header_rect(left, ROUTE_CONTROL_RIGHT - ROUTE_ARROW_WIDTH - left)
+pub fn route_up_rect(width: f32) -> Rectangle {
+    let right = route_left(width) + ROUTE_SPAN;
+    header_rect(right - ROUTE_ARROW_WIDTH, ROUTE_ARROW_WIDTH)
+}
+
+pub fn route_label_rect(width: f32) -> Rectangle {
+    let left = route_left(width) + ROUTE_ARROW_WIDTH;
+    header_rect(left, ROUTE_SPAN - 2.0 * ROUTE_ARROW_WIDTH)
+}
+
+/// The pop-out button on a desk `width` wide: its 24 px square at the header's right end, the
+/// strips' side padding from the edge ([`crate::ui::pop_out`]). The desk draws it while the
+/// mixer is docked; a press on it pops the mixer out (nothing in the mixer's own window).
+pub fn pop_out_rect(width: f32) -> Rectangle {
+    let size = crate::ui::pop_out::SIZE;
+    Rectangle::new(
+        Point::new(width - crate::ui::pop_out::STRIP_RIGHT - size, 0.0),
+        Size::new(size, size),
+    )
 }
 
 fn header_rect(x: f32, width: f32) -> Rectangle {
@@ -664,6 +608,8 @@ pub fn in_window(point: Point) -> Point {
 /// effect is named by its place in the selected insert's chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
+    /// The pop-out button at the header's right end ([`pop_out_rect`]).
+    PopOut,
     RouteDown,
     RouteUp,
     RouteLabel,
@@ -716,9 +662,10 @@ pub fn hit_test(point: Point, desk: Desk, chain: &[usize]) -> Option<Hit> {
     let (width, height) = (size.width, size.height);
     if point.y < HEADER_HEIGHT {
         return [
-            (route_down_rect(), Hit::RouteDown),
-            (route_up_rect(), Hit::RouteUp),
-            (route_label_rect(), Hit::RouteLabel),
+            (pop_out_rect(width), Hit::PopOut),
+            (route_down_rect(width), Hit::RouteDown),
+            (route_up_rect(width), Hit::RouteUp),
+            (route_label_rect(width), Hit::RouteLabel),
         ]
         .into_iter()
         .find(|(rect, _)| rect.contains(point))
@@ -771,10 +718,9 @@ fn effects_hit(point: Point, desk: Desk, chain: &[usize]) -> Option<Hit> {
     let Some(&count) = chain.get(block) else {
         return shown_tile(rect, view).map(|_| Hit::AddEffect);
     };
-    let head = Rectangle::new(rect.position(), Size::new(rect.width, BLOCK_HEAD));
+    let head = head_rect(rect);
     if !head.contains(point) {
-        let knob = (0..count).find(|&knob| knob_cell(rect, count, knob).contains(point));
-        return Some(match knob {
+        return Some(match knob_at(rect, count, point) {
             Some(knob) if whole(knob_cell(rect, count, knob)) => Hit::Knob { block, knob },
             _ => Hit::Block(block),
         });
@@ -803,6 +749,9 @@ fn effects_hit(point: Point, desk: Desk, chain: &[usize]) -> Option<Hit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::knob_block::{
+        choice_rect, knob_grid, knob_label_center, knob_rect, knob_value_center,
+    };
 
     const WIDTH: f32 = 1000.0;
     /// The desk the design was drawn at: the old 504 px panel, which had no handle.
@@ -835,10 +784,11 @@ mod tests {
 
     // The strips on the design's 504 px desk, written out as the design's window points (under
     // its 56 px toolbar): master at x 4, insert k at 12 + 62k. The compact strip
-    // puts the fader's top at mixer y 96 and, the desk being past 369 px, its track at its most,
+    // puts the fader's top at mixer y 96 and, the desk being past 379 px, its track at its most,
     // 200 px, its foot at 296: the cap of a fader at 0.8 is centered on 296 − 160 = 136, window
     // 192, at 1.0 on 96, window 152; the meters start at 96 too (window 152), the route button
-    // 9 px under the foot (305, window 361), the send knob 27 px under it (323, window 379); the
+    // 9 px under the foot (305, window 361), the send knob 37 px under it (333, window 389: the
+    // route button 24 px tall, 14 before, when it was 323, window 379); the
     // label 2 px over the body's foot, which is 2 px over the desk's: 484 and 502. (Were 210,
     // 170, 384, 404, 170, 480 and 500 with the roomier strip and its top at 114.)
     #[test]
@@ -857,7 +807,7 @@ mod tests {
         );
         assert_eq!(
             design(send_rect(4.0, DESIGN).position()),
-            Point::new(22.0, 379.0)
+            Point::new(22.0, 389.0)
         );
         assert_eq!(
             design(meter_rect(4.0, 1, DESIGN).position()),
@@ -914,15 +864,17 @@ mod tests {
     }
 
     // By hand, at 1000 × 504 with sixteen inserts: the view is x 674..986 (668 + 6, 1000 − 14),
-    // y 52..502 (the strips' foot, 2 px over the desk's). The nine-knob block (312 × 142) fills
-    // the first line; the delay (252 × 84) starts the next
-    // at 52 + 142 + 6 = 200, the filter (192 × 84) does not fit beside it (674 + 252 + 6 + 192
-    // = 1124) and starts the third at 290, and the add tile (192 × 84) the fourth at 380: the
-    // last line ends at 464, inside the view, so nothing scrolls. At 1920 px (the view x 1074..
-    // 1906) the three blocks share the first line and the tile starts the second. A full insert
-    // shows no tile. On a 394 px desk (a 400 px panel: the view's foot at 392) the lines scroll
-    // 72 px, the tile then at 380 − 72 = 308. (Pins moved with the compact strip: the
-    // strips' foot 2 px over the desk's, was 4: the view to 502, was 500, and 74 px of scroll.)
+    // y 28..502 (4 px under the 24 px header; the strips' foot, 2 px over the desk's). The
+    // nine-knob block (312 × 142) fills the first line; the delay (252 × 84) starts the next
+    // at 28 + 142 + 6 = 176, the filter (192 × 84) does not fit beside it (674 + 252 + 6 + 192
+    // = 1124) and starts the third at 176 + 84 + 6 = 266, and the add tile (192 × 84) the fourth
+    // at 356: the last line ends at 440, inside the view, so nothing scrolls. At 1920 px (the
+    // view x 1074..1906) the three blocks share the first line and the tile starts the second,
+    // at 176. A full insert shows no tile. On a 394 px desk (a 400 px panel: the view's foot at
+    // 392) the lines scroll 440 − 392 = 48 px, the tile then at 356 − 48 = 308. (Pins moved:
+    // with the compact strip, the strips' foot 2 px over the desk's, was 4: the view to 502, was
+    // 500, and 74 px of scroll; with the blocks up from 52 to 28, every line 24 px higher and 24
+    // px less to scroll, 72.)
     #[test]
     fn blocks_flow_left_to_right_in_lines_as_wide_as_the_area() {
         let at = |x, y, size: Size| Rectangle::new(Point::new(x, y), size);
@@ -931,15 +883,15 @@ mod tests {
         let design = desk(DESIGN, InsertId(16));
         assert_eq!(
             blocks_view(design),
-            at(674.0, 52.0, Size::new(312.0, 450.0))
+            at(674.0, 28.0, Size::new(312.0, 474.0))
         );
         assert_eq!(
             chain_rects(&CHAIN, design),
             [
-                at(674.0, 52.0, eq),
-                at(674.0, 200.0, delay),
-                at(674.0, 290.0, filter),
-                at(674.0, 380.0, tile)
+                at(674.0, 28.0, eq),
+                at(674.0, 176.0, delay),
+                at(674.0, 266.0, filter),
+                at(674.0, 356.0, tile)
             ]
         );
         assert_eq!(max_effects_scroll(&CHAIN, design), 0.0);
@@ -950,45 +902,52 @@ mod tests {
         assert_eq!(
             chain_rects(&CHAIN, wide),
             [
-                at(1074.0, 52.0, eq),
-                at(1392.0, 52.0, delay),
-                at(1650.0, 52.0, filter),
-                at(1074.0, 200.0, tile)
+                at(1074.0, 28.0, eq),
+                at(1392.0, 28.0, delay),
+                at(1650.0, 28.0, filter),
+                at(1074.0, 176.0, tile)
             ]
         );
         assert_eq!(chain_rects(&[2; 10], wide).len(), 10, "no tile when full");
         let taller = desk(desk_height(400.0), InsertId(16));
-        assert_eq!(max_effects_scroll(&CHAIN, taller), 72.0);
+        assert_eq!(max_effects_scroll(&CHAIN, taller), 48.0);
         let scrolled = Desk {
             effects_scroll: 500.0,
             ..taller
         };
         assert_eq!(
             effects_scroll(&CHAIN, scrolled),
-            72.0,
+            48.0,
             "no further than the end"
         );
         assert_eq!(chain_rects(&CHAIN, scrolled)[3].y, 308.0);
     }
 
-    // By hand, an effect just added ([`SHOW_ADDED`]) on the least desk (219: the view 52..217,
-    // 165 px) with sixteen inserts: at 1000 px the view is x 674..986, one block a line; at 1620
-    // x 1074..1606 and at 1920 x 1074..1906. A line's top is the scroll that puts it at 52.
-    // - 1620, delay, reverb, EQ (4, 4, 10 knobs): the first line 52..136, the EQ (312 x 142) and
-    //   the tile at 142; the EQ's head (142..164) and the tile's top 75 px (to 217) show from the
-    //   top: 0 (the lines' end, 284 - 217 = 67, cut the first line to its last 17 px).
-    // - 1000, the delay: the tile at 142..226 shows 75 px from the top: 0.
-    // - 1000, delay and reverb: the tile at 232 shows nothing from the top; from the reverb's
-    //   line (90) the reverb is at 52 and the tile's top 75 px show: 90 (the end was 316 - 217 =
-    //   99, the delay's head cut).
-    // - 1000, three EQs (148 apart): the third's head shows only from its own line (296), where
-    //   the tile (496 - 296 = 200) shows 17 px, under a head's 22: 296 all the same, the tile not
-    //   drawn nor pressed (the end, 580 - 217 = 363, showed it and the EQ's head cut).
-    // - 1920, two EQs then the delay beside the tile at 200: from the top the delay's head
-    //   (200..222) passes 217 and its line's top (148) passes the end, 284 - 217 = 67: 67.
-    // - 1000, ten blocks of two knobs (192 x 84, no tile): the last at 862 shows its head from
-    //   720 (its line's top; 630's leaves it at 232).
-    // - The 394 px desk (52..392), three delays: the tile at 322 shows its top 70 px: 0.
+    // By hand, an effect just added ([`SHOW_ADDED`]) on the least desk (229 since the route
+    // button is 24 px tall: the view 28..227, 199 px) with sixteen inserts: at 1000 px the view
+    // is x 674..986, one block a line; at 1620 x 1074..1606 and at 1920 x 1074..1906. A line's
+    // top is the scroll that puts it at 28; a line's top past the lines' end is no stop.
+    // - 1620, delay, reverb, EQ (4, 4, 10 knobs): the first line 28..112, the EQ (312 x 142) and
+    //   the tile at 118; the EQ's head (118..140) and the whole tile (to 202) show from the top:
+    //   0 (the lines' end, 260 - 227 = 33, would cut the first line to its last 51 px).
+    // - 1000, the delay: the tile at 118..202 shows whole from the top: 0.
+    // - 1000, delay and reverb: from the top the reverb (118..202) shows whole and the tile at
+    //   208 only 19 px, under a head's 22; the reverb's line (90) is past the end, 292 - 227 =
+    //   65, so no line shows both and the first that shows the head stays: 0.
+    // - 1000, three EQs (148 apart, at 28, 176 and 324): the third's head shows from the
+    //   second's line (148, at 176..198), but the tile then lies at 472 - 148 = 324, out of
+    //   view; from its own line (296) the tile (472 - 296 = 176) shows 51 px, over a head's 22:
+    //   296, the tile drawn and pressed (the end, 556 - 227 = 329, would cut the EQ's head).
+    // - 1920, two EQs then the delay beside the tile at 176: from the top the delay's head
+    //   (176..198) and the tile's top 51 px show: 0.
+    // - 1000, ten blocks of two knobs (192 x 84, no tile, at 28 + 90k): the last at 838 shows
+    //   its head from its line's top, 810, which is past the end (922 - 227 = 695), and from no
+    //   line's top before it (630's leaves it at 208, its head to 230): the end, 695, where it
+    //   shows at 143.
+    // - The 394 px desk (28..392), three delays: the tile at 298 shows whole, to 382: 0.
+    // (Pins moved with the blocks up from 52 to 28: the view 175 px tall, the lines' ends 57,
+    // 89, 353 and 719, the tile's 27 px; on the 219 px desk before the route button grew the
+    // reverb's line showed both and the two EQs' case stopped at the end, 67.)
     #[test]
     fn an_added_effect_shows_by_whole_lines_from_the_first_block() {
         let least = Desk {
@@ -1000,19 +959,19 @@ mod tests {
             ..least
         };
         assert_eq!(effects_scroll(&[4, 4, 10], wide(1620.0)), 0.0);
-        assert_eq!(chain_rects(&[4, 4, 10], wide(1620.0))[0].y, 52.0);
+        assert_eq!(chain_rects(&[4, 4, 10], wide(1620.0))[0].y, 28.0);
         assert_eq!(effects_scroll(&[4], least), 0.0);
-        assert_eq!(effects_scroll(&[4, 4], least), 90.0);
+        assert_eq!(effects_scroll(&[4, 4], least), 0.0);
         assert_eq!(effects_scroll(&[10, 10, 10], least), 296.0);
-        assert_eq!(effects_scroll(&[10, 10, 4], wide(1920.0)), 67.0);
-        assert_eq!(effects_scroll(&[2; 10], least), 720.0);
+        assert_eq!(effects_scroll(&[10, 10, 4], wide(1920.0)), 0.0);
+        assert_eq!(effects_scroll(&[2; 10], least), 695.0);
         assert_eq!(effects_scroll(&[], least), 0.0);
         let taller = Desk {
             effects_scroll: SHOW_ADDED,
             ..desk(desk_height(400.0), InsertId(16))
         };
         assert_eq!(effects_scroll(&[4, 4, 4], taller), 0.0);
-        // The wheel takes it from there: one notch down from 90 is 138.
+        // The wheel takes it from there: a scroll of 138 (a notch past 90) holds at the end, 65.
         assert_eq!(
             effects_scroll(
                 &[4, 4],
@@ -1021,29 +980,29 @@ mod tests {
                     ..least
                 }
             ),
-            99.0,
+            65.0,
             "no further than the end"
         );
     }
 
-    // By hand, the add tile cut by the view's foot (52..217 on the least desk): under the delay
-    // at 1000 px it is at (674, 142), 192 x 84, and shows its top 75 px, drawn and pressed
-    // there; under three EQs scrolled to 296 it is at 200 and shows 17 px, under a block head's
-    // 22: neither drawn nor pressed. Whole, it shows whole.
+    // By hand, the add tile (192 x 84) cut by the view's foot (28..227 on the least desk): under
+    // the delay at 1000 px it is at (674, 118) and shows whole (to 202); at 152 it shows its top
+    // 75 px, drawn and pressed there; under three EQs scrolled to 296 it is at 176 and shows
+    // 51 px; at 200, 27 px, over a block head's 22, drawn and pressed; at 210, 17 px, under a
+    // head's 22: neither drawn nor pressed. Whole at the view's top, it shows whole. (Pins
+    // moved with the blocks up from 52 to 28: under the delay at 142, under the EQs at 200.)
     #[test]
     fn the_add_tile_shows_down_to_the_views_foot_while_a_head_of_it_shows() {
         let least = desk(LEAST_DESK, InsertId(16));
         let view = blocks_view(least);
         let tile = |y| Rectangle::new(Point::new(674.0, y), Size::new(192.0, 84.0));
-        assert_eq!(
-            shown_tile(tile(142.0), view),
-            Some(Rectangle::new(
-                Point::new(674.0, 142.0),
-                Size::new(192.0, 75.0)
-            ))
-        );
-        assert_eq!(shown_tile(tile(200.0), view), None);
-        assert_eq!(shown_tile(tile(52.0), view), Some(tile(52.0)));
+        assert_eq!(shown_tile(tile(118.0), view), Some(tile(118.0)));
+        let cut = |y, height| Rectangle::new(Point::new(674.0, y), Size::new(192.0, height));
+        assert_eq!(shown_tile(tile(152.0), view), Some(cut(152.0, 75.0)));
+        assert_eq!(shown_tile(tile(176.0), view), Some(cut(176.0, 51.0)));
+        assert_eq!(shown_tile(tile(200.0), view), Some(cut(200.0, 27.0)));
+        assert_eq!(shown_tile(tile(210.0), view), None);
+        assert_eq!(shown_tile(tile(28.0), view), Some(tile(28.0)));
         assert_eq!(
             hit_test(Point::new(770.0, 200.0), least, &[4]),
             Some(Hit::AddEffect)
@@ -1052,68 +1011,77 @@ mod tests {
             effects_scroll: SHOW_ADDED,
             ..least
         };
-        assert_eq!(chain_rects(&[10, 10, 10], scrolled)[3].y, 200.0);
+        assert_eq!(chain_rects(&[10, 10, 10], scrolled)[3].y, 176.0);
         assert_eq!(
             hit_test(Point::new(770.0, 210.0), scrolled, &[10, 10, 10]),
-            None
+            Some(Hit::AddEffect)
         );
     }
 
-    // By hand, the nine-knob block at (674, 52), 312 wide: its light at (674 + 12, 52 + 11), its
-    // remove cross 16 px square 4 px in from its right edge (966..982) and 3 px down, its arrows
-    // 14 px wide left of it, 2 px apart from it (› 950..964, ‹ 936..950), its name between the
-    // light and the arrows (698..934); its first knob's place 6 px in under the head (680, 74), the knob
-    // 28 px centered across it from 14 px down (696, 88), its label's middle 7 px down and its
-    // value's 50; its seventh knob is the second of the second row (740, 132); a choice's button
-    // is 4 px in from its place's sides, 18 px tall, on the knob's middle (93..111).
+    // By hand, the nine-knob block at (674, 28), 312 wide (the first block, at the view's top):
+    // its light at (674 + 12, 28 + 11); its remove cross a 24 px target across the head's 22 px
+    // at its right end (986 − 24 = 962..986), its arrows' two 24 px targets left of it
+    // (› 938..962, ‹ 914..938), each glyph drawn in its target's middle (the cross at 974, as
+    // before, the arrows at 950 and 926); its name between the light and the arrows (698..912,
+    // 2 px short of ‹); its first knob's place 6 px in under the head (680, 50), the knob 28 px
+    // centered across it from 14 px down (696, 64), its label's middle 7 px down and its value's
+    // 50; its seventh knob is the second of the second row (740, 108); a choice's button is 4 px
+    // in from its place's sides, 18 px tall, on the knob's middle (69..87). (Pins moved: the
+    // block stood at 52, every y 24 lower; the cross was 16 px square at 966..982, 3 px down, the
+    // arrows 14 px wide 2 px left of it (› 950..964, ‹ 936..950), the name to 934.)
     #[test]
     fn a_blocks_parts_sit_where_its_head_and_rows_put_them() {
-        let block = Rectangle::new(Point::new(674.0, 52.0), block_size(9));
-        assert_eq!(effect_led_center(block), Point::new(686.0, 63.0));
+        let block = Rectangle::new(Point::new(674.0, 28.0), block_size(9));
+        assert_eq!(effect_led_center(block), Point::new(686.0, 39.0));
         assert_eq!(
             remove_rect(block),
-            Rectangle::new(Point::new(966.0, 55.0), Size::new(16.0, 16.0))
+            Rectangle::new(Point::new(962.0, 28.0), Size::new(24.0, 22.0))
         );
+        assert_eq!(remove_rect(block).center(), Point::new(974.0, 39.0));
         assert_eq!(
             later_rect(block),
-            Rectangle::new(Point::new(950.0, 55.0), Size::new(14.0, 16.0))
+            Rectangle::new(Point::new(938.0, 28.0), Size::new(24.0, 22.0))
         );
-        assert_eq!(earlier_rect(block).x, 936.0);
+        assert_eq!(
+            earlier_rect(block),
+            Rectangle::new(Point::new(914.0, 28.0), Size::new(24.0, 22.0))
+        );
         assert_eq!(
             effect_name_rect(block),
-            Rectangle::new(Point::new(698.0, 52.0), Size::new(236.0, 22.0))
+            Rectangle::new(Point::new(698.0, 28.0), Size::new(214.0, 22.0))
         );
         let first = knob_cell(block, 9, 0);
         assert_eq!(
             first,
-            Rectangle::new(Point::new(680.0, 74.0), Size::new(60.0, 58.0))
+            Rectangle::new(Point::new(680.0, 50.0), Size::new(60.0, 58.0))
         );
-        assert_eq!(knob_rect(first).position(), Point::new(696.0, 88.0));
-        assert_eq!(knob_label_center(first), Point::new(710.0, 81.0));
-        assert_eq!(knob_value_center(first), Point::new(710.0, 124.0));
-        assert_eq!(knob_cell(block, 9, 6).position(), Point::new(740.0, 132.0));
+        assert_eq!(knob_rect(first).position(), Point::new(696.0, 64.0));
+        assert_eq!(knob_label_center(first), Point::new(710.0, 57.0));
+        assert_eq!(knob_value_center(first), Point::new(710.0, 100.0));
+        assert_eq!(knob_cell(block, 9, 6).position(), Point::new(740.0, 108.0));
         assert_eq!(
             choice_rect(first),
-            Rectangle::new(Point::new(684.0, 93.0), Size::new(52.0, 18.0))
+            Rectangle::new(Point::new(684.0, 69.0), Size::new(52.0, 18.0))
         );
-        assert_eq!(menu_anchor(block), Point::new(680.0, 74.0));
+        assert_eq!(menu_anchor(block), Point::new(680.0, 50.0));
     }
 
     // By hand, the compact strip: the least desk is 96 (the fader's top) + 50 (its
-    // track) + 73 (under it: the route button 9 px down and 14 tall, 4 px, the send knob 24, 2 px,
-    // the label 16, the body's 2 px and the desk's 2) = 219 px, the default panel's (225 = 6 +
-    // 219), and no panel is laid out shorter. On it the fader's foot is at 146, the route button
-    // at 155..169, the send knob at 173..197, the label at 199..215 and the body's foot at 217.
-    // A 300 px desk gives the track 300 − 73 − 96 = 131 px, the controls moving down with its
-    // foot (227: the route button at 236). A 400 px panel's 394 px desk is past the 369 px where
+    // track) + 83 (under it: the route button 9 px down and 24 tall, 4 px, the send knob 24, 2 px,
+    // the label 16, the body's 2 px and the desk's 2) = 229 px, the default panel's (235 = 6 +
+    // 229), and no panel is laid out shorter. On it the fader's foot is at 146, the route button
+    // at 155..179, the send knob at 183..207, the label at 209..225 and the body's foot at 227.
+    // A 300 px desk gives the track 300 − 83 − 96 = 121 px, the controls moving down with its
+    // foot (217: the route button at 226). A 400 px panel's 394 px desk is past the 379 px where
     // the track reaches its most, 200 px (96..296): the route button stays at 305 and the send
-    // knob at 323..347, and the label (374..390) and the body's foot (392) keep 2 px over the
+    // knob at 333..357, and the label (374..390) and the body's foot (392) keep 2 px over the
     // desk's. (Before: a 304 px least desk with a 100 px track from 114, the label 4 px over a
-    // body 4 px over the desk's.)
+    // body 4 px over the desk's; then 219 px with a 14 px route button, until the 24 px
+    // targets.)
     #[test]
     fn a_shorter_desk_shortens_the_fader_and_keeps_the_controls() {
-        assert_eq!(LEAST_DESK, 219.0);
-        assert_eq!((LEAST_HEIGHT, DEFAULT_HEIGHT), (225.0, 225.0));
+        assert_eq!(LEAST_DESK, 229.0);
+        assert_eq!((LEAST_HEIGHT, DEFAULT_HEIGHT), (235.0, 235.0));
         assert_eq!(desk_height(DEFAULT_HEIGHT), LEAST_DESK);
         assert_eq!(desk_height(180.0), LEAST_DESK);
         assert_eq!(
@@ -1123,24 +1091,24 @@ mod tests {
         assert_eq!(cap_center_y(1.0, LEAST_DESK), FADER_TOP);
         assert_eq!(cap_center_y(0.0, LEAST_DESK), 146.0);
         let route = route_rect(4.0, LEAST_DESK);
-        assert_eq!((route.y, route.y + route.height), (155.0, 169.0));
+        assert_eq!((route.y, route.y + route.height), (155.0, 179.0));
         let send = send_rect(4.0, LEAST_DESK);
-        assert_eq!((send.y, send.y + send.height), (173.0, 197.0));
+        assert_eq!((send.y, send.y + send.height), (183.0, 207.0));
         assert_eq!(
             (label_top(LEAST_DESK), body_bottom(LEAST_DESK)),
-            (199.0, 217.0)
+            (209.0, 227.0)
         );
-        assert_eq!((fader_bottom(300.0), fader_span(300.0)), (227.0, 131.0));
-        assert_eq!(route_rect(4.0, 300.0).y, 236.0);
+        assert_eq!((fader_bottom(300.0), fader_span(300.0)), (217.0, 121.0));
+        assert_eq!(route_rect(4.0, 300.0).y, 226.0);
         let taller = desk_height(400.0);
         assert_eq!(taller, 394.0);
         assert_eq!((fader_bottom(taller), fader_span(taller)), (296.0, 200.0));
         assert_eq!(route_rect(4.0, taller).y, 305.0);
         let send = send_rect(4.0, taller);
-        assert_eq!((send.y, send.y + send.height), (323.0, 347.0));
+        assert_eq!((send.y, send.y + send.height), (333.0, 357.0));
         assert_eq!((label_top(taller), body_bottom(taller)), (374.0, 392.0));
-        assert_eq!(fader_span(369.0), 200.0, "its most from 369 px");
-        assert_eq!(fader_span(368.0), 199.0);
+        assert_eq!(fader_span(379.0), 200.0, "its most from 379 px");
+        assert_eq!(fader_span(378.0), 199.0);
         assert_eq!(fader_span(700.0), 200.0);
     }
 
@@ -1150,8 +1118,8 @@ mod tests {
     // 44.25..57.75), over the pan knob (58..86), over the clip light (87..93, beside the knob's
     // round foot), over the meters' top (96); the fader's press area (the cap's travel, 5 px past
     // either end of the track: 91..151 on the least desk) under the knob's foot and over the
-    // route button (155..169), over the send knob (173..197), over the label (199..215), over
-    // the body's foot (217), over the desk's (219). The meters are as tall as the track: 50 px.
+    // route button (155..179), over the send knob (183..207), over the label (209..225), over
+    // the body's foot (227), over the desk's (229). The meters are as tall as the track: 50 px.
     #[test]
     fn the_compact_strips_parts_lie_whole_inside_it_one_under_the_other() {
         let inside = |part: Rectangle, body: Rectangle| {
@@ -1241,10 +1209,50 @@ mod tests {
     fn presses_land_on_the_control_drawn_there() {
         let last = InsertId(16);
         let at = |x, y| hit_test(window(x, y), desk(DESIGN, last), &CHAIN);
-        assert_eq!(at(570.0, 68.0), Some(Hit::RouteDown));
-        assert_eq!(at(780.0, 68.0), Some(Hit::RouteUp));
-        assert_eq!(at(670.0, 68.0), Some(Hit::RouteLabel));
-        assert_eq!(at(100.0, 68.0), None);
+        // The pop-out button on the 1000 px desk: x 1000 − 12 − 24 = 964..988, the header's
+        // 24 px (window y 56..80 under the design's toolbar).
+        assert_eq!(
+            pop_out_rect(1000.0),
+            Rectangle::new(Point::new(964.0, 0.0), Size::new(24.0, 24.0))
+        );
+        assert_eq!(at(970.0, 68.0), Some(Hit::PopOut));
+        assert_eq!(at(963.0, 68.0), None, "left of it");
+        assert_eq!(at(989.0, 68.0), None, "in the padding right of it");
+        // The routing control, 230 px, centred in the header: (width − 230) / 2, by hand x 385
+        // on the 1000 px desk (its "−" 385..409, its label to 591, its "+" to 615), 845 on a
+        // 1920 px one, 235 on the 700 px one of a 1000 px window with the Library open (to 465,
+        // the button at 664). Never nearer the title than its gap: "Mixer" from 12, 37.112 px at
+        // 14 px (Inter's advances, gen_u1_expected.py's rule: 14 × 5429 / 2048), then 48, so
+        // 97.112 on a desk under 97.112 · 2 + 230 = 424.224 px (375.2: its centre 72.6, held at
+        // 97.112). On a desk under 97.112 + 230 + 12 + 24 + 12 = 375.112 px it ends 12 px left of
+        // the button: at 300 px, 264 − 12 − 230 = 22. (Pins moved: it stood at 97.112..327.112,
+        // the title gap past the title, on every desk with room; 61.112 with the 12 px gap;
+        // 560..790 before a title gap.)
+        let near = |found: f32, wanted: f32| (found - wanted).abs() < 1e-3;
+        for (width, left) in [
+            (1000.0, 385.0),
+            (1920.0, 845.0),
+            (700.0, 235.0),
+            (424.224, 97.112),
+            (375.2, 97.112),
+            (300.0, 22.0),
+        ] {
+            assert!(
+                near(route_left(width), left),
+                "{width}: {}",
+                route_left(width)
+            );
+        }
+        assert_eq!(pop_out_rect(700.0).x, 664.0);
+        let up = route_up_rect(700.0);
+        assert!(near(up.x + up.width, 465.0));
+        assert_eq!(at(390.0, 68.0), Some(Hit::RouteDown));
+        assert_eq!(at(600.0, 68.0), Some(Hit::RouteUp));
+        assert_eq!(at(500.0, 68.0), Some(Hit::RouteLabel));
+        assert_eq!(at(40.0, 68.0), None, "the title");
+        assert_eq!(at(100.0, 68.0), None, "where the control stood");
+        assert_eq!(at(380.0, 68.0), None, "left of it");
+        assert_eq!(at(620.0, 68.0), None, "right of it");
         // Insert 3 at x 198, the design's window y (mixer y + 56) of the compact strip on the
         // 504 px desk: light at (210, 107), pan 214..242 × 114..142, fader 199..227 over 147..357
         // (the cap's travel), route button 214..242 × 361..375, send knob 216..240 × 379..403,
@@ -1262,60 +1270,77 @@ mod tests {
         // The gap between strips.
         assert_eq!(at(259.0, 300.0), None);
         // Insert 10 (x 632..692) runs under the effects area from x 668: left of it the strip,
-        // its name row past it the area's title, which takes no presses.
+        // its name row (window y 96, mixer 40) past it the first block's head (28..50), 6 px left
+        // of its light's middle (686, 39), inside the light's 8. (Pin moved: with the blocks at
+        // 52 the name row past x 668 was the empty band over them, which took no presses.)
         assert_eq!(at(666.0, 300.0), Some(Hit::Strip(InsertId(10))));
         assert_eq!(at(666.0, 96.0), Some(Hit::Name(InsertId(10))));
-        assert_eq!(at(680.0, 96.0), None);
+        assert_eq!(at(680.0, 96.0), Some(Hit::EffectLed(0)));
         // The blocks (mixer y, as `blocks_flow_left_to_right_in_lines_as_wide_as_the_area`
-        // places them): the nine-knob block's light, remove cross, name, first knob and seventh; its second
-        // row's empty fifth place; the delay's first knob; the gap right of the delay; the tile.
+        // places them: the nine-knob block at (674, 28), the delay at (674, 176), the tile at
+        // (674, 356)): the nine-knob block's light, remove cross (its 24 px target to the block's
+        // right end, 962..986: 963 and 985 are the cross, as 974 is), name, first knob and
+        // seventh; its second row's empty fifth place; the delay's first knob; the gap right of
+        // the delay; the tile. (Pins moved 24 px up with the blocks, from 52.)
         let at = |x, y| hit_test(Point::new(x, y), desk(DESIGN, last), &CHAIN);
-        assert_eq!(at(686.0, 63.0), Some(Hit::EffectLed(0)));
-        assert_eq!(at(974.0, 63.0), Some(Hit::RemoveEffect(0)));
-        assert_eq!(at(800.0, 63.0), Some(Hit::EffectName(0)));
-        // The nine-knob block's arrows: › moves it later; the first has no ‹. The delay's (906 its cross,
-        // › 890..904, ‹ 876..890) both.
-        assert_eq!(at(955.0, 63.0), Some(Hit::MoveLater(0)));
-        assert_eq!(at(940.0, 63.0), Some(Hit::Block(0)));
-        assert_eq!(at(880.0, 211.0), Some(Hit::MoveEarlier(1)));
-        assert_eq!(at(895.0, 211.0), Some(Hit::MoveLater(1)));
-        assert_eq!(at(710.0, 100.0), Some(Hit::Knob { block: 0, knob: 0 }));
-        assert_eq!(at(770.0, 160.0), Some(Hit::Knob { block: 0, knob: 6 }));
-        assert_eq!(at(950.0, 160.0), Some(Hit::Block(0)));
-        assert_eq!(at(710.0, 250.0), Some(Hit::Knob { block: 1, knob: 0 }));
-        assert_eq!(at(930.0, 250.0), None);
-        assert_eq!(at(700.0, 420.0), Some(Hit::AddEffect));
-        assert_eq!(at(990.0, 100.0), None, "the marks' margin");
+        assert_eq!(at(686.0, 39.0), Some(Hit::EffectLed(0)));
+        for x in [963.0, 974.0, 985.0] {
+            assert_eq!(at(x, 39.0), Some(Hit::RemoveEffect(0)), "{x}");
+        }
+        assert_eq!(at(800.0, 39.0), Some(Hit::EffectName(0)));
+        // The nine-knob block's arrows: › (938..962) moves it later; the first has no ‹, its
+        // place (914..938) the block's. The delay's (926 its right end: its cross 902..926,
+        // › 878..902, ‹ 854..878) both, each pressed at its middle and at its ends' pixels.
+        assert_eq!(at(950.0, 39.0), Some(Hit::MoveLater(0)));
+        assert_eq!(at(926.0, 39.0), Some(Hit::Block(0)));
+        for x in [855.0, 866.0, 877.0] {
+            assert_eq!(at(x, 187.0), Some(Hit::MoveEarlier(1)), "{x}");
+        }
+        for x in [879.0, 890.0, 901.0] {
+            assert_eq!(at(x, 187.0), Some(Hit::MoveLater(1)), "{x}");
+        }
+        assert_eq!(at(914.0, 187.0), Some(Hit::RemoveEffect(1)));
+        assert_eq!(at(710.0, 76.0), Some(Hit::Knob { block: 0, knob: 0 }));
+        assert_eq!(at(770.0, 136.0), Some(Hit::Knob { block: 0, knob: 6 }));
+        assert_eq!(at(950.0, 136.0), Some(Hit::Block(0)));
+        assert_eq!(at(710.0, 226.0), Some(Hit::Knob { block: 1, knob: 0 }));
+        assert_eq!(at(930.0, 226.0), None);
+        assert_eq!(at(700.0, 396.0), Some(Hit::AddEffect));
+        assert_eq!(at(990.0, 76.0), None, "the marks' margin");
     }
 
-    // By hand, the chain at 1000 × 504: the nine-knob block (674, 52; its middle at x 830, its line to 194),
-    // the delay (674, 200; middle 800, line to 284), the filter (674, 290; middle 770, line to
-    // 374). That block dragged to the delay's line left of its middle stays first; right of it, it
-    // takes the delay's place (the delay first now, at 52, and it on the line from 142,
+    // By hand, the chain at 1000 × 504: the nine-knob block (674, 28; its middle at x 830, its line to 170),
+    // the delay (674, 176; middle 800, line to 260), the filter (674, 266; middle 770, line to
+    // 350). That block dragged to the delay's line left of its middle stays first; right of it, it
+    // takes the delay's place (the delay first now, at 28, and it on the line from 118,
     // above the filter, whose line the pointer is not on). Dragged onto the filter's line left of
     // its middle it passes the delay (whose line the pointer is below) and stops; right of it it
-    // passes both. The filter dragged up to the first line left of the first block's middle comes first.
+    // passes both. The filter dragged up to the first line left of the first block's middle comes
+    // first. (Pins moved 24 px up with the blocks, from 52.)
     #[test]
     fn a_dragged_block_takes_a_neighbours_place_past_its_middle() {
         let design = desk(DESIGN, InsertId(16));
         let to = |place, x, y| reorder_place(&CHAIN, design, place, Point::new(x, y));
-        assert_eq!(to(0, 700.0, 250.0), 0);
-        assert_eq!(to(0, 810.0, 250.0), 1);
-        assert_eq!(to(0, 700.0, 330.0), 1);
-        assert_eq!(to(0, 780.0, 330.0), 2);
-        assert_eq!(to(2, 700.0, 60.0), 0);
-        assert_eq!(to(1, 750.0, 240.0), 1, "on its own place");
+        assert_eq!(to(0, 700.0, 226.0), 0);
+        assert_eq!(to(0, 810.0, 226.0), 1);
+        assert_eq!(to(0, 700.0, 306.0), 1);
+        assert_eq!(to(0, 780.0, 306.0), 2);
+        assert_eq!(to(2, 700.0, 36.0), 0);
+        assert_eq!(to(1, 750.0, 216.0), 1, "on its own place");
     }
 
     // On a 394 px desk (a 400 px panel) the fader's track is at its most, 96..296: the route
     // button at mixer y 305..319, the send knob at 323..347, the fader's press area to 301;
-    // unscrolled, the filter's first knob's place is at 312..370. The effects' lines scrolled
-    // to their end (72 px: the view's foot at 392): the add tile at 308..392, the first block's
-    // head (−20..2) out of view, its first row (2..60) not whole in view (a press there is the
-    // block's) and its second row at 60..118; a scroll past the end shows as the end. (Pins
-    // moved with the compact strip: the route button was at 318..332, the send knob
-    // at 338..362, the scroll's end 74.) On the least desk, 219 px: insert 3's fader foot at
-    // 146, its press area to 151, the route button at 155..169 and the send knob at 173..197.
+    // unscrolled, the filter's first knob's place is at 266 + 22 = 288..346. The effects' lines
+    // scrolled to their end (440 − 392 = 48 px: the view's foot at 392): the add tile at
+    // 356 − 48 = 308..392, the first block's head (28 − 48 = −20..2) out of view, its first row
+    // (2..60) not whole in the view from 28 (a press there is the block's) and its second row at
+    // 60..118; a scroll past the end shows as the end; above the view (y 26, 2 px under the
+    // header) nothing. (Pins moved: with the compact strip the route button was at 318..332, the
+    // send knob at 338..362, the scroll's end 74; with the blocks up from 52 to 28 the end 72,
+    // the filter's knob at 312..370, and "above the view" was y 45.) On the least desk, 219 px:
+    // insert 3's fader foot at 146, its press area to 151, the route button at 155..169 and the
+    // send knob at 173..197.
     #[test]
     fn presses_on_a_shorter_desk_find_its_controls_and_scrolled_blocks() {
         let last = InsertId(16);
@@ -1331,11 +1356,11 @@ mod tests {
         assert_eq!(at(228.0, 335.0, 0.0), Some(Hit::Send(InsertId(3))));
         assert_eq!(at(213.0, 290.0, 0.0), Some(Hit::Fader(InsertId(3))));
         assert_eq!(at(700.0, 340.0, 0.0), Some(Hit::Knob { block: 2, knob: 0 }));
-        assert_eq!(at(700.0, 350.0, 72.0), Some(Hit::AddEffect));
+        assert_eq!(at(700.0, 350.0, 48.0), Some(Hit::AddEffect));
         assert_eq!(at(700.0, 350.0, 500.0), Some(Hit::AddEffect));
-        assert_eq!(at(710.0, 55.0, 72.0), Some(Hit::Block(0)));
-        assert_eq!(at(710.0, 80.0, 72.0), Some(Hit::Knob { block: 0, knob: 5 }));
-        assert_eq!(at(686.0, 45.0, 72.0), None, "above the view");
+        assert_eq!(at(710.0, 55.0, 48.0), Some(Hit::Block(0)));
+        assert_eq!(at(710.0, 80.0, 48.0), Some(Hit::Knob { block: 0, knob: 5 }));
+        assert_eq!(at(686.0, 26.0, 48.0), None, "above the view");
         let least = |x, y| hit_test(Point::new(x, y), desk(LEAST_DESK, last), &CHAIN);
         assert_eq!(least(213.0, 150.0), Some(Hit::Fader(InsertId(3))));
         assert_eq!(least(228.0, 162.0), Some(Hit::Route(InsertId(3))));

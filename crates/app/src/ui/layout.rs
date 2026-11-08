@@ -11,7 +11,12 @@
 //! x = 236 + 30·i + 6·⌊i/4⌋, y = 110 + 38·r. Row 0: x = 236, 266, 296, 326, 362, 392, 422, 452,
 //! 488, 518, 548, 578, 614, 644, 674, 704 at y = 110.
 
+use std::sync::OnceLock;
+
 use iced::{Point, Rectangle, Size};
+
+use crate::ui::add_words;
+use crate::ui::panels::Panel;
 
 /// Window size when `--window-size` is not given.
 pub const DEFAULT_WINDOW_SIZE: Size = Size::new(1000.0, 560.0);
@@ -27,27 +32,52 @@ pub const HINT_BAR_HEIGHT: f32 = 22.0;
 /// Space left and right of the toolbar's contents; the menus under it line up with it.
 pub const TOOLBAR_SIDE_PADDING: f32 = 8.0;
 
-/// The rack's header strip: its title, the selected pattern's bar count between "−" and "+",
-/// "+ Sampler…", and the pattern's swing knob with its readout. It stays put while the rows
-/// under it scroll.
+/// The rack's header strip: its title, the pattern's swing knob with its readout, and the
+/// selected pattern's bar count between "−" and "+". It stays put while the rows under it
+/// scroll; "+ Instrument…" stands under the rows ([`add_instrument_rect`]).
 pub const RACK_HEADER_HEIGHT: f32 = 24.0;
 
-/// Where the header's "Bars" label starts, and its "−", count and "+" (left edge, width).
-pub const BARS_LABEL_X: f32 = 108.0;
-const BARS_DOWN: (f32, f32) = (140.0, 20.0);
-const BARS_COUNT: (f32, f32) = (160.0, 36.0);
-const BARS_UP: (f32, f32) = (196.0, 20.0);
-/// The header's "+ Sampler…" button, from the steps' left edge.
-const ADD_SAMPLER_WIDTH: f32 = 100.0;
-/// Where the header's "Swing" label starts, and its knob and readout (left edge, width). Why
-/// right of the add button and the readout beside the knob, not under it: there is no room
-/// between "+" and the button, and the strip is 24 px tall.
-pub const SWING_LABEL_X: f32 = 334.0;
-const SWING_KNOB: (f32, f32) = (376.0, 20.0);
-const SWING_COUNT: (f32, f32) = (400.0, 48.0);
+/// Where the header's title starts: the strips' side padding, as the other headers'.
+pub const RACK_TITLE_X: f32 = 12.0;
+
+/// The space between the header's groups: the swing's readout and the "Bars" label (12, what
+/// stood between "+ Instrument…" and the swing while the button was the header's).
+const HEADER_GROUP_GAP: f32 = 12.0;
+
+/// Where the header's "Swing" label starts, its first control: [`TITLE_GAP`] past the title
+/// ([`Panel::after_title`]), 12 + 90.952 ("Channel Rack" at 14 px) + 48 = 150.952. The bars
+/// follow a group's gap after the swing. Why the bars last (they came first, the title gap
+/// before them): the pattern's feel first, its length after it.
+pub fn swing_label_x() -> f32 {
+    Panel::Rack.after_title(RACK_TITLE_X)
+}
+
+/// The swing's knob and readout (left edge from the "Swing" label's start, width). Why the
+/// readout beside the knob, not under it: the strip is 24 px tall.
+const SWING_KNOB: (f32, f32) = (42.0, 20.0);
+const SWING_COUNT: (f32, f32) = (66.0, 48.0);
+
+/// Where the header's "Bars" label starts: a group's gap past the swing's readout.
+pub fn bars_label_x() -> f32 {
+    swing_label_x() + SWING_COUNT.0 + SWING_COUNT.1 + HEADER_GROUP_GAP
+}
+
+/// The header's "−", count and "+" (left edge from the "Bars" label's start, width): "−" 30 px
+/// on, 4.56 px past the label's 25.44 at the labels' size, the count 32 px wide. Three digits
+/// fit the count with room.
+const BARS_DOWN: (f32, f32) = (30.0, 20.0);
+const BARS_COUNT: (f32, f32) = (50.0, 32.0);
+const BARS_UP: (f32, f32) = (82.0, 20.0);
 
 /// Space between the rack's header and the first rack row.
 pub const RACK_PADDING_TOP: f32 = 8.0;
+/// The row under the rack's last row holding "+ Instrument…" ([`add_instrument_rect`]), a
+/// [`ROW_GAP`] after it as one row after another; with no rows, the rack's only row. The
+/// words-alone row's height, as "+ Track"'s under the tracks.
+pub const ADD_ROW_HEIGHT: f32 = add_words::HEIGHT;
+/// The words under the rows that add a channel: one picker over the sets, the starter kit, the
+/// plugin instruments and a sound file of the user's.
+pub const ADD_INSTRUMENT_LABEL: &str = "+ Instrument\u{2026}";
 /// Space after the last step of a row, inside the scrollable rack.
 pub const RACK_PADDING_RIGHT: f32 = 12.0;
 pub const ROW_HEIGHT: f32 = 36.0;
@@ -58,8 +88,9 @@ pub const CONTROL_SIZE: f32 = 28.0;
 
 pub const MUTE_LED_CENTER_X: f32 = 15.0;
 pub const MUTE_LED_RADIUS: f32 = 5.0;
-/// Width of the area around the mute light that takes its clicks; the light itself is small.
-pub const MUTE_LED_HIT_WIDTH: f32 = 20.0;
+/// Width of the area around the mute light that takes its clicks, a 24 px target (was 20); the
+/// light itself is small.
+pub const MUTE_LED_HIT_WIDTH: f32 = 24.0;
 pub const NAME_BUTTON_X: f32 = 28.0;
 pub const NAME_BUTTON_WIDTH: f32 = 110.0;
 /// Left edge of the pan knob.
@@ -88,14 +119,11 @@ const _: () = assert!(
         && CONTROL_SIZE <= ROW_HEIGHT
 );
 
-// The header's controls follow one another without overlapping, and its button starts with
-// the steps.
+// Within each group the header's controls follow one another without overlapping (the labels
+// before their controls are the header test's: their widths are measured).
 const _: () = assert!(
     BARS_DOWN.0 + BARS_DOWN.1 <= BARS_COUNT.0
         && BARS_COUNT.0 + BARS_COUNT.1 <= BARS_UP.0
-        && BARS_UP.0 + BARS_UP.1 < STEPS_X
-        && STEPS_X + ADD_SAMPLER_WIDTH < SWING_LABEL_X
-        && SWING_LABEL_X < SWING_KNOB.0
         && SWING_KNOB.0 + SWING_KNOB.1 <= SWING_COUNT.0
 );
 
@@ -108,35 +136,55 @@ pub fn rack_in_window(point: Point) -> Point {
 
 /// The header's "−", the bar count and "+", header coordinates.
 pub fn bars_down_rect() -> Rectangle {
-    header_rect(BARS_DOWN)
+    bars_rect(BARS_DOWN)
 }
 
 pub fn bars_count_rect() -> Rectangle {
-    header_rect(BARS_COUNT)
+    bars_rect(BARS_COUNT)
 }
 
 pub fn bars_up_rect() -> Rectangle {
-    header_rect(BARS_UP)
+    bars_rect(BARS_UP)
 }
 
-/// The header's "+ Sampler…" button.
-pub fn add_sampler_rect() -> Rectangle {
-    header_rect((STEPS_X, ADD_SAMPLER_WIDTH))
+/// A control of the bars' group from its offset past the "Bars" label's start and its width.
+fn bars_rect((offset, width): (f32, f32)) -> Rectangle {
+    header_rect((bars_label_x() + offset, width))
+}
+
+/// "+ Instrument…" under the last of `rows` rows, where a press takes it, rack coordinates: its
+/// words alone ([`add_words`], as "+ Track"), as wide as [`add_words::width`] gives, the add
+/// row's whole height, from the rows' name boxes' left edge ([`NAME_BUTTON_X`]), so the words
+/// start [`add_words::PAD`] in, where the button's label did. Why under the rows (it was the
+/// header's): a channel added where the channels are, as the playlist's "+ Track" stands under
+/// its tracks; why words alone (it was a button 100 x 20): the two "+" rows alike.
+pub fn add_instrument_rect(rows: usize) -> Rectangle {
+    static WIDTH: OnceLock<f32> = OnceLock::new();
+    let width = *WIDTH.get_or_init(|| add_words::width(ADD_INSTRUMENT_LABEL));
+    Rectangle::new(
+        Point::new(NAME_BUTTON_X, row_top(rows)),
+        Size::new(width, ADD_ROW_HEIGHT),
+    )
+}
+
+/// A control of the swing's group from its offset past the "Swing" label's start and its width.
+fn swing_part((offset, width): (f32, f32)) -> Rectangle {
+    header_rect((swing_label_x() + offset, width))
 }
 
 /// The header's swing knob, a control tall and as wide: square.
 pub fn swing_knob_rect() -> Rectangle {
-    header_rect(SWING_KNOB)
+    swing_part(SWING_KNOB)
 }
 
 /// The swing's readout, right of its knob.
 pub fn swing_count_rect() -> Rectangle {
-    header_rect(SWING_COUNT)
+    swing_part(SWING_COUNT)
 }
 
 /// What a press or the wheel on the swing takes: its knob and its readout.
 pub fn swing_rect() -> Rectangle {
-    header_rect((SWING_KNOB.0, SWING_COUNT.0 + SWING_COUNT.1 - SWING_KNOB.0))
+    swing_part((SWING_KNOB.0, SWING_COUNT.0 + SWING_COUNT.1 - SWING_KNOB.0))
 }
 
 /// A header control from its left edge and width, 2 px clear of the strip's top and bottom.
@@ -152,7 +200,6 @@ fn header_rect((x, width): (f32, f32)) -> Rectangle {
 pub enum HeaderHit {
     BarsDown,
     BarsUp,
-    AddSampler,
     /// The swing's knob or its readout.
     Swing,
 }
@@ -162,7 +209,6 @@ pub fn header_hit_test(point: Point) -> Option<HeaderHit> {
     [
         (bars_down_rect(), HeaderHit::BarsDown),
         (bars_up_rect(), HeaderHit::BarsUp),
-        (add_sampler_rect(), HeaderHit::AddSampler),
         (swing_rect(), HeaderHit::Swing),
     ]
     .into_iter()
@@ -229,28 +275,18 @@ fn control_rect(x: f32, row: usize, width: f32) -> Rectangle {
     Rectangle::new(Point::new(x, row_top(row)), Size::new(width, CONTROL_SIZE))
 }
 
-/// The "+ Plugin instrument…" button, in the row under the last channel, from the name
-/// button's left edge to the volume knob's right edge.
-pub fn add_plugin_rect(rows: usize) -> Rectangle {
-    control_rect(
-        NAME_BUTTON_X,
-        rows,
-        VOLUME_KNOB_X + CONTROL_SIZE - NAME_BUTTON_X,
-    )
-}
-
-/// Size of the rack's canvas: its content ([`rack_size`]) and the add button's row under it.
-pub fn rack_canvas_size(rows: usize, steps: u32) -> Size {
-    Size::new(rack_size(rows, steps).width, row_top(rows + 1))
-}
-
-/// Size of the rack's content for `rows` channels of `steps` steps each.
+/// Size of the rack's canvas for `rows` channels of `steps` steps each: its rows, the padding
+/// above them and the add row under the last row's band ([`ADD_ROW_HEIGHT`], "+ Instrument…").
+/// A sound let go of anywhere on the rack but a channel's header adds a channel (the rack's
+/// well, [`crate::app`]'s rack hover), the add row among it. (A wide "+" row, 36 px, stood
+/// under the rows until the header's "+ Instrument…" made it a second way to one place; the
+/// button later came down into a row of its own.)
 pub fn rack_size(rows: usize, steps: u32) -> Size {
     let width = match steps.checked_sub(1) {
         Some(last) => step_left(last) + CONTROL_SIZE + RACK_PADDING_RIGHT,
         None => STEPS_X,
     };
-    Size::new(width, row_top(rows))
+    Size::new(width, row_top(rows) + ADD_ROW_HEIGHT)
 }
 
 /// The header of `row`'s channel: its light, name and knobs, left of its steps, a control tall.
@@ -263,7 +299,7 @@ pub fn channel_header_rect(row: usize) -> Rectangle {
 const HEADER_GAP: f32 = 4.0;
 
 /// The row of a rack of `rows` rows whose header holds `point` (rack coordinates); none between
-/// rows, over the steps, or under the last row (the "+").
+/// rows, over the steps, or under the last row.
 pub fn channel_header_at(point: Point, rows: usize) -> Option<usize> {
     (0..rows).find(|&row| channel_header_rect(row).contains(point))
 }
@@ -271,67 +307,46 @@ pub fn channel_header_at(point: Point, rows: usize) -> Option<usize> {
 /// The control a click in the rack landed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RackHit {
-    MuteLed {
-        row: usize,
-    },
-    NameButton {
-        row: usize,
-    },
-    PanKnob {
-        row: usize,
-    },
-    VolumeKnob {
-        row: usize,
-    },
-    Step {
-        row: usize,
-        step: u32,
-    },
-    /// The "+ Plugin instrument…" button.
-    AddPlugin,
+    MuteLed { row: usize },
+    NameButton { row: usize },
+    PanKnob { row: usize },
+    VolumeKnob { row: usize },
+    Step { row: usize, step: u32 },
 }
 
 impl RackHit {
-    /// The row hit; none for the add button.
-    pub fn row(self) -> Option<usize> {
+    /// The row hit.
+    pub fn row(self) -> usize {
         match self {
             RackHit::MuteLed { row }
             | RackHit::NameButton { row }
             | RackHit::PanKnob { row }
             | RackHit::VolumeKnob { row }
-            | RackHit::Step { row, .. } => Some(row),
-            RackHit::AddPlugin => None,
+            | RackHit::Step { row, .. } => row,
         }
     }
 }
 
 /// Finds the control under `point` (rack coordinates) in a rack of `rows` rows of `steps` steps.
 pub fn hit_test(point: Point, rows: usize, steps: u32) -> Option<RackHit> {
-    let add = || {
-        add_plugin_rect(rows)
-            .contains(point)
-            .then_some(RackHit::AddPlugin)
-    };
-    (0..rows)
-        .find_map(|row| {
-            let top = row_top(row);
-            if !(top..top + CONTROL_SIZE).contains(&point.y) {
-                return None;
-            }
-            let controls = [
-                (mute_led_rect(row), RackHit::MuteLed { row }),
-                (name_button_rect(row), RackHit::NameButton { row }),
-                (knob_rect(PAN_KNOB_X, row), RackHit::PanKnob { row }),
-                (knob_rect(VOLUME_KNOB_X, row), RackHit::VolumeKnob { row }),
-            ];
-            if let Some((_, hit)) = controls.into_iter().find(|(rect, _)| rect.contains(point)) {
-                return Some(hit);
-            }
-            (0..steps)
-                .find(|&step| step_rect(row, step).contains(point))
-                .map(|step| RackHit::Step { row, step })
-        })
-        .or_else(add)
+    (0..rows).find_map(|row| {
+        let top = row_top(row);
+        if !(top..top + CONTROL_SIZE).contains(&point.y) {
+            return None;
+        }
+        let controls = [
+            (mute_led_rect(row), RackHit::MuteLed { row }),
+            (name_button_rect(row), RackHit::NameButton { row }),
+            (knob_rect(PAN_KNOB_X, row), RackHit::PanKnob { row }),
+            (knob_rect(VOLUME_KNOB_X, row), RackHit::VolumeKnob { row }),
+        ];
+        if let Some((_, hit)) = controls.into_iter().find(|(rect, _)| rect.contains(point)) {
+            return Some(hit);
+        }
+        (0..steps)
+            .find(|&step| step_rect(row, step).contains(point))
+            .map(|step| RackHit::Step { row, step })
+    })
 }
 
 #[cfg(test)]
@@ -378,12 +393,15 @@ mod tests {
         assert_eq!(at(236.0, 60.0), Some(RackHit::Step { row: 1, step: 0 }));
         assert_eq!(at(80.0, 22.0), Some(RackHit::NameButton { row: 0 }));
         assert_eq!(at(80.0, 60.0), Some(RackHit::NameButton { row: 1 }));
-        // The light's click area is 5..25; the knobs are 148..176 and 182..210.
+        // The light's click area is 15 ± 12 = 3..27 (24 px, WCAG 2.2's target size; was 5..25), up to the
+        // name button's 28; the knobs are 148..176 and 182..210.
         assert_eq!(at(15.0, 22.0), Some(RackHit::MuteLed { row: 0 }));
         assert_eq!(at(6.0, 60.0), Some(RackHit::MuteLed { row: 1 }));
+        assert_eq!(at(4.0, 22.0), Some(RackHit::MuteLed { row: 0 }));
+        assert_eq!(at(26.0, 22.0), Some(RackHit::MuteLed { row: 0 }));
         assert_eq!(at(162.0, 22.0), Some(RackHit::PanKnob { row: 0 }));
         assert_eq!(at(196.0, 60.0), Some(RackHit::VolumeKnob { row: 1 }));
-        assert_eq!(at(26.0, 22.0), None);
+        assert_eq!(at(27.5, 22.0), None);
         assert_eq!(at(179.0, 22.0), None);
         // Gaps: between steps 0 and 1 (250..252), after a group (340..348), below a row's
         // controls (36..46), past the last step, and above the first row.
@@ -396,73 +414,148 @@ mod tests {
         assert_eq!(at(236.0, 98.0), None);
     }
 
-    // The add button sits in the row after the last channel, over the name and knob columns.
+    // The rows' hit test finds no row under the last one: a press in the band under two rows
+    // (y 84 + 14, where "+ Instrument…" now stands, which the rack takes itself), in an empty
+    // rack, or over the steps there lands on no row; the canvas ends with the add row, 8 + 38 ·
+    // rows + 24: 32 with none, 70 with one row, 108 with two (8, 46 and 84 without it; 46, 84
+    // and 122 with the old 38 px "+" row).
     #[test]
-    fn the_add_button_is_under_the_last_row() {
-        assert_eq!(
-            hit_test(Point::new(80.0, 22.0 + 2.0 * 38.0), 2, 16),
-            Some(RackHit::AddPlugin)
-        );
-        assert_eq!(
-            hit_test(Point::new(80.0, 22.0), 0, 16),
-            Some(RackHit::AddPlugin)
-        );
-        assert_eq!(
-            hit_test(Point::new(236.0, 98.0), 2, 16),
-            None,
-            "no step there"
-        );
-        assert_eq!(rack_canvas_size(1, 16).height, row_top(2));
+    fn no_row_stands_under_the_last_row() {
+        assert_eq!(hit_test(Point::new(80.0, 22.0 + 2.0 * 38.0), 2, 16), None);
+        assert_eq!(hit_test(Point::new(80.0, 22.0), 0, 16), None);
+        assert_eq!(hit_test(Point::new(236.0, 98.0), 2, 16), None);
+        let heights = [0, 1, 2].map(|rows| rack_size(rows, 16).height);
+        assert_eq!(heights, [32.0, 70.0, 108.0]);
     }
 
-    // The header's controls, written out: "−" 140..160, the count 160..196, "+" 196..216 and
-    // "+ Sampler…" 222..322 (from the steps' left edge), each 2..22 down the 24 px strip.
+    // The header's controls, written out: the title "Channel Rack" from 12, 90.952 px at 14 px
+    // (Inter's advances, as tests/fixtures/gen_u1_expected.py reads them: 14 × 13305 / 2048),
+    // then, the title gap (48) past it, the "Swing" label at 150.952 (the knob and readout in the
+    // swing's test, the readout to 264.952); the "Bars" label a group's gap (12) on, at
+    // 276.952; "−" 30 on, 306.952..326.952, the count 326.952..358.952, "+" 358.952..378.952,
+    // each 2..22 down the 24 px strip. The "Bars" label, 25.441 px at 12 px, ends 4.56 px
+    // before "−"; "Swing", 34.875, ends 7.125 before its knob. The header ends left of step 16's
+    // edge (222 + 16 · 30 + 4 · 6 = 726), so it never sits past the rack's 16 steps. Nothing in
+    // it adds a channel: "+ Instrument…" stands under the rows. (Pins moved: "+ Instrument…"
+    // stood first at 150.952..250.952, the swing's label at 262.952 and the bars' at 388.952,
+    // until the button went under the rows; the bars stood first at 150.952, "−"
+    // 180.952..200.952, the count 200.952..232.952, "+" 232.952..252.952, the add button at
+    // 258..358, until they moved after the swing; before the title gap the label at 108, "−"
+    // 140..160, the count 160..196, "+" 196..216.)
     #[test]
     fn header_clicks_land_on_the_control_drawn_there() {
+        let near = |found: f32, wanted: f32| (found - wanted).abs() < 1e-3;
+        assert!(near(swing_label_x(), 150.952), "{}", swing_label_x());
+        assert!(near(bars_label_x(), 276.952), "{}", bars_label_x());
+        let down = bars_down_rect();
+        let count = bars_count_rect();
+        let up = bars_up_rect();
+        assert!(near(down.x, 306.952) && near(down.x + down.width, 326.952));
+        assert!(near(count.x, 326.952) && near(count.x + count.width, 358.952));
+        assert!(near(up.x, 358.952) && near(up.x + up.width, 378.952));
+        assert!((up.y, up.height) == (2.0, 20.0));
+        assert!(
+            up.x + up.width < step_left(16),
+            "inside the rack's 16 steps"
+        );
+        let width = |words| crate::ui::text_fit::text_width(words, crate::ui::fonts::size::LABEL);
+        let bars_end = bars_label_x() + width("Bars");
+        assert!(bars_end < down.x, "the label before \"−\": {bars_end}");
+        let swing_end = swing_label_x() + width("Swing");
+        assert!(
+            swing_end < swing_knob_rect().x,
+            "the label before the knob: {swing_end}"
+        );
         let at = |x, y| header_hit_test(Point::new(x, y));
-        assert_eq!(at(150.0, 12.0), Some(HeaderHit::BarsDown));
-        assert_eq!(at(206.0, 12.0), Some(HeaderHit::BarsUp));
-        assert_eq!(at(223.0, 3.0), Some(HeaderHit::AddSampler));
-        assert_eq!(at(321.0, 21.0), Some(HeaderHit::AddSampler));
-        assert_eq!(at(178.0, 12.0), None, "the count takes no click");
-        assert_eq!(at(219.0, 12.0), None, "between \"+\" and the button");
-        assert_eq!(at(150.0, 1.0), None, "above the buttons");
+        assert_eq!(at(312.0, 12.0), Some(HeaderHit::BarsDown));
+        assert_eq!(at(368.0, 12.0), Some(HeaderHit::BarsUp));
+        assert_eq!(at(342.0, 12.0), None, "the count takes no click");
+        assert_eq!(at(285.0, 12.0), None, "the \"Bars\" label");
+        assert_eq!(at(270.0, 12.0), None, "between the swing and the bars");
+        assert_eq!(at(312.0, 1.0), None, "above the buttons");
         assert_eq!(at(40.0, 12.0), None, "the title");
+        assert_eq!(at(130.0, 12.0), None, "the title's gap");
+        assert_eq!(
+            at(200.0, 12.0),
+            Some(HeaderHit::Swing),
+            "where the add button stood"
+        );
     }
 
-    // The swing, written out (spec swing.md §5): knob 376..396, readout 400..448, one hit over
-    // both, 2..22 down the strip; the "Swing" label at 334 takes no press. The whole header
-    // stays left of step 16's edge, so it never sits past the rack's 16 steps.
+    // The swing, written out, from its label at 150.952: the knob 42 on,
+    // 192.952..212.952 (its middle at 202.952, 12), the readout 66 on, 216.952..264.952, one hit
+    // over both, 2..22 down the strip; the label takes no press. (Pins moved: the label stood at
+    // 262.952 after "+ Instrument…", and at 370 before the bars moved after it; 36 px right of
+    // that with the 12 px title gap.)
     #[test]
     fn the_swing_takes_presses_on_its_knob_and_its_readout() {
+        let near = |found: f32, wanted: f32| (found - wanted).abs() < 1e-3;
         let at = |x, y| header_hit_test(Point::new(x, y));
         assert_eq!(
-            at(377.0, 3.0),
+            at(194.0, 3.0),
             Some(HeaderHit::Swing),
             "the knob's top left"
         );
-        assert_eq!(at(386.0, 12.0), Some(HeaderHit::Swing), "the knob's center");
+        assert_eq!(at(203.0, 12.0), Some(HeaderHit::Swing), "the knob's center");
         assert_eq!(
-            at(398.0, 12.0),
+            at(214.0, 12.0),
             Some(HeaderHit::Swing),
             "between knob and readout"
         );
         assert_eq!(
-            at(447.0, 21.0),
+            at(264.0, 21.0),
             Some(HeaderHit::Swing),
             "the readout's bottom right"
         );
-        assert_eq!(at(375.0, 12.0), None, "left of the knob");
-        assert_eq!(at(449.0, 12.0), None, "right of the readout");
-        assert_eq!(at(424.0, 1.0), None, "above the readout");
-        assert_eq!(at(424.0, 23.0), None, "under the readout");
-        assert_eq!(at(340.0, 12.0), None, "the label");
+        assert_eq!(at(192.0, 12.0), None, "left of the knob");
+        assert_eq!(at(266.0, 12.0), None, "right of the readout");
+        assert_eq!(at(240.0, 1.0), None, "above the readout");
+        assert_eq!(at(240.0, 23.0), None, "under the readout");
+        assert_eq!(at(160.0, 12.0), None, "the label");
         let knob = swing_knob_rect();
-        assert_eq!(knob.center(), Point::new(386.0, 12.0));
+        assert!(near(knob.center().x, 202.952) && knob.center().y == 12.0);
         assert_eq!((knob.width, knob.height), (20.0, 20.0));
         let count = swing_count_rect();
-        assert_eq!((count.x, count.width), (400.0, 48.0));
-        assert!(count.x + count.width < step_left(16));
+        assert!(near(count.x, 216.952) && count.width == 48.0, "{count:?}");
+    }
+
+    // "+ Instrument…" under the rows, written out: the add row a row's gap under the last row,
+    // at row_top(rows) = 8 + 38 · rows, 24 px tall; a press takes the words and 8 px either side
+    // across the whole row, from the name boxes' x, 28. The words at the labels' 12 px, by
+    // Inter's advances (gen_u1_expected.py's rule): + 1355, space 576, I 550, n 1210, s 1081,
+    // t 670, r 771, u 1211, m 1794, e 1194, n 1210, t 670, … 1770 = 14062 of its 2048 units, and
+    // its GPOS kerns no pair of them (the "…" has the text shaped with kerning), so
+    // 12 · 14062 / 2048 = 82.395 px, 98.395 with the pad: x 28..126.395. With no rows at y 8, the
+    // add row the rack's only row (8..32); with two at y 84 (8 + 76), 84..108; the rack's canvas
+    // ends at the add row's foot (the test above). The rows' hit test finds nothing in the add
+    // row: the rack takes its presses itself. (Pins moved: a button 100 x 20, 2 px down the
+    // row, at (28, 10) and (28, 86).)
+    #[test]
+    fn the_add_words_stand_under_the_rows() {
+        let near = |rect: Rectangle, (x, y, width): (f32, f32, f32)| {
+            (rect.x, rect.y, rect.height) == (x, y, ADD_ROW_HEIGHT)
+                && (rect.width - width).abs() < 1e-3
+        };
+        assert!(
+            near(add_instrument_rect(0), (28.0, 8.0, 98.395)),
+            "{:?}",
+            add_instrument_rect(0)
+        );
+        let add = add_instrument_rect(2);
+        assert!(near(add, (28.0, 84.0, 98.395)), "{add:?}");
+        assert_eq!(add.x, NAME_BUTTON_X);
+        assert_eq!(hit_test(Point::new(60.0, 96.0), 2, 16), None);
+        for (at, inside, what) in [
+            (Point::new(60.0, 96.0), true, "the words"),
+            (Point::new(29.0, 96.0), true, "1 px inside the left edge"),
+            (Point::new(27.0, 96.0), false, "1 px outside the left edge"),
+            (Point::new(126.0, 96.0), true, "inside the right edge"),
+            (Point::new(127.0, 96.0), false, "past the right edge"),
+            (Point::new(60.0, 83.0), false, "the gap over the row"),
+            (Point::new(60.0, 107.0), true, "the row's foot"),
+        ] {
+            assert_eq!(add.contains(at), inside, "{what}: {at:?}");
+        }
     }
 
     // The rows sit under the toolbar (64) and the header (24): step 1 of row 1 is centered on
@@ -480,9 +573,9 @@ mod tests {
         );
     }
 
-    // P4: a channel's header is its light, name and knobs, x 0..218, and a control tall: row 1's
-    // runs y 46..74. Between rows (y 74..84), over the steps (x 222) and on the "+" under the
-    // last row there is none.
+    // A channel's header is its light, name and knobs, x 0..218, and a control tall: row 1's
+    // runs y 46..74. Between rows (y 74..84), over the steps (x 222) and under the last row
+    // there is none.
     #[test]
     fn a_header_runs_from_the_light_to_the_knobs() {
         assert_eq!(
@@ -495,16 +588,18 @@ mod tests {
         assert_eq!(at(196.0, 60.0), Some(1), "the volume knob");
         assert_eq!(at(80.0, 78.0), None, "between the rows");
         assert_eq!(at(236.0, 22.0), None, "a step");
-        assert_eq!(
-            at(80.0, 22.0 + 2.0 * 38.0),
-            None,
-            "the + under the last row"
-        );
+        assert_eq!(at(80.0, 22.0 + 2.0 * 38.0), None, "under the last row");
     }
 
     #[test]
     fn rack_size_covers_every_step_and_row() {
-        assert_eq!(rack_size(1, 16), Size::new(704.0 + 14.0 + 12.0, 46.0));
-        assert_eq!(rack_size(0, 0), Size::new(STEPS_X, RACK_PADDING_TOP));
+        assert_eq!(
+            rack_size(1, 16),
+            Size::new(704.0 + 14.0 + 12.0, 46.0 + 24.0)
+        );
+        assert_eq!(
+            rack_size(0, 0),
+            Size::new(STEPS_X, RACK_PADDING_TOP + ADD_ROW_HEIGHT)
+        );
     }
 }

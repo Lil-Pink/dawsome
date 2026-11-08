@@ -2,7 +2,7 @@
 //! the host makes into it and is an XEmbed client (crates/test-plugin-vst3/src/view.rs). Expected
 //! logs, sizes and words are read from tests/fixtures/p29_expected.json (gen_p29_expected.py).
 //!
-//! W2 runs everywhere (in a child of this test binary without `DISPLAY`). The others open real
+//! The test without X11 runs everywhere (in a child of this test binary without `DISPLAY`). The others open real
 //! windows, so they are ignored: `scripts/ui-check.sh` runs each alone (`--exact`) in a graphical
 //! session with `DAWSOME_APP_ID=dawsome-test` and temp HOME and XDG folders. Each takes the
 //! binary's lock (one window at a time), gives its windows the class `dawsome-test` (so a desktop
@@ -44,7 +44,7 @@ const MODULE: &str = "Dawsome Test VST3.vst3";
 const VIEW: ProcessorOwner = ProcessorOwner::Channel(ChannelId(1));
 /// The class the windows of these tests carry (what `DAWSOME_APP_ID` names for the app's).
 const CLASS: &str = "dawsome-test";
-/// Set in W2's child.
+/// Set in the no-X11 test's child.
 const CHILD: &str = "DAWSOME_WINDOW_TEST_CHILD";
 
 /// One window at a time.
@@ -57,6 +57,11 @@ fn turn() -> std::sync::MutexGuard<'static, ()> {
 fn p29() -> Value {
     serde_json::from_str(include_str!("../../../tests/fixtures/p29_expected.json"))
         .expect("p29_expected.json parses")
+}
+
+/// The scale every editor here is opened at (p29's "scale"): a desktop at 150 %.
+fn scale() -> f64 {
+    p29()["scale"].as_f64().expect("a scale")
 }
 
 fn texts(value: &Value) -> Vec<String> {
@@ -199,7 +204,7 @@ impl Oracle {
     }
 }
 
-// W2. Without X11 (in a child of this binary with no DISPLAY): the classes without an editor
+// Without X11 (in a child of this binary with no DISPLAY): the classes without an editor
 // open their parameter window (Generic) and no display is made (one would fail here); the View,
 // whose editor takes our window type, is the reason X11 is missing, its editor let go at once.
 // Released and ticked, nothing of theirs is left; with the host gone, nothing of the module's or
@@ -255,7 +260,7 @@ fn without_x11_an_editor_is_its_reason_and_the_others_their_panel() {
             let reference = ProcessorRef::plugin(format!("vst3:{id}"), class);
             halves.push(host.create(owner, &reference, 48_000).expect("creates"));
             assert_eq!(
-                host.open_editor(owner, class),
+                host.open_editor(owner, class, scale()),
                 Ok(Editor::Generic),
                 "{class}"
             );
@@ -269,7 +274,7 @@ fn without_x11_an_editor_is_its_reason_and_the_others_their_panel() {
         oracle.clear();
         let reason = p29["no_display"]["reason"].as_str().expect("a reason");
         assert_eq!(
-            host.open_editor(VIEW, "Dawsome Test View"),
+            host.open_editor(VIEW, "Dawsome Test View", scale()),
             Err(HostError::Failed(reason.to_owned()))
         );
         assert_eq!(oracle.log(), texts(&p29["no_display"]["log"]));
@@ -486,7 +491,7 @@ impl Opened {
             .create(VIEW, &view_reference(), 48_000)
             .expect("creates");
         let title = p29["title"].as_str().expect("a title");
-        assert_eq!(host.open_editor(VIEW, title), Ok(Editor::Embedded));
+        assert_eq!(host.open_editor(VIEW, title, scale()), Ok(Editor::Embedded));
         let log = oracle.log();
         let ours = host.editor(VIEW).expect("open").window;
         let child = oracle.window();
@@ -544,7 +549,7 @@ fn assert_closed(x: &X, ours: u32, child: u32) {
     }
 }
 
-// W3. Opened: Embedded; the editor's calls in the format's order (the open log); it heard that it
+// Opened: Embedded; the editor's calls in the format's order (the open log); it heard that it
 // is embedded (EMBEDDED_NOTIFY naming our window, version 0) and was mapped; on the test's own
 // connection its window is our window's child, viewable, both 400x300; our window carries the
 // title (both encodings) and the class; the host asks for ticks; a second open is Embedded again
@@ -576,7 +581,10 @@ fn w3_an_editor_opens_embedded_in_our_window() {
     );
     assert!(opened.host.needs_ticks(), "an open editor is ticked");
     opened.oracle.clear();
-    assert_eq!(opened.host.open_editor(VIEW, "again"), Ok(Editor::Embedded));
+    assert_eq!(
+        opened.host.open_editor(VIEW, "again", scale()),
+        Ok(Editor::Embedded)
+    );
     assert!(opened.oracle.log().is_empty(), "nothing called again");
     opened.finish();
 }
@@ -601,7 +609,7 @@ fn sized(opened: &Opened, ours: (u32, u32), child: (u32, u32)) {
     settle(&opened.host, 200);
 }
 
-/// W4's 0x0: the frame asks for 1x1 (the step's log) and the editor's own window, a child no
+/// A 0x0 resize: the frame asks for 1x1 (the step's log) and the editor's own window, a child no
 /// window manager sizes, is 1x1. Our window is a managed one: a window manager may give it more
 /// (KWin: at least 2x48), and what it gives comes back as a user's resize, which the editor's
 /// constraint holds (each "checkSizeConstraint" line its rule's, one onSize of the size held), and
@@ -660,7 +668,7 @@ fn smallest(opened: &Opened, p29: &Value, step: &Value) {
     sized(opened, held, held);
 }
 
-// W4. The editor's own resizes (resizeView): a new size resizes our window and calls onSize
+// The editor's own resizes (resizeView): a new size resizes our window and calls onSize
 // inside the call, then true; the same again is true and nothing else; an onSize that asks again
 // inside is refused (false) and the first goes on; 0x0 is our window at 1x1. A fixed editor's
 // window keeps its size as its least and most (WM_NORMAL_HINTS), which follow a resize it asks.
@@ -708,7 +716,7 @@ fn w4_an_editor_resizes_its_window_inside_its_call() {
     opened.finish();
 }
 
-// W5. A user's resize of our window: held by the editor's checkSizeConstraint (200..1600 x
+// A user's resize of our window: held by the editor's checkSizeConstraint (200..1600 x
 // 150..1200), our window takes the size it gives, onSize, and the echo of our own resize brings
 // nothing more; a fixed editor is not asked.
 #[test]
@@ -739,7 +747,7 @@ fn w5_a_users_resize_is_held_by_the_editors_constraint() {
     opened.finish();
 }
 
-// W6. The frame's run loop serves what the editor registered with it: a byte down its pipe is
+// The frame's run loop serves what the editor registered with it: a byte down its pipe is
 // heard at the next tick, once ("fd pipe"), and not before a tick.
 #[test]
 #[ignore = "opens a window: scripts/ui-check.sh runs it in a graphical session"]
@@ -768,7 +776,7 @@ fn w6_the_frames_run_loop_serves_the_editors_file_descriptors() {
     opened.finish();
 }
 
-// W7. Our window's focus reaches the embedded editor as XEmbed's messages: in, WINDOW_ACTIVATE
+// Our window's focus reaches the embedded editor as XEmbed's messages: in, WINDOW_ACTIVATE
 // then FOCUS_IN; out, FOCUS_OUT then WINDOW_DEACTIVATE; the focus moving inside our window, or
 // to the pointer's, nothing. The host calls none of the editor's key, wheel, focus or scale
 // methods.
@@ -812,7 +820,7 @@ fn w7_our_focus_reaches_the_editor_as_xembed_messages() {
     opened.finish();
 }
 
-// W8. Every way an editor closes: the close button (WM_DELETE_WINDOW, as a window manager sends
+// Every way an editor closes: the close button (WM_DELETE_WINDOW, as a window manager sends
 // it) gives one Closed notice and removes, unframes and lets go of the editor, both windows gone,
 // the host quiet; released with its audio half gone, the parts then terminate; the host dropped
 // (audio half first), the same; the host dropped under a live audio half, the editor still
@@ -895,7 +903,7 @@ fn open_fds() -> usize {
     std::fs::read_dir("/proc/self/fd").expect("/proc").count()
 }
 
-// W9. Twenty cycles of open, mapped, closed by the close button and ticked: twenty attached,
+// Twenty cycles of open, mapped, closed by the close button and ticked: twenty attached,
 // twenty removed, every window either side gone after its cycle, no file descriptor more after
 // the twentieth than after the first; released, nothing of the module's, the host's or the
 // editor's windows is left.
@@ -921,7 +929,7 @@ fn w9_twenty_editors_opened_and_closed_leave_nothing() {
             .expect("creates");
         for cycle in 1..=cycles {
             assert_eq!(
-                host.open_editor(VIEW, "Dawsome Test View"),
+                host.open_editor(VIEW, "Dawsome Test View", scale()),
                 Ok(Editor::Embedded)
             );
             let ours = host.editor(VIEW).expect("open").window;

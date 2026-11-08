@@ -24,21 +24,27 @@ use iced::{mouse, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 use std::collections::BTreeMap;
 
 use crate::app::Message;
+use crate::ui::console::Finish;
+use crate::ui::fonts::size;
 use crate::ui::hint::{hover_change, Hover};
+use crate::ui::knob_block::{
+    self, draw_ground, draw_knob_cell, draw_param, fraction, head_rect, shows_whole, BLOCK_HEAD,
+    BLOCK_INSET, KNOB_ROW_HEIGHT,
+};
 use crate::ui::menu;
 use crate::ui::mixer_layout::{
-    self, Hit, BLOCK_HEAD, BLOCK_INSET, BODY_TOP, CAP_LINE, CLIP_OFFSET, CLIP_RADIUS, CLIP_Y,
-    EFFECTS_INSET, FADER_TOP, FADER_TRACK_OFFSET, FADER_TRACK_WIDTH, HEADER_HEIGHT,
-    KNOB_ROW_HEIGHT, KNOB_SIZE, KNOB_WIDTH, LABEL_HEIGHT, LED_RADIUS, MARKS_WIDTH, MENU_WIDTH,
-    NAME_SIZE, PAN_SIZE, SELECTED_OUTLINE, SEND_SIZE, STRIP_WIDTH, TEXT_SIZE, TITLE_HEIGHT,
-    TITLE_TOP,
+    self, Hit, BODY_TOP, CAP_LINE, CLIP_OFFSET, CLIP_RADIUS, CLIP_Y, FADER_TOP, FADER_TRACK_OFFSET,
+    FADER_TRACK_WIDTH, HEADER_HEIGHT, LABEL_HEIGHT, LED_RADIUS, MARKS_WIDTH, MENU_WIDTH, PAN_SIZE,
+    SELECTED_OUTLINE, SEND_SIZE, STRIP_WIDTH,
 };
 use crate::ui::mixer_state::{
-    effect_param_text, effect_values, fader_text, is_choice, is_plugin, knob_counts, pan_text,
-    percent_text, Menu, MixerMessage, MixerState, ADD_MENU, EFFECT_MENU, PLUGIN_EFFECT_ROW,
-    PLUGIN_KNOBS, PLUGIN_PARAMS_ROW,
+    effect_values, fader_text, is_choice, is_plugin, knob_counts, pan_text, percent_text, Menu,
+    MixerMessage, MixerState, ADD_MENU, EFFECT_MENU, PLUGIN_EFFECT_ROW, PLUGIN_KNOBS,
+    PLUGIN_PARAMS_ROW,
 };
-use crate::ui::rack::{draw_automated_dot, draw_knob, draw_linked_dot};
+use crate::ui::panels::Panel;
+use crate::ui::pop_out;
+use crate::ui::rack::{draw_automated_dot, draw_knob, draw_linked_dot, draw_mute_light};
 use crate::ui::style;
 use crate::ui::text_fit::fit_width;
 
@@ -48,12 +54,9 @@ pub const RENAME_INPUT: &str = "mixer-insert-rename";
 /// −6 dB as a linear level, 10^(−6/20), where a meter turns from green to yellow.
 pub const MINUS_6_DB: f32 = 0.501_187_2;
 
-/// The size of a knob's label and value.
-const KNOB_TEXT_SIZE: f32 = 10.0;
-
 /// Two presses at most this far apart in time and space are a double press.
-const DOUBLE_PRESS_TIME: Duration = Duration::from_millis(400);
-const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
+pub(crate) const DOUBLE_PRESS_TIME: Duration = Duration::from_millis(400);
+pub(crate) const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
 
 /// What the mixer shows.
 pub struct MixerPanel<'a> {
@@ -76,6 +79,9 @@ pub struct MixerPanel<'a> {
     pub menu: Option<Element<'a, Message>>,
     /// The window's last pixels the menus over the mixer keep clear of: the hint bar's.
     pub menu_foot: f32,
+    /// Whether the mixer is in the stack, where its header ends with the pop-out button
+    /// ([`crate::ui::pop_out`]); in its own window it is not.
+    pub docked: bool,
 }
 
 impl<'a> MixerPanel<'a> {
@@ -119,7 +125,7 @@ impl<'a> MixerPanel<'a> {
             .id(Id::new(RENAME_INPUT))
             .on_input(|name| Message::Mixer(MixerMessage::RenameEdited(name)))
             .on_submit(Message::Mixer(MixerMessage::RenameSubmitted))
-            .size(NAME_SIZE)
+            .size(size::LABEL)
             .padding([1, 3])
             .width(STRIP_WIDTH);
         Some(pin(input).x(left).y(mixer_layout::NAME_TOP - 2.0).into())
@@ -227,7 +233,7 @@ impl Desk<'_> {
         // shapes under the shapes its parent has not finished yet, so a ground drawn outside
         // would cover the strips.
         frame.with_clip(strips, |frame| {
-            frame.fill_rectangle(strips.position(), strips.size(), style::RACK_WELL);
+            frame.fill_rectangle(strips.position(), strips.size(), style::palette().bg);
             for (id, insert, left) in self.panel.visible_strips(size.width) {
                 let heard = solo_audible.get(usize::from(id.0)).copied().unwrap_or(true);
                 self.draw_strip(frame, (id, insert), left, heard, strips, size.height);
@@ -240,37 +246,47 @@ impl Desk<'_> {
         frame.fill_rectangle(
             Point::ORIGIN,
             Size::new(width, HEADER_HEIGHT),
-            style::HEADER,
+            style::palette().raised,
         );
         label(
             frame,
-            "Mixer",
-            Point::new(12.0, HEADER_HEIGHT / 2.0),
-            style::TEXT,
-            12.0,
+            Panel::Mixer.title(),
+            Point::new(mixer_layout::TITLE_X, HEADER_HEIGHT / 2.0),
+            style::palette().text,
+            size::PANEL_TITLE,
         );
         for (rect, glyph) in [
-            (mixer_layout::route_down_rect(), "\u{2212}"),
-            (mixer_layout::route_up_rect(), "+"),
+            (mixer_layout::route_down_rect(width), "\u{2212}"),
+            (mixer_layout::route_up_rect(width), "+"),
         ] {
-            frame.fill_rectangle(rect.position(), rect.size(), style::BUTTON);
-            centered(frame, glyph, rect.center(), style::TEXT, 12.0);
+            frame.fill_rectangle(rect.position(), rect.size(), style::palette().button);
+            centered(
+                frame,
+                glyph,
+                rect.center(),
+                style::palette().text,
+                size::LABEL,
+            );
         }
-        let label_rect = mixer_layout::route_label_rect();
-        frame.fill_rectangle(label_rect.position(), label_rect.size(), style::LCD);
+        let label_rect = mixer_layout::route_label_rect(width);
+        frame.fill_rectangle(
+            label_rect.position(),
+            label_rect.size(),
+            style::palette().lcd,
+        );
         let project = self.panel.project;
         let routing = match self.panel.channel.and_then(|id| project.channels.get(&id)) {
             Some(channel) => format!("{} \u{2192} {}", channel.name, channel.insert),
             None => "No channel".into(),
         };
-        if let Some(shown) = fit_width(&routing, label_rect.width, TEXT_SIZE) {
+        if let Some(shown) = fit_width(&routing, label_rect.width, size::LABEL) {
             frame.with_clip(label_rect, |frame| {
                 centered(
                     frame,
                     &shown,
                     label_rect.center(),
-                    style::LCD_TEXT,
-                    TEXT_SIZE,
+                    style::palette().lcd_text,
+                    size::LABEL,
                 );
             });
         }
@@ -290,9 +306,9 @@ impl Desk<'_> {
         let selected = id == self.panel.state.selected;
         let body = mixer_layout::body_rect(left, desk);
         let color = if selected {
-            style::STRIP_SELECTED
+            style::palette().strip_selected
         } else {
-            style::STRIP
+            style::palette().strip
         };
         frame.fill_rectangle(body.position(), body.size(), color);
         if selected {
@@ -304,7 +320,7 @@ impl Desk<'_> {
                     body.height - SELECTED_OUTLINE,
                 ),
                 Stroke::default()
-                    .with_color(style::ACCENT)
+                    .with_color(style::accent())
                     .with_width(SELECTED_OUTLINE),
             );
         }
@@ -320,23 +336,21 @@ impl Desk<'_> {
         // the clip as well: the software renderer draws a clipped frame's text whole.
         if let Some(clip) = name.intersection(&area).filter(|_| !renaming) {
             let at = Point::new(name.x + 4.0, name.center_y());
-            if let Some(shown) = fit_width(&insert.name, clip.x + clip.width - at.x, NAME_SIZE) {
+            if let Some(shown) = fit_width(&insert.name, clip.x + clip.width - at.x, size::LABEL) {
                 frame.with_clip(clip, |frame| {
-                    label(frame, &shown, at, style::TEXT, NAME_SIZE);
+                    label(frame, &shown, at, style::palette().text, size::LABEL);
                 });
             }
         }
         let led = mixer_layout::led_center(left);
-        let lit = if !insert.mute && heard {
-            style::TRACK_LED_ON
-        } else {
-            style::LED_OFF
-        };
-        frame.fill(&Path::circle(led, LED_RADIUS), lit);
+        let heard = !insert.mute && heard;
+        draw_mute_light(frame, led, LED_RADIUS, heard.then_some(style::TRACK_LED_ON));
         if self.panel.project.mixer.solo.contains(&id) {
             frame.stroke(
                 &Path::circle(led, LED_RADIUS + 1.75),
-                Stroke::default().with_color(style::ACCENT).with_width(1.5),
+                Stroke::default()
+                    .with_color(style::accent())
+                    .with_width(1.5),
             );
         }
         let automated = |target: AutomationTarget| self.panel.automated.get(&target).copied();
@@ -355,16 +369,16 @@ impl Desk<'_> {
         frame.fill_rectangle(
             Point::new(left + FADER_TRACK_OFFSET, FADER_TOP),
             Size::new(FADER_TRACK_WIDTH, mixer_layout::fader_span(desk)),
-            style::FADER_TRACK,
+            style::palette().fader_track,
         );
         let fader_automation = automated(AutomationTarget::InsertFader(id));
         let fader = fader_automation.flatten().unwrap_or(insert.fader);
         let cap = mixer_layout::cap_rect(left, fader, desk);
-        frame.fill_rectangle(cap.position(), cap.size(), style::FADER_CAP);
+        frame.fill_rectangle(cap.position(), cap.size(), style::palette().fader_cap);
         frame.fill_rectangle(
             Point::new(cap.x, cap.center_y() - CAP_LINE / 2.0),
             Size::new(cap.width, CAP_LINE),
-            style::ACCENT,
+            style::accent(),
         );
         let track = Point::new(
             left + FADER_TRACK_OFFSET + FADER_TRACK_WIDTH / 2.0,
@@ -378,15 +392,19 @@ impl Desk<'_> {
         }
         for side in 0..2 {
             let meter = mixer_layout::meter_rect(left, side, desk);
-            frame.fill_rectangle(meter.position(), meter.size(), style::METER_GROUND);
+            frame.fill_rectangle(
+                meter.position(),
+                meter.size(),
+                style::palette().meter_ground,
+            );
         }
         if !selected {
             let route = mixer_layout::route_rect(left, desk);
             let sent = self.panel.send_to(id);
             let color = if sent.is_some() {
-                style::ACCENT
+                style::accent()
             } else {
-                style::ROUTE_OFF
+                style::palette().route_off
             };
             frame.fill_rectangle(route.position(), route.size(), color);
             if let Some(amount) = sent {
@@ -416,12 +434,13 @@ impl Desk<'_> {
         let label_at = Point::new(left + STRIP_WIDTH / 2.0, label_top + LABEL_HEIGHT / 2.0);
         // Centered, so the room is twice the nearer distance to the area's sides.
         let room = 2.0 * (label_at.x - area.x).min(area.x + area.width - label_at.x);
-        if let Some(shown) = fit_width(&number, room, TEXT_SIZE) {
-            centered(frame, &shown, label_at, style::TEXT, TEXT_SIZE);
+        if let Some(shown) = fit_width(&number, room, size::DENSE) {
+            centered(frame, &shown, label_at, style::palette().text, size::DENSE);
         }
     }
 
-    /// The effects area: its ground, the selected insert's name, its effects' blocks in chain
+    /// The effects area: its ground (no title: the header's routing control names the selected
+    /// insert, so the name over the blocks went), its effects' blocks in chain
     /// order and the add tile, and the marks of lines scrolled out of view. A block's parts show
     /// only where they show whole in the view: the software renderer draws a clipped frame's
     /// text and shapes whole, so a part cut by the view's edge would run over the title.
@@ -431,16 +450,11 @@ impl Desk<'_> {
         frame.fill_rectangle(
             Point::new(left, HEADER_HEIGHT),
             Size::new(size.width - left, size.height - HEADER_HEIGHT),
-            style::PANEL,
+            style::palette().panel,
         );
         let Some(insert) = self.panel.project.mixer.get(self.panel.state.selected) else {
             return;
         };
-        let room = size.width - left - EFFECTS_INSET - MARKS_WIDTH;
-        if let Some(shown) = fit_width(&insert.name, room, NAME_SIZE) {
-            let at = Point::new(left + EFFECTS_INSET, TITLE_TOP + TITLE_HEIGHT / 2.0);
-            label(frame, &shown, at, style::TEXT, NAME_SIZE);
-        }
         let counts = self.panel.chain();
         // The chain as it shows: a block being dragged at the place it would take.
         let order = self.panel.state.chain_order(insert.effects.len());
@@ -477,7 +491,9 @@ impl Desk<'_> {
             frame.stroke_rectangle(
                 moved.position(),
                 moved.size(),
-                Stroke::default().with_color(style::ACCENT).with_width(1.0),
+                Stroke::default()
+                    .with_color(style::accent())
+                    .with_width(1.0),
             );
         }
         let scroll = mixer_layout::effects_scroll(&chain, desk);
@@ -496,31 +512,34 @@ impl Desk<'_> {
         count: usize,
         view: Rectangle,
     ) {
-        if let Some(ground) = block.intersection(&view) {
-            frame.fill_rectangle(ground.position(), ground.size(), style::STRIP);
-        }
-        let head = Rectangle::new(block.position(), Size::new(block.width, BLOCK_HEAD));
-        if shows_whole(view, head) {
+        draw_ground(frame, block, view, Finish::Flat);
+        if shows_whole(view, head_rect(block)) {
             let lit = if effect.on {
                 style::TRACK_LED_ON
             } else {
-                style::LED_OFF
+                style::palette().led_off
             };
             let led = mixer_layout::effect_led_center(block);
             frame.fill(&Path::circle(led, LED_RADIUS), lit);
             let name = mixer_layout::effect_name_rect(block);
             let color = if effect.on {
-                style::TEXT
+                style::palette().text
             } else {
-                style::TEXT_DIM
+                style::palette().text_disabled
             };
             let shown = effect_name(effect, self.panel.registry);
-            if let Some(shown) = fit_width(shown, name.width, NAME_SIZE) {
+            if let Some(shown) = fit_width(shown, name.width, size::LABEL) {
                 let at = Point::new(name.x, name.center_y());
-                label(frame, &shown, at, color, NAME_SIZE);
+                label(frame, &shown, at, color, size::LABEL);
             }
             let cross = mixer_layout::remove_rect(block).center();
-            centered(frame, "\u{d7}", cross, style::TEXT_DIM, 14.0);
+            centered(
+                frame,
+                "\u{d7}",
+                cross,
+                style::palette().text_secondary,
+                size::BODY,
+            );
             // The arrows, but none past either end of the chain.
             let place = self
                 .panel
@@ -536,11 +555,23 @@ impl Desk<'_> {
                 .map_or(0, |insert| insert.effects.len());
             if place.is_some_and(|place| place > 0) {
                 let at = mixer_layout::earlier_rect(block).center();
-                centered(frame, "\u{2039}", at, style::TEXT_DIM, 14.0);
+                centered(
+                    frame,
+                    "\u{2039}",
+                    at,
+                    style::palette().text_secondary,
+                    size::BODY,
+                );
             }
             if place.is_some_and(|place| place + 1 < count) {
                 let at = mixer_layout::later_rect(block).center();
-                centered(frame, "\u{203a}", at, style::TEXT_DIM, 14.0);
+                centered(
+                    frame,
+                    "\u{203a}",
+                    at,
+                    style::palette().text_secondary,
+                    size::BODY,
+                );
             }
         }
         let registry = self.panel.registry;
@@ -559,9 +590,15 @@ impl Desk<'_> {
             Size::new(block.width - 2.0 * BLOCK_INSET, KNOB_ROW_HEIGHT),
         );
         if let Some(words) = words.filter(|_| shows_whole(view, row)) {
-            if let Some(shown) = fit_width(words, row.width, KNOB_TEXT_SIZE) {
+            if let Some(shown) = fit_width(words, row.width, size::DENSE) {
                 let at = Point::new(row.x, row.center_y());
-                label(frame, &shown, at, style::TEXT_DIM, KNOB_TEXT_SIZE);
+                label(
+                    frame,
+                    &shown,
+                    at,
+                    style::palette().text_secondary,
+                    size::DENSE,
+                );
             }
         }
     }
@@ -579,7 +616,7 @@ impl Desk<'_> {
         let values = effect_values(effect, self.panel.registry).unwrap_or_default();
         let rate = self.panel.project.sample_rate;
         for (index, (info, &value)) in factory.params().iter().zip(&values).enumerate() {
-            let cell = mixer_layout::knob_cell(block, count, index);
+            let cell = knob_block::knob_cell(block, count, index);
             if !shows_whole(view, cell) {
                 continue;
             }
@@ -589,13 +626,19 @@ impl Desk<'_> {
             };
             let automation = self.panel.automated.get(&target).copied();
             let value = automation.flatten().unwrap_or(value);
-            let text = effect_param_text(factory, index, value, rate).unwrap_or_default();
-            let knob = (!is_choice(factory, index)).then(|| fraction(value, info.min, info.max));
             let dots = (
                 automation.is_some(),
                 self.panel.project.midi_links.get(&target).is_some(),
             );
-            draw_knob_cell(frame, cell, (info.label, &text), knob, dots);
+            draw_param(
+                frame,
+                cell,
+                factory,
+                (index, value),
+                rate,
+                dots,
+                Finish::Flat,
+            );
         }
     }
 
@@ -617,7 +660,7 @@ impl Desk<'_> {
             .take(count.min(PLUGIN_KNOBS))
             .collect();
         for (index, param) in params.iter().enumerate() {
-            let cell = mixer_layout::knob_cell(block, count, index);
+            let cell = knob_block::knob_cell(block, count, index);
             if !shows_whole(view, cell) {
                 continue;
             }
@@ -633,13 +676,22 @@ impl Desk<'_> {
                 (&param.name, &text),
                 Some(knob),
                 (false, false),
+                Finish::Flat,
             );
         }
     }
 
-    /// The meters, the clip light, a refusal's flash and notice and the value under the cursor.
+    /// The pop-out grip, the meters, the clip light, a refusal's flash and notice and the value
+    /// under the cursor.
     fn draw_overlay(&self, frame: &mut Frame, cursor: Option<Point>) {
         let (width, desk) = (frame.width(), frame.height());
+        // Docked, the pop-out button's mini grip at the header's right end
+        // ([`mixer_layout::pop_out_rect`]), lit under the pointer, so drawn every frame.
+        if self.panel.docked {
+            let button = mixer_layout::pop_out_rect(width);
+            let over = cursor.is_some_and(|at| button.contains(at));
+            pop_out::draw_glyph(frame, button.position(), pop_out::glyph_color(over));
+        }
         let area = mixer_layout::effects_left(width, self.panel.last());
         let strips = Rectangle::new(
             Point::new(0.0, HEADER_HEIGHT),
@@ -669,7 +721,7 @@ impl Desk<'_> {
                     let light = if state.meters.clip {
                         style::METER_RED
                     } else {
-                        style::LED_OFF
+                        style::palette().led_off
                     };
                     let center = Point::new(left + CLIP_OFFSET, CLIP_Y);
                     frame.fill(&Path::circle(center, CLIP_RADIUS), light);
@@ -684,7 +736,7 @@ impl Desk<'_> {
         });
         if let Some(notice) = state.notice(self.panel.now) {
             let at = Point::new(80.0, HEADER_HEIGHT / 2.0);
-            label(frame, notice, at, style::WARNING, TEXT_SIZE);
+            label(frame, notice, at, style::WARNING, size::LABEL);
         }
         if let Some((rect, value)) = cursor.and_then(|at| self.tip_at(at, frame.size())) {
             // Clipped as the strips are: a value wider than a narrowed tip stays off the panel.
@@ -793,9 +845,11 @@ impl canvas::Program<Message> for Desk<'_> {
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let desk = self.desk(bounds.size());
                 let chain = self.panel.chain();
+                // The pop-out button shows (and names itself) only while the mixer is docked.
                 let now = cursor
                     .position_in(bounds)
                     .and_then(|at| mixer_layout::hit_test(at, desk, &chain))
+                    .filter(|&hit| self.panel.docked || hit != mixer_layout::Hit::PopOut)
                     .map(Hover::Mixer);
                 hover_change(&mut state.hover, now)
                     .or_else(|| cursor.is_over(bounds).then(canvas::Action::request_redraw))
@@ -870,29 +924,17 @@ fn draw_more_marks(frame: &mut Frame, view: Rectangle, width: f32, above: bool, 
     };
     if above {
         let top = view.y + 6.0;
-        frame.fill(&triangle(top - 3.0, top + 3.0), style::TEXT_DIM);
+        frame.fill(
+            &triangle(top - 3.0, top + 3.0),
+            style::palette().text_secondary,
+        );
     }
     if below {
         let foot = view.y + view.height - 6.0;
-        frame.fill(&triangle(foot + 3.0, foot - 3.0), style::TEXT_DIM);
-    }
-}
-
-/// Whether `rect` lies wholly inside `view`.
-fn shows_whole(view: Rectangle, rect: Rectangle) -> bool {
-    rect.x >= view.x
-        && rect.y >= view.y
-        && rect.x + rect.width <= view.x + view.width
-        && rect.y + rect.height <= view.y + view.height
-}
-
-/// How far along `min..max` `value` is, from 0 to 1.
-fn fraction(value: f32, min: f32, max: f32) -> f32 {
-    let span = max - min;
-    if span > 0.0 {
-        ((value - min) / span).clamp(0.0, 1.0)
-    } else {
-        0.0
+        frame.fill(
+            &triangle(foot + 3.0, foot - 3.0),
+            style::palette().text_secondary,
+        );
     }
 }
 
@@ -901,46 +943,6 @@ pub(crate) fn effect_name<'a>(effect: &'a Effect, registry: &'a Registry) -> &'a
     registry
         .get(&effect.processor.id)
         .map_or(effect.processor.display_name(), |factory| factory.name())
-}
-
-/// One knob's place `cell`: its `name` over it, then the knob at `knob` (a fraction of its
-/// range) with its `value` under it, or with no fraction a choice's button holding the value's
-/// name; its automated and linked `dots` at the knob's corner, as a strip's knobs have them.
-fn draw_knob_cell(
-    frame: &mut Frame,
-    cell: Rectangle,
-    (name, value): (&str, &str),
-    knob: Option<f32>,
-    (automated, linked): (bool, bool),
-) {
-    let room = KNOB_WIDTH - 4.0;
-    if let Some(shown) = fit_width(name, room, KNOB_TEXT_SIZE) {
-        let at = mixer_layout::knob_label_center(cell);
-        centered(frame, &shown, at, style::TEXT_DIM, KNOB_TEXT_SIZE);
-    }
-    let center = mixer_layout::knob_rect(cell).center();
-    match knob {
-        Some(fraction) => {
-            draw_knob(frame, center, KNOB_SIZE, fraction);
-            if let Some(shown) = fit_width(value, room, KNOB_TEXT_SIZE) {
-                let at = mixer_layout::knob_value_center(cell);
-                centered(frame, &shown, at, style::TEXT, KNOB_TEXT_SIZE);
-            }
-        }
-        None => {
-            let button = mixer_layout::choice_rect(cell);
-            frame.fill_rectangle(button.position(), button.size(), style::BUTTON);
-            if let Some(shown) = fit_width(value, button.width - 4.0, KNOB_TEXT_SIZE) {
-                centered(frame, &shown, button.center(), style::TEXT, KNOB_TEXT_SIZE);
-            }
-        }
-    }
-    if automated {
-        draw_automated_dot(frame, center, KNOB_SIZE);
-    }
-    if linked {
-        draw_linked_dot(frame, center, KNOB_SIZE);
-    }
 }
 
 /// The place a dragged block left, while it shows whole in `view`: a dim outline.
@@ -952,7 +954,7 @@ fn draw_gap(frame: &mut Frame, gap: Rectangle, view: Rectangle) {
         Point::new(gap.x + 0.5, gap.y + 0.5),
         Size::new(gap.width - 1.0, gap.height - 1.0),
         Stroke::default()
-            .with_color(style::TEXT_DIM)
+            .with_color(style::palette().text_secondary)
             .with_width(1.0),
     );
 }
@@ -967,15 +969,15 @@ fn draw_add_tile(frame: &mut Frame, tile: Rectangle, view: Rectangle) {
         Point::new(tile.x + 0.5, tile.y + 0.5),
         Size::new(tile.width - 1.0, tile.height - 1.0),
         Stroke::default()
-            .with_color(style::TEXT_DIM)
+            .with_color(style::palette().text_secondary)
             .with_width(1.0),
     );
     centered(
         frame,
         "+ Add effect",
         tile.center(),
-        style::TEXT_DIM,
-        NAME_SIZE,
+        style::palette().text_secondary,
+        size::LABEL,
     );
 }
 
@@ -1060,9 +1062,15 @@ fn tip_rect(left: f32, y: f32, limit: f32) -> Rectangle {
 /// A small dark box at `rect` with `value` centered in it, cut to the box's width: the value tip
 /// of the mixer's controls and of the rack's knobs.
 pub(crate) fn draw_tip(frame: &mut Frame, rect: Rectangle, value: &str) {
-    frame.fill_rectangle(rect.position(), rect.size(), style::LCD);
-    if let Some(shown) = fit_width(value, rect.width, TEXT_SIZE) {
-        centered(frame, &shown, rect.center(), style::LCD_TEXT, TEXT_SIZE);
+    frame.fill_rectangle(rect.position(), rect.size(), style::palette().lcd);
+    if let Some(shown) = fit_width(value, rect.width, size::DENSE) {
+        centered(
+            frame,
+            &shown,
+            rect.center(),
+            style::palette().lcd_text,
+            size::DENSE,
+        );
     }
 }
 
@@ -1118,6 +1126,7 @@ mod tests {
             automated,
             menu: None,
             menu_foot: 0.0,
+            docked: true,
         };
         let desk = Desk { panel };
         desk.tip_at(at, state.size())
@@ -1199,7 +1208,7 @@ mod tests {
             .chain(EFFECT_MENU)
             .chain([PLUGIN_PARAMS_ROW])
         {
-            let needed = text_width(words, menu::TEXT_SIZE) + 2.0 * 10.0;
+            let needed = text_width(words, size::BODY) + 2.0 * 10.0;
             println!("{words}: {needed} px");
             assert!(
                 needed <= mixer_layout::MENU_WIDTH,

@@ -1,4 +1,4 @@
-//! A sound's edits through the command line (the sample editor, P1a): each render case of
+//! A sound's edits through the command line (the sample editor's): each render case of
 //! tests/fixtures/gen_p30_expected.py renders the frames it states (p30_expected.json) through
 //! `dawsome render`, the same bytes at any block size; a whole-sound reverse renders the bytes
 //! of the sound setting's reverse; a clip moved by a crop or a delete renders what it rendered
@@ -246,7 +246,7 @@ fn long_frame(k: u64, period: u64) -> [f32; 2] {
 // them. The render makes the edited sound once into dawsome/edited of the user's cache folder (a
 // 32-bit float WAV of every frame, 230 MB), streams the clip from there, and renders the frames
 // stated; a second render finds the file, writes nothing and renders the same bytes. The
-// sound's own file is never written. Its bound in time is the spec's "seconds", with room for
+// sound's own file is never written. It must take seconds, with room for
 // a debug build.
 #[test]
 fn p30_a_ten_minute_edited_sound_goes_through_the_edited_cache() {
@@ -342,7 +342,7 @@ fn p30_a_ten_minute_edited_sound_goes_through_the_edited_cache() {
 }
 
 // The DAWproject export carries the file as it is on disk and says the edits stayed behind
-// (spec question 11's default: a line in P1, the edited sound rendered into the package later).
+// (a line says so; rendering the edited sound into the package is left for later).
 #[test]
 fn p30_the_dawproject_export_names_the_edits_it_leaves_out() {
     let dir = temp_dir("dawproject");

@@ -1,8 +1,8 @@
 # Third-party code in Dawsome
 
 Dawsome is GPL-3.0-or-later. These parts come from others, under their own licenses, which
-travel with them. `NOTICES.txt` carries the license and notice texts of every crate and C library
-built into the programs (`scripts/notices.py` writes it).
+travel with them. `NOTICES.txt` carries the license and notice texts of every crate, C library
+and font built into the programs (`scripts/notices.py` writes it).
 
 ## Ported source
 
@@ -84,6 +84,21 @@ link them statically.
 | Signalsmith Stretch (C++ header library, bundled by the `signalsmith-stretch` crate) | time-stretch and pitch shift of audio clips | MIT | Geraint Luff / Signalsmith Audio Ltd. (2022) |
 | signalsmith-linear (bundled with it) | its FFT and vector maths | MIT | Signalsmith Audio (2025) |
 | LAME 3.100 (C library, bundled by the `mp3lame-sys` crate) | MP3 export | LGPL-2.0-or-later | Mark Taylor, Takehiro Tominaga, Robert Hegemann and the LAME developers; lame.sourceforge.io |
+
+## Fonts built in
+
+The app draws the text of every window in Inter, built into `dawsome-app`
+(`crates/app/assets/fonts/`, each file held to its size and SHA-256 in `fonts.lock`), so its
+windows read the same on every system. The files are the release's own, unchanged.
+
+| What | Used for | License | Copyright |
+|-|-|-|-|
+| Inter 4.1, Regular and SemiBold (the static TTF files of the release zip's `extras/ttf/`) | the text of every window; SemiBold for the Help window's headings and bold words | OFL-1.1 | The Inter Project Authors (2016), github.com/rsms/inter |
+
+`LICENSE-Inter.txt` holds its copyright line and the SIL Open Font License 1.1 as the release
+holds them, and `NOTICES.txt` carries the same text (`scripts/notices.py`'s `FONTS`, so a missing
+or changed text fails `scripts/check.sh`). The license names no Reserved Font Name. The font may
+be bundled and redistributed with the programs, and is not sold by itself.
 
 ## A plugin bundled with the programs: Surge XT
 

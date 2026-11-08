@@ -504,7 +504,8 @@ pub fn render_session(
             let step = time::step_to_ticks(1, ppq);
             Some(NoteTake::new(pattern, notes.quantize.then_some(step)))
         }
-        (Some(_), PlayMode::Song | PlayMode::Nothing) => {
+        // A take of notes records into the toolbar's pattern, never the piano roll player's.
+        (Some(_), PlayMode::Song | PlayMode::Nothing | PlayMode::Channel { .. }) => {
             return Err(PlayToError::NotesWithoutPattern)
         }
         (None, _) => None,
@@ -522,7 +523,7 @@ pub fn render_session(
     };
     let dumped = match (&take, render.mode) {
         (Some(take), _) => Some(take.pattern()),
-        (None, PlayMode::Pattern(pattern)) => Some(pattern),
+        (None, PlayMode::Pattern(pattern) | PlayMode::Channel { pattern, .. }) => Some(pattern),
         (None, PlayMode::Song | PlayMode::Nothing) => None,
     };
     let dump = options.dump_notes_at.zip(dumped);

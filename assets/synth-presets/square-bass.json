@@ -1,0 +1,16 @@
+{
+  "synth": "dawsome.synth",
+  "name": "Square Bass",
+  "params": {
+    "osc1_wave": 3,
+    "osc1_octave": -1,
+    "osc2_octave": -2,
+    "osc2_level": 0.6,
+    "osc_mix": 0.3,
+    "cutoff": 0.45,
+    "resonance": 0.3,
+    "filter_env": 0.4,
+    "filter_decay": 0.4,
+    "amp_release": 0.25
+  }
+}

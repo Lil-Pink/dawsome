@@ -28,6 +28,7 @@ use iced::widget::{
 use iced::{Center, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::Message;
+use crate::ui::fonts::size;
 use crate::ui::hint::{hover_area, hover_change, Hover, PickerPart};
 use crate::ui::library::{InstrumentSet, Sets};
 use crate::ui::style;
@@ -54,12 +55,6 @@ const NAME_X: f32 = 10.0;
 const VENDOR_X: f32 = 270.0;
 pub const FORMAT_X: f32 = 400.0;
 pub const KIND_X: f32 = 456.0;
-pub const TEXT_SIZE: f32 = 12.0;
-/// The two tones plugin rows alternate between: a probe counts them as bands.
-pub const ROW_TONES: [Color; 2] = [
-    Color::from_rgb8(0x30, 0x34, 0x3A),
-    Color::from_rgb8(0x38, 0x3C, 0x43),
-];
 /// Two presses on one row this close together add its plugin.
 const DOUBLE_PRESS: Duration = Duration::from_millis(400);
 
@@ -409,7 +404,7 @@ impl canvas::Program<Message> for List {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::RACK_WELL);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().bg);
         // The choosable rows alternate tones and are counted as the selection counts them.
         let mut choosable_row = 0;
         for (index, line) in self.lines.iter().enumerate() {
@@ -439,14 +434,14 @@ impl List {
         frame.fill_rectangle(
             Point::new(0.0, top),
             Size::new(width, ROW_HEIGHT),
-            ROW_TONES[row % 2],
+            style::palette().row_tones[row % 2],
         );
         if self.selected == Some(row) {
             frame.stroke_rectangle(
                 Point::new(0.5, top + 0.5),
                 Size::new(width - 1.0, ROW_HEIGHT - 1.0),
                 canvas::Stroke::default()
-                    .with_color(style::ACCENT)
+                    .with_color(style::accent())
                     .with_width(1.0),
             );
         }
@@ -456,8 +451,8 @@ impl List {
 /// What a line shows, column by column: where each text starts, the text and its color. A
 /// plugin its name, maker, format ("CLAP" or "VST3") and kind; a set its name and maker; a kit
 /// sound its name (the
-/// section's title says what they are); a section's title in the text color; a heading or a
-/// failed file dim.
+/// section's title says what they are); a section's title in the text color; the failed files'
+/// heading in the secondary text, each failed file in the disabled text (it cannot be added).
 fn columns(line: &Line) -> Vec<(f32, String, Color)> {
     match line {
         Line::Plugin(offered) => {
@@ -467,31 +462,36 @@ fn columns(line: &Line) -> Vec<(f32, String, Color)> {
                 PluginKind::Effect => "Effect",
             };
             vec![
-                (NAME_X, plugin.name.clone(), style::TEXT),
-                (VENDOR_X, plugin.vendor.clone(), style::TEXT_DIM),
+                (NAME_X, plugin.name.clone(), style::palette().text),
+                (
+                    VENDOR_X,
+                    plugin.vendor.clone(),
+                    style::palette().text_secondary,
+                ),
                 (
                     FORMAT_X,
                     format_name(offered.format).to_owned(),
-                    style::TEXT_DIM,
+                    style::palette().text_secondary,
                 ),
-                (KIND_X, kind.to_owned(), style::TEXT_DIM),
+                (KIND_X, kind.to_owned(), style::palette().text_secondary),
             ]
         }
         Line::Set(set) => vec![
-            (NAME_X, set.name.clone(), style::TEXT),
-            (VENDOR_X, set.maker.clone(), style::TEXT_DIM),
+            (NAME_X, set.name.clone(), style::palette().text),
+            (VENDOR_X, set.maker.clone(), style::palette().text_secondary),
         ],
-        Line::Kit { name, .. } => vec![(NAME_X, name.clone(), style::TEXT)],
+        Line::Kit { name, .. } => vec![(NAME_X, name.clone(), style::palette().text)],
         Line::SampleFile => vec![
-            (NAME_X, SAMPLE_FILE.to_owned(), style::TEXT),
+            (NAME_X, SAMPLE_FILE.to_owned(), style::palette().text),
             (
                 VENDOR_X,
                 "a sound file of yours".to_owned(),
-                style::TEXT_DIM,
+                style::palette().text_secondary,
             ),
         ],
-        Line::Section(title) => vec![(NAME_X, (*title).to_owned(), style::TEXT)],
-        Line::Failed(_) | Line::FailedFile(_) => vec![(NAME_X, line.label(), style::TEXT_DIM)],
+        Line::Section(title) => vec![(NAME_X, (*title).to_owned(), style::palette().text)],
+        Line::Failed(_) => vec![(NAME_X, line.label(), style::palette().text_secondary)],
+        Line::FailedFile(_) => vec![(NAME_X, line.label(), style::palette().text_disabled)],
     }
 }
 
@@ -508,7 +508,7 @@ fn label(frame: &mut Frame, content: &str, at: Point, color: Color) {
         content: content.to_owned(),
         position: at,
         color,
-        size: TEXT_SIZE.into(),
+        size: size::LABEL.into(),
         align_y: Vertical::Center,
         ..Text::default()
     });
@@ -540,20 +540,22 @@ pub fn view<'a>(state: &'a Picker, lines: Vec<Line>, scanning: bool) -> Element<
         .id(FILTER_INPUT)
         .on_input(|text| picker(PickerMessage::FilterEdited(text)))
         .on_submit(picker(PickerMessage::Submit))
-        .size(13)
+        .size(size::BODY)
         .padding([5, 8]);
     let filter = control(PickerPart::Filter, filter.into());
     let status = if scanning { "Scanning\u{2026}" } else { "" };
-    let rescan = button(text("Rescan").size(12))
+    let rescan = button(text("Rescan").size(size::LABEL))
         .padding([5, 12])
         .style(style::tool_button(false))
         .on_press_maybe((!scanning).then(|| picker(PickerMessage::Rescan)));
-    let close = button(text("Close").size(12))
+    let close = button(text("Close").size(size::LABEL))
         .padding([5, 12])
         .style(style::tool_button(false))
         .on_press(picker(PickerMessage::Close));
     let footer = row![
-        text(status).size(12).color(style::TEXT_DIM),
+        text(status)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary),
         space().width(Fill),
         control(PickerPart::Rescan, rescan.into()),
         control(PickerPart::Close, close.into()),
@@ -561,7 +563,7 @@ pub fn view<'a>(state: &'a Picker, lines: Vec<Line>, scanning: bool) -> Element<
     .spacing(8)
     .align_y(Center);
     let content = column![
-        container(text(title).size(15)).height(TITLE_HEIGHT),
+        container(text(title).size(size::TITLE)).height(TITLE_HEIGHT),
         container(filter).height(FILTER_HEIGHT),
         canvas_widget(list).width(LIST_WIDTH).height(LIST_HEIGHT),
         container(footer).height(FOOTER_HEIGHT),

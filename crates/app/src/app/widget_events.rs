@@ -8,21 +8,18 @@
 //! ([`Window::overlays`]); the mouse listeners of a drag are not delivered to. The view can be
 //! drawn offscreen too ([`Window::snapshot`]), at any width.
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::pin;
-use std::task::{Context, Poll, Waker};
 
 use iced::advanced::renderer::Headless;
 use iced::advanced::widget::{operation, Operation, Tree};
 use iced::advanced::{clipboard, layout, overlay, Layout, Shell};
 use iced::keyboard::{self, key, Key, Location, Modifiers};
 use iced::widget::Id;
-use iced::{
-    event, mouse, window, Element, Event, Font, Pixels, Point, Rectangle, Size, Theme, Vector,
-};
+use iced::{event, mouse, window, Element, Event, Pixels, Point, Rectangle, Size, Theme, Vector};
 
+use super::layout_dump::ready;
 use super::{key_input, App, Message};
+use crate::ui::fonts;
 
 /// The main window's widgets, kept between events as the window keeps them: which text box has
 /// the keys, what it has selected.
@@ -40,8 +37,9 @@ pub(super) struct Window {
 
 impl Window {
     pub fn new(app: &App) -> Self {
+        fonts::load();
         let renderer = ready(<iced::Renderer as Headless>::new(
-            Font::DEFAULT,
+            fonts::UI,
             Pixels(16.0),
             Some("tiny-skia"),
         ))
@@ -385,6 +383,12 @@ impl Window {
         );
         let theme = Theme::Dark;
         let palette = theme.palette();
+        // A fresh frame, as iced's `UserInterface::draw` starts each one. Why: the renderer keeps
+        // what it was given until reset, so without it each snapshot drew over every one before
+        // it, and a canvas's text, drawn above its fills, outlived the frame that had it (a
+        // note line gone from the page still showed). A scrollable whose content overflows hid
+        // it: it opens a layer of its own each frame, drawn over the old.
+        iced::advanced::Renderer::reset(&mut self.renderer, Rectangle::with_size(size));
         view.as_widget().draw(
             &self.tree,
             &mut self.renderer,
@@ -428,13 +432,5 @@ fn placed(node: &layout::Node, window: Rectangle, found: &mut Vec<Rectangle>) {
         }
     } else {
         found.push(node.bounds());
-    }
-}
-
-/// The value of `future`, which needs no waiting (the CPU renderer is made at once).
-fn ready<T>(future: impl Future<Output = T>) -> T {
-    match pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
-        Poll::Ready(value) => value,
-        Poll::Pending => panic!("the renderer waited"),
     }
 }

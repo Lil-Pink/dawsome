@@ -200,8 +200,8 @@ fn an_input_channel_without_a_feed_renders_silence() {
     assert_eq!(sounding, [0, 12_000, 24_000, 36_000]);
 }
 
-/// A feed at another rate than the project's is refused by name (no resampling in this
-/// slice), as is a feed file that cannot be read; neither writes the output.
+/// A feed at another rate than the project's is refused by name (a feed is not
+/// resampled), as is a feed file that cannot be read; neither writes the output.
 #[test]
 fn a_feed_at_another_rate_or_unreadable_is_refused() {
     let dir = temp_dir("refused");

@@ -12,7 +12,7 @@ mod playlist;
 pub mod sound_edits;
 pub mod takes;
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -175,9 +175,16 @@ pub enum Edit {
         name: String,
         input: InputSource,
     },
+    /// Adds a synth channel playing Dawsome Synth at its defaults ([`Channel::synth`]) at the
+    /// end of the rack. `id` must be the project's `next_channel_id`, as for
+    /// [`Edit::AddSamplerChannel`].
+    AddSynthChannel {
+        id: ChannelId,
+        name: String,
+    },
     /// Removes a channel; the inverse of [`Edit::AddSamplerChannel`],
-    /// [`Edit::AddPluginChannel`], [`Edit::AddInstrumentChannel`] and
-    /// [`Edit::AddInputChannel`]. Accepted only for the newest channel, unchanged since it was
+    /// [`Edit::AddPluginChannel`], [`Edit::AddInstrumentChannel`], [`Edit::AddInputChannel`]
+    /// and [`Edit::AddSynthChannel`]. Accepted only for the newest channel, unchanged since it was
     /// added and without notes, so that its own inverse restores the project byte for byte.
     RemoveChannel {
         id: ChannelId,
@@ -503,6 +510,20 @@ pub enum Edit {
         key: String,
         value: Option<f32>,
     },
+    /// Sets one parameter of a synth channel's instrument, or returns it to its default
+    /// (`None` removes the key): [`Edit::SetEffectParam`]'s twin for a channel.
+    SetChannelParam {
+        channel: ChannelId,
+        key: String,
+        value: Option<f32>,
+    },
+    /// Sets every parameter of a synth channel's instrument at once: `params` becomes its
+    /// map, each key it leaves out back to its default. A preset loaded; its inverse sets the
+    /// map the channel had, so an undo gives back the sound before it.
+    SetChannelParams {
+        channel: ChannelId,
+        params: BTreeMap<String, f32>,
+    },
     /// Moves an effect to another slot of its insert; an effect already there takes the moved
     /// one's old slot. The effect keeps its ID, so playback keeps its running state.
     MoveEffect {
@@ -675,6 +696,8 @@ pub enum EditError {
     NotRemovable(u32),
     #[error("channel {0} plays no plugin")]
     NotAPluginChannel(u32),
+    #[error("channel {0} plays no synth")]
+    NotASynthChannel(u32),
     #[error("channel {0} is not a sampler")]
     NotASampler(u32),
     #[error("channel {0} plays audio clips: its sound cannot be another")]
@@ -917,6 +940,7 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
         Edit::AddInputChannel { id, name, input } => {
             add_channel(project, id, Channel::input(name, input))
         }
+        Edit::AddSynthChannel { id, name } => add_channel(project, id, Channel::synth(name)),
         Edit::RemoveChannel { id } => remove_channel(project, id),
         Edit::SetProcessorState { owner, state } => set_processor_state(project, owner, state),
         Edit::Transaction(edits) => transaction(project, edits),
@@ -1042,6 +1066,14 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
         Edit::SetEffectOn { effect, on } => mixer::set_effect_on(project, effect, on),
         Edit::SetEffectParam { effect, key, value } => {
             mixer::set_effect_param(project, effect, key, value)
+        }
+        Edit::SetChannelParam {
+            channel,
+            key,
+            value,
+        } => channels::set_param(project, channel, key, value),
+        Edit::SetChannelParams { channel, params } => {
+            channels::set_params(project, channel, params)
         }
         Edit::MoveEffect { effect, slot } => mixer::move_effect(project, effect, slot),
     }
@@ -1282,6 +1314,7 @@ fn remove_channel(project: &mut Project, id: ChannelId) -> Result<Applied, EditE
     let newest = id.0.checked_add(1) == Some(project.next_channel_id.0);
     let as_added = *channel
         == match (&channel.processor, channel.kind, &channel.input) {
+            (_, ChannelKind::Synth, _) => Channel::synth(channel.name.clone()),
             (Some(processor), ..) => Channel::plugin(channel.name.clone(), processor.clone()),
             (None, ChannelKind::Instrument, _) => {
                 Channel::instrument(channel.name.clone(), channel.instrument.clone())
@@ -1310,6 +1343,10 @@ fn remove_channel(project: &mut Project, id: ChannelId) -> Result<Applied, EditE
     // Giving the ID back is safe: it was the newest, and nothing refers to it any more.
     project.next_channel_id = id;
     let inverse = match (channel.processor, channel.kind, channel.input) {
+        (_, ChannelKind::Synth, _) => Edit::AddSynthChannel {
+            id,
+            name: channel.name,
+        },
         (Some(processor), ..) => Edit::AddPluginChannel {
             id,
             name: channel.name,

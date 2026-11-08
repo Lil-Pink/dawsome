@@ -142,7 +142,7 @@ mod tests {
     use crate::keys::NoteLayout;
     use crate::ui::hint::{Hover, HoverMessage, RollPart};
     use crate::ui::layout::TOOLBAR_HEIGHT;
-    use crate::ui::piano_layout::STRIP_HEIGHT;
+    use crate::ui::piano_layout::GRID_TOP;
     use crate::ui::roll::{NoteEdit, QuantizeGrid, QuantizeMessage, RollMessage};
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
@@ -654,7 +654,7 @@ mod tests {
     }
 
     fn grid(x: f32, y: f32) -> Point {
-        Point::new(x, y + TOOLBAR_HEIGHT + STRIP_HEIGHT)
+        Point::new(x, y + TOOLBAR_HEIGHT + GRID_TOP)
     }
 
     fn keys_of(starts: &[i64]) -> BTreeSet<(ChannelId, Ticks, u8)> {
@@ -864,7 +864,7 @@ mod tests {
         assert_eq!(lead(&app), [A, (0, 24, 62), B]);
     }
 
-    // The Quantize dialog's swing (spec swing.md §6): straight at first, kept inside 50 to 75 %
+    // The Quantize dialog's swing: straight at first, kept inside 50 to 75 %
     // (499 → 500, 751 → 750), and remembered with the rest. On the 1/16 grid (24 ticks) at
     // 66.7 %, the Triplet button's value, each pair's late line is floor(48 · 667 / 1000) = 32:
     // the note of key 62 at 30 goes there (2 from it, 30 from 0). One undo puts it back.
@@ -1093,7 +1093,7 @@ mod tests {
         assert_eq!(app.roll.menu, None, "pressed again, it closes");
     }
 
-    /// Lane point (x, y) in the window: the lane (64 px) runs down to the window's foot.
+    /// Lane point (x, y) in the window: the lane (32 px) runs down to the window's foot.
     fn lane(x: f32, y: f32) -> Point {
         Point::new(x, 560.0 - crate::ui::piano_layout::LANE_HEIGHT + y)
     }
@@ -1107,25 +1107,25 @@ mod tests {
             .collect()
     }
 
-    // Through the real lane: A's stem's middle is x 50, B's x 114; on the 64 px lane, y gives
-    // round((64 − y)·2) steps. A drag from (50, 60) across to (114, 4) paints A 8 and B 120,
-    // one step, both selected after. Both selected, a drag on A's stem from y 32 (64) to y 16
-    // sets both to 96. Alt+drag from (50, 63.8) (0.4 of a step, rounded to 0; the lane's
-    // last pixel row is y 63) to (114, 0) draws a ramp from 0 at A's tick to 128 at B's: A 0,
-    // B 128.
+    // Through the real lane: A's stem's middle is x 50, B's x 114; on the 32 px lane, y gives
+    // round((32 − y)·4) steps. A drag from (50, 30) across to (114, 2) paints A 8 and B 120,
+    // one step, both selected after. Both selected, a drag on A's stem from y 16 (64) to y 8
+    // sets both to 96. Alt+drag from (50, 31.9) (0.4 of a step, rounded to 0; the lane's
+    // last pixel row is y 31) to (114, 0) draws a ramp from 0 at A's tick to 128 at B's: A 0,
+    // B 128. (Pins moved from the 64 px lane's y 60, 4, 32, 16 and 63.8: the same steps.)
     #[test]
     fn velocity_paints_across_stems_drags_a_selection_and_ramps_with_alt() {
         let (mut app, _player) = roll_alone();
         let before = document(&app);
         let mut window = Window::new(&app);
-        window.drag(&mut app, lane(50.0, 60.0), lane(114.0, 4.0));
+        window.drag(&mut app, lane(50.0, 30.0), lane(114.0, 2.0));
         assert_eq!(lead_velocities(&app), [8.0 / 128.0, 120.0 / 128.0]);
         assert_eq!(app.roll.selection, keys_of(&[0, 96]));
         assert_eq!(app.session.history().undo_len(), 1);
-        window.drag(&mut app, lane(50.0, 32.0), lane(50.0, 16.0));
+        window.drag(&mut app, lane(50.0, 16.0), lane(50.0, 8.0));
         assert_eq!(lead_velocities(&app), [0.75, 0.75]);
         window.hold(&mut app, Modifiers::ALT);
-        window.drag(&mut app, lane(50.0, 63.8), lane(114.0, 0.0));
+        window.drag(&mut app, lane(50.0, 31.9), lane(114.0, 0.0));
         window.hold(&mut app, Modifiers::empty());
         assert_eq!(lead_velocities(&app), [0.0, 1.0]);
         assert_eq!(app.session.history().undo_len(), 3);

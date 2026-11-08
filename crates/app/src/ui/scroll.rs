@@ -276,15 +276,15 @@ impl canvas::Program<Message> for Scrollbar {
         cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::RACK_WELL);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::palette().bg);
         let (start, size) = self.shown(state).thumb(bounds.width);
         let over = cursor
             .position_in(bounds)
             .is_some_and(|at| (start..start + size).contains(&at.x));
         let color = if state.grab.is_some() || over {
-            THUMB_HOT
+            thumb_hot()
         } else {
-            THUMB
+            thumb()
         };
         let thumb = Path::rounded_rectangle(
             Point::new(start, THUMB_INSET),
@@ -312,8 +312,13 @@ impl canvas::Program<Message> for Scrollbar {
 }
 
 /// The thumb, and the thumb under the cursor or held.
-pub const THUMB: iced::Color = style::KNOB_RING;
-pub const THUMB_HOT: iced::Color = style::TEXT_DIM;
+pub fn thumb() -> iced::Color {
+    style::palette().knob_ring
+}
+
+pub fn thumb_hot() -> iced::Color {
+    style::palette().text_secondary
+}
 
 #[cfg(test)]
 mod tests {

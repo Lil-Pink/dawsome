@@ -11,6 +11,7 @@ mod host;
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::Range;
 
 pub use host::{Captured, Editor, HostError, HostNotice, NoticeKind, PluginParam, ProcessorHost};
 
@@ -155,6 +156,10 @@ pub fn param_values(params: &[ParamInfo], saved: &BTreeMap<String, f32>) -> Vec<
         .collect()
 }
 
+/// A heading a processor's parameters show under ([`ProcessorFactory::groups`]): its name and
+/// the run of parameter indices under it.
+pub type ParamGroup = (&'static str, Range<usize>);
+
 /// The UI-thread half of a processor: its identity, its parameters, and a way to make
 /// instances.
 pub trait ProcessorFactory: Send + Sync {
@@ -179,6 +184,30 @@ pub trait ProcessorFactory: Send + Sync {
     /// mixer's text sees only a parameter's unit and value, which cannot name a choice.
     fn value_name(&self, _index: usize, _value: f32) -> Option<&'static str> {
         None
+    }
+
+    /// The headings its parameters show under, in order: each a name and the run of parameter
+    /// indices it holds, the runs together covering every parameter once. None, the default,
+    /// for a processor shown as one block (an effect in a mixer slot). The synth's window shows
+    /// a block per heading.
+    fn groups(&self) -> &'static [ParamGroup] {
+        &[]
+    }
+
+    /// The name parameter `index`'s knob shows: under a heading that says the rest, the short
+    /// one ("Attack" under "Amp env"); its label, the default. Why apart from the label: an
+    /// automation clip and the hint line name the parameter alone, so they need the whole
+    /// label, while a knob's place holds about nine characters.
+    fn knob_label(&self, index: usize) -> &'static str {
+        self.params().get(index).map_or("", |info| info.label)
+    }
+
+    /// Whether it is an instrument, played by a synth channel's notes, rather than an effect in
+    /// a mixer slot; `false`, the default. The compiler creates an instrument only for a
+    /// channel, and an effect only for a slot (an instrument in a slot passes its insert's
+    /// sound through, as an effect this build does not know does).
+    fn is_instrument(&self) -> bool {
+        false
     }
 
     /// A new instance for `sample_rate`, starting at `values` (one per parameter, in

@@ -22,8 +22,9 @@ use iced::widget::{
 use iced::{mouse, Center, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::Message;
+use crate::ui::fonts::size;
 use crate::ui::hint::{hover_area, hover_change, Hover};
-use crate::ui::instrument_window::{HINT_HEIGHT, HINT_SIZE, PADDING};
+use crate::ui::instrument_window::{HINT_HEIGHT, PADDING};
 use crate::ui::sample_view::{self, Drawn, Selection, View as WaveView, RULER_HEIGHT};
 use crate::ui::scroll::{BarMessage, Scrollbar, BAR_HEIGHT};
 use crate::ui::style;
@@ -38,14 +39,8 @@ pub const HEADING_HEIGHT: f32 = 36.0;
 pub const ROW_HEIGHT: f32 = 28.0;
 /// The room above and below the waveform and its scroll bar.
 pub const WAVE_PADDING: f32 = 4.0;
-/// The words on the buttons and in the heading.
-const BUTTON_SIZE: f32 = 12.0;
-const NAME_SIZE: f32 = 15.0;
-const ABOUT_SIZE: f32 = 11.0;
 /// The Gain readout's box.
 const GAIN_WIDTH: f32 = 78.0;
-/// The ruler's words.
-const MARK_SIZE: f32 = 10.0;
 /// A dot on a frame, zoomed in far.
 const DOT_RADIUS: f32 = 2.0;
 /// The bracket of the clip the editor was opened from, on the ruler: its line's height and
@@ -309,11 +304,11 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
     }
     let mut heading = row![
         text(shown.name.to_owned())
-            .size(NAME_SIZE)
+            .size(size::TITLE)
             .wrapping(text::Wrapping::None),
         text(about)
-            .size(ABOUT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .wrapping(text::Wrapping::None),
     ]
     .spacing(10)
@@ -321,7 +316,7 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
     if shown.stale {
         heading = heading.push(
             text(FILE_CHANGED)
-                .size(ABOUT_SIZE)
+                .size(size::LABEL)
                 .color(style::WARNING)
                 .wrapping(text::Wrapping::None),
         );
@@ -438,13 +433,13 @@ pub fn view(shown: View<'_>) -> Element<'_, Message> {
     })
     .width(Fill)
     .height(BAR_HEIGHT);
-    let foot = text_fit::fit_width(&shown.hint, room, HINT_SIZE)
+    let foot = text_fit::fit_width(&shown.hint, room, size::LABEL)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_default();
     let foot = container(
         text(foot)
-            .size(HINT_SIZE)
-            .color(style::TEXT_DIM)
+            .size(size::LABEL)
+            .color(style::palette().text_secondary)
             .wrapping(text::Wrapping::None),
     )
     .padding([0.0, PADDING])
@@ -489,37 +484,44 @@ fn tool(
     lit: bool,
     message: Option<Message>,
 ) -> Element<'static, Message> {
-    let button = button(text(words).size(BUTTON_SIZE))
+    let button = button(text(words).size(size::LABEL))
         .padding([2, 8])
         .style(style::tool_button(lit))
         .on_press_maybe(message);
     hover_area(button, Hover::SampleEditor(part))
 }
 
-/// The Gain readout: "Gain", then the gain a drag left or right has set, on the readouts' glass.
+/// The Gain readout: "Gain", then the gain a drag left or right has set, on the readouts' glass,
+/// centred in its box as the toolbar's readouts are (it stood right-aligned, off-centre in a box
+/// wider than its usual value).
 fn gain_readout(gain: i32, ready: bool) -> Element<'static, Message> {
     let value = gain_text(gain);
     let color = if ready {
-        style::LCD_TEXT
+        style::palette().lcd_text
     } else {
-        style::TEXT_DIM
+        style::palette().text_disabled
     };
-    let glass = container(text(value).size(BUTTON_SIZE).color(color))
+    let glass = container(text(value).size(size::LABEL).color(color))
         .width(GAIN_WIDTH)
         .padding([2, 6])
-        .align_x(Center)
+        .align_x(iced::alignment::Horizontal::Center)
         .style(|_theme: &Theme| container::Style {
-            background: Some(style::LCD.into()),
+            background: Some(style::palette().lcd.into()),
             border: iced::Border {
-                color: style::BUTTON_EDGE,
+                color: style::palette().button_edge,
                 width: 1.0,
                 radius: 2.0.into(),
             },
             ..container::Style::default()
         });
-    let readout = row![text("Gain").size(BUTTON_SIZE).color(style::TEXT_DIM), glass]
-        .spacing(4)
-        .align_y(Center);
+    let readout = row![
+        text("Gain")
+            .size(size::LABEL)
+            .color(style::palette().text_secondary),
+        glass
+    ]
+    .spacing(4)
+    .align_y(Center);
     let area = mouse_area(readout).interaction(mouse::Interaction::ResizingHorizontally);
     let area = if ready {
         area.on_press(Message::SampleEditor(SampleEditorMessage::GainPressed))
@@ -641,7 +643,7 @@ impl canvas::Program<Message> for Waveform<'_> {
                 Size::new((right - left).max(1.0), lanes_height),
                 Color {
                     a: 0.14,
-                    ..style::TEXT
+                    ..style::palette().text
                 },
             );
             for edge in [from, to] {
@@ -649,7 +651,7 @@ impl canvas::Program<Message> for Waveform<'_> {
                     over.fill_rectangle(
                         Point::new(edge.round() - 0.5, lanes_top),
                         Size::new(1.0, lanes_height),
-                        style::ACCENT,
+                        style::accent(),
                     );
                 }
             }
@@ -664,9 +666,9 @@ impl canvas::Program<Message> for Waveform<'_> {
                 );
             }
         };
-        line(&mut over, self.cursor, style::TEXT);
+        line(&mut over, self.cursor, style::palette().text);
         if let Some(at) = self.playhead {
-            line(&mut over, at, style::ACCENT);
+            line(&mut over, at, style::accent());
         }
         if let Some(clip) = self.bracket {
             draw_bracket(&mut over, &view, clip, bounds.width);
@@ -722,23 +724,23 @@ fn draw_bracket(frame: &mut Frame, view: &WaveView, clip: Selection, width: f32)
 /// past full scale in the warning color.
 fn draw_wave(frame: &mut Frame, wave: Option<Wave<'_>>, view: &WaveView, rate: u32) {
     let size = frame.size();
-    frame.fill_rectangle(Point::ORIGIN, size, style::RACK_WELL);
+    frame.fill_rectangle(Point::ORIGIN, size, style::palette().bg);
     frame.fill_rectangle(
         Point::ORIGIN,
         Size::new(size.width, RULER_HEIGHT),
-        style::HEADER,
+        style::palette().raised,
     );
     for (x, at) in view.marks(rate) {
         frame.fill_rectangle(
             Point::new(x.round(), RULER_HEIGHT - 5.0),
             Size::new(1.0, 5.0),
-            style::TEXT_DIM,
+            style::palette().text_secondary,
         );
         frame.fill_text(canvas::Text {
             content: sample_view::time_text(at, rate),
             position: Point::new(x.round() + 3.0, 2.0),
-            color: style::TEXT_DIM,
-            size: MARK_SIZE.into(),
+            color: style::palette().text_secondary,
+            size: size::DENSE.into(),
             ..canvas::Text::default()
         });
     }

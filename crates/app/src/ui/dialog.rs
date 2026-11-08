@@ -2,6 +2,7 @@
 //! export settings. Each one sits over the dimmed window and takes every click while shown.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use dawsome_media::{BitDepth, Dither};
 use iced::alignment::Horizontal;
@@ -17,11 +18,13 @@ use crate::app::{
 };
 use crate::keys::{Action, Keys};
 use crate::play_to::RecordSource;
+use crate::ui::fonts::size;
 use crate::ui::hint::{hover_area, EditRow, FileRow, Hover, MenuRow, RecordRow};
 use crate::ui::layout::TOOLBAR_HEIGHT;
 use crate::ui::panels::Panel;
 use crate::ui::roll::QuantizeForm;
 use crate::ui::style;
+use crate::ui::text_fit::widest;
 
 /// The width every dialog box takes.
 const DIALOG_WIDTH: f32 = 460.0;
@@ -34,7 +37,7 @@ fn file(message: FileMessage) -> Message {
 }
 
 fn action<'a>(label: &'a str, message: Option<Message>) -> Element<'a, Message> {
-    button(text(label).size(13))
+    button(text(label).size(size::BODY))
         .padding([6, 14])
         .style(style::tool_button(false))
         .on_press_maybe(message)
@@ -74,10 +77,10 @@ fn boxed<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
 pub fn unsaved(name: &str) -> Element<'_, Message> {
     let choice = |label, choice| action(label, Some(file(FileMessage::Unsaved(choice))));
     column![
-        text(format!("Save changes to {name}?")).size(15),
+        text(format!("Save changes to {name}?")).size(size::TITLE),
         text("Changes not saved are lost.")
-            .size(12)
-            .color(style::TEXT_DIM),
+            .size(size::LABEL)
+            .color(style::palette().text_secondary),
         actions(vec![
             choice("Save", Choice::Save),
             choice("Don't Save", Choice::DontSave),
@@ -97,7 +100,7 @@ pub fn recover(age: &str, has_file: bool) -> Element<'_, Message> {
         "Discard"
     };
     column![
-        text(format!("Recover unsaved changes from {age}?")).size(15),
+        text(format!("Recover unsaved changes from {age}?")).size(size::TITLE),
         actions(vec![
             action("Open autosave", Some(file(FileMessage::Recover(true)))),
             action(other, Some(file(FileMessage::Recover(false)))),
@@ -113,16 +116,18 @@ pub fn report<'a>(
     groups: &'a [(&'static str, Vec<String>)],
 ) -> Element<'a, Message> {
     let groups = groups.iter().map(|(title, lines)| {
-        let lines = lines.iter().map(|line| text(line.as_str()).size(12).into());
+        let lines = lines
+            .iter()
+            .map(|line| text(line.as_str()).size(size::LABEL).into());
         column![
-            text(*title).size(13).color(style::ACCENT),
+            text(*title).size(size::BODY).color(style::accent()),
             column(lines).spacing(2)
         ]
         .spacing(4)
         .into()
     });
     column![
-        text(summary).size(15),
+        text(summary).size(size::TITLE),
         scrollable(column(groups).spacing(12).padding(Padding::ZERO.right(12)))
             .height(REPORT_HEIGHT),
         actions(vec![action("OK", Some(file(FileMessage::CloseReport)))]),
@@ -152,7 +157,7 @@ pub struct ExportForm<'a> {
 }
 
 fn field<'a>(label: &'a str, value: Element<'a, Message>) -> Element<'a, Message> {
-    row![text(label).size(13).width(110), value]
+    row![text(label).size(size::BODY).width(110), value]
         .spacing(8)
         .align_y(Center)
         .into()
@@ -163,7 +168,7 @@ fn field<'a>(label: &'a str, value: Element<'a, Message>) -> Element<'a, Message
 fn plays<'a>(form: &ExportForm<'a>, running: bool) -> Element<'a, Message> {
     let send = |message| file(FileMessage::ExportForm(message));
     let choice = |label, plays: PlayMode, offered: bool| {
-        button(text(label).size(12))
+        button(text(label).size(size::LABEL))
             .padding([5, 8])
             .style(style::tool_button(plays == form.plays))
             .on_press_maybe((offered && !running).then_some(send(ExportMessage::Plays(plays))))
@@ -176,7 +181,11 @@ fn plays<'a>(form: &ExportForm<'a>, running: bool) -> Element<'a, Message> {
     .align_y(Center);
     if let (PlayMode::Pattern, Some(name)) = (form.plays, form.pattern) {
         choices = choices.push(space().width(6));
-        choices = choices.push(text(name).size(12).color(style::TEXT_DIM));
+        choices = choices.push(
+            text(name)
+                .size(size::LABEL)
+                .color(style::palette().text_secondary),
+        );
     }
     choices.into()
 }
@@ -187,7 +196,7 @@ fn dither<'a>(form: &ExportForm<'a>, running: bool) -> Element<'a, Message> {
     let send = |message| file(FileMessage::ExportForm(message));
     let sixteen = form.depth == BitDepth::Int16;
     let choice = |label, dither: Dither| {
-        button(text(label).size(12))
+        button(text(label).size(size::LABEL))
             .padding([5, 8])
             .style(style::tool_button(sixteen && dither == form.dither))
             .on_press_maybe((sixteen && !running).then_some(send(ExportMessage::Dither(dither))))
@@ -197,7 +206,11 @@ fn dither<'a>(form: &ExportForm<'a>, running: bool) -> Element<'a, Message> {
         .align_y(Center);
     if !sixteen {
         choices = choices.push(space().width(6));
-        choices = choices.push(text("16-bit only").size(12).color(style::TEXT_DIM));
+        choices = choices.push(
+            text("16-bit only")
+                .size(size::LABEL)
+                .color(style::palette().text_secondary),
+        );
     }
     choices.into()
 }
@@ -213,14 +226,14 @@ pub fn export<'a>(form: ExportForm<'a>) -> Element<'a, Message> {
     };
     let running = form.progress.is_some();
     let bars = text_input("1", form.bars)
-        .size(13)
+        .size(size::BODY)
         .width(80)
         .on_input_maybe((!running).then_some(move |value| send(ExportMessage::Bars(value))));
     let format: Element<'a, Message> = if form.mp3 {
-        text("320 kbps stereo").size(13).into()
+        text("320 kbps stereo").size(size::BODY).into()
     } else {
         let depths = BitDepth::ALL.into_iter().map(|depth| {
-            button(text(depth.label()).size(12))
+            button(text(depth.label()).size(size::LABEL))
                 .padding([5, 8])
                 .style(style::tool_button(depth == form.depth))
                 .on_press_maybe((!running).then_some(send(ExportMessage::Depth(depth))))
@@ -228,17 +241,17 @@ pub fn export<'a>(form: ExportForm<'a>) -> Element<'a, Message> {
         });
         row(depths).spacing(2).into()
     };
-    let mut content = column![text(title).size(15)].spacing(10);
+    let mut content = column![text(title).size(size::TITLE)].spacing(10);
     content = match form.stems {
         Some(tracks) => {
             let plural = if tracks == 1 { "" } else { "s" };
             let files = format!("{tracks} track{plural} and the master, a WAV file each");
             content
-                .push(field("Files", text(files).size(13).into()))
+                .push(field("Files", text(files).size(size::BODY).into()))
                 .push(field(
                     "Length",
                     text(format!("the song, {} bars", form.bars))
-                        .size(13)
+                        .size(size::BODY)
                         .into(),
                 ))
         }
@@ -249,18 +262,18 @@ pub fn export<'a>(form: ExportForm<'a>) -> Element<'a, Message> {
     content = content
         .push(field(
             "Sample rate",
-            text(format!("{} Hz", form.rate)).size(13).into(),
+            text(format!("{} Hz", form.rate)).size(size::BODY).into(),
         ))
         .push(field(if form.mp3 { "Format" } else { "Bit depth" }, format));
     if !form.mp3 {
         content = content.push(field("Dither", dither(&form, running)));
     }
     if let Some(error) = form.error {
-        content = content.push(text(error).size(12).color(style::WARNING));
+        content = content.push(text(error).size(size::LABEL).color(style::WARNING));
     }
     let buttons = match form.progress {
         Some(done) => row![
-            text(format!("Exporting… {:.0}%", done * 100.0)).size(13),
+            text(format!("Exporting… {:.0}%", done * 100.0)).size(size::BODY),
             space().width(Fill),
             action("Cancel", Some(send(ExportMessage::Cancel))),
         ]
@@ -278,6 +291,18 @@ pub fn export<'a>(form: ExportForm<'a>) -> Element<'a, Message> {
 /// Triplet button, lit at 66.7 %), whether the ends move too, how many notes its preview
 /// merges (in the warning color when any do), Quantize and Cancel. Each control says what it
 /// is in the hint bar.
+/// The Strength readout's words for `strength` percent.
+fn strength_words(strength: u8) -> String {
+    format!("{strength} %")
+}
+
+/// The room the Strength readout keeps: its widest value's (0 to 100 % in fives), so the row
+/// stays put as the slider moves (the type scale's digits are proportional).
+fn strength_width() -> f32 {
+    static WIDTH: OnceLock<f32> = OnceLock::new();
+    *WIDTH.get_or_init(|| widest((0..=100).step_by(5).map(strength_words), size::BODY))
+}
+
 pub fn quantize<'a>(
     form: &QuantizeForm,
     merges: Option<crate::ui::roll::QuantizeMerges>,
@@ -291,7 +316,7 @@ pub fn quantize<'a>(
     let grid = pick_list(QuantizeGrid::ALL, Some(form.grid), move |grid| {
         send(QuantizeMessage::Grid(grid))
     })
-    .text_size(13)
+    .text_size(size::BODY)
     .padding([4, 8]);
     let strength = row![
         slider(0..=100u8, form.strength, move |value| send(
@@ -299,7 +324,9 @@ pub fn quantize<'a>(
         ))
         .step(5u8)
         .width(200),
-        text(format!("{} %", form.strength)).size(13),
+        container(text(strength_words(form.strength)).size(size::BODY))
+            .width(strength_width())
+            .align_x(Horizontal::Right),
     ]
     .spacing(10)
     .align_y(Center);
@@ -310,8 +337,11 @@ pub fn quantize<'a>(
         ))
         .step(1u16)
         .width(200),
-        text(swing_text(form.swing_tenths)).size(13).width(44),
-        button(text("Triplet").size(12))
+        text(swing_text(form.swing_tenths))
+            .size(size::BODY)
+            .width(44)
+            .align_x(Horizontal::Right),
+        button(text("Triplet").size(size::LABEL))
             .padding([5, 8])
             .style(style::tool_button(form.swing_tenths == TRIPLET_SWING))
             .on_press(send(QuantizeMessage::Swing(TRIPLET_SWING))),
@@ -319,7 +349,7 @@ pub fn quantize<'a>(
     .spacing(10)
     .align_y(Center);
     let choice = |label: &'a str, lit: bool, ends: bool| {
-        button(text(label).size(12))
+        button(text(label).size(size::LABEL))
             .padding([5, 8])
             .style(style::tool_button(lit))
             .on_press(send(QuantizeMessage::Ends(ends)))
@@ -331,14 +361,14 @@ pub fn quantize<'a>(
     .spacing(2);
     let merges = merges.map(|merges| {
         let color = if merges.merged == 0 {
-            style::TEXT_DIM
+            style::palette().text_secondary
         } else {
             style::WARNING
         };
-        text(merges.to_string()).size(12).color(color)
+        text(merges.to_string()).size(size::LABEL).color(color)
     });
     column![
-        text("Quantize").size(15),
+        text("Quantize").size(size::TITLE),
         field(
             "Grid",
             hover_area(grid, Hover::Quantize(QuantizePart::Grid))
@@ -400,9 +430,11 @@ fn entry<'a>(
 ) -> Element<'a, Message> {
     button(
         row![
-            text(label).size(13),
+            text(label).size(size::BODY),
             space().width(Fill),
-            text(keys).size(12).color(style::TEXT_DIM)
+            text(keys)
+                .size(size::LABEL)
+                .color(style::palette().text_secondary)
         ]
         .spacing(16),
     )
@@ -465,9 +497,11 @@ pub fn file_menu<'a>(menu: FileMenu) -> Element<'a, Message> {
                 file(FileMessage::ImportMidi),
             ),
             FileRow::Recent => {
-                list = list
-                    .push(rule::horizontal(1))
-                    .push(text("Open recent").size(11).color(style::TEXT_DIM));
+                list = list.push(rule::horizontal(1)).push(
+                    text("Open recent")
+                        .size(size::LABEL)
+                        .color(style::palette().text_secondary),
+                );
                 if menu.recent.is_empty() {
                     list = list.push(entry("No recent files".into(), "", None, true));
                 }

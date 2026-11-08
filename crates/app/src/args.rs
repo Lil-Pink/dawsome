@@ -7,17 +7,20 @@ use std::time::Duration;
 use dawsome_engine::project::{ChannelId, EffectId, ProcessorOwner, SAMPLE_RATE_RANGE};
 use dawsome_host_clap::catalogue::PluginKind;
 use dawsome_media::BitDepth;
-use iced::Size;
+use iced::{Point, Size};
 use thiserror::Error;
 
 use crate::headless::{ScreenshotRequest, Script, ShotWindow};
 use crate::play_to::{PlayTo, RecordSource};
 use crate::ui::layout::DEFAULT_WINDOW_SIZE;
+use crate::ui::palette::{Rgb, ThemeId};
 use crate::ui::panels::{Panel, Panels, Popped};
+use crate::ui::scale::ScaleMode;
+use crate::zoom::Zoom;
 
 /// Shown after any flag error.
 pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.json>]
-                   [--window-size <W>x<H>]
+                   [--window-size <W>x<H>] [--window-position <X>,<Y>]
                    [--panels <list>] [--pop-out <list>] [--song] [--device-rate <Hz>]
                    [--plugin-path <dir>].. [--cache <file>] [--stream-threshold <frames>]
                    [--browser-root <dir>] [--cache-dir <dir>] [--midi-ports none|<names>]
@@ -25,15 +28,17 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                    [--screenshot <out.png> --screenshot-after <ms>
                    [--screenshot-window main|instrument|settings|help|params|sample-editor
                                         |rack|playlist|piano-roll|mixer]
-                   [--screenshot-every <ms>]]
+                   [--screenshot-every <ms>] [--dump-layout <file.json>]]
                    [--quit-after <ms>] [--null-output] [--rehearse <events.json>]
+                   [--zoom <percent>] [--theme graphite|slate|gilt|garnet|fjord]
+                   [--accent <#RRGGBB>] [--note-color <#RRGGBB>] [--roll-scale <scale>]
                    [--open-picker instrument|effect] [--dump-picker <file>]
                    [--open-plugin channel:<id>|effect:<id>]
                    [--open-params channel:<id>|effect:<id>] [--dump-params <file>]
-                   [--play] [--stats]
+                   [--play | --play-roll] [--stats]
                    [--open-adder] [--hints on|off] [--open-instrument channel:<id>]
                    [--library-preview <set.sfz>] [--show export|edit-menu|help[:<n>]]
-                   [--settings-page general|keys] [--callouts on|off] [--scroll end]
+                   [--settings-page general|keys|theme] [--callouts on|off] [--scroll end]
                    [--drag-over channel:<id>] [--channel-menu channel:<id>] [--select-clip clip:<id>]
                    [--curve-menu automation:<id>] [--slot-menu insert:<id>,slot:<n>]
                    [--library-menu device:<port>] [--midi-monitor <port>] [--drop-monitor]
@@ -59,10 +64,34 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                  comma-separated, open at start popped out of the main window, each in a
                  window of its own
   --load         the project to open, as when it is given alone
-  --window-size  the main window's size at start, in logical pixels (default 1000x560)
+  --window-size  the main window's size at start, in logical pixels (default 1000x560); in a
+                 scripted run the Settings window's size too, over the share of the main
+                 window's it opens at otherwise (0.47 of its width, 0.67 of its height)
+  --window-position  where the main window opens, its top-left corner in the desktop's
+                 logical pixels, e.g. 3264,0 for a screen right of others; X11 only (and
+                 Windows): Wayland lets no app choose its monitor, so there it is ignored with
+                 a line on stderr
   --screenshot   (a scripted window) save a PNG of the main window, or of the one
                  --screenshot-window names, --screenshot-after <ms> after start; with
                  --screenshot-every <ms>, again that often, each to <stem>-NNN.png beside it
+  --dump-layout  with --screenshot: as the shot is taken, write where the shot window's text
+                 and controls lie, in its logical pixels, as JSON (each text's box and its
+                 measured width, each control's rect), which tests/scripts/layout_bounds.py
+                 checks
+  --zoom         (a scripted window) every window at this zoom, a percentage on the Settings
+                 stepper's stops (50 to 200 in tens, and 75, 125, 175), for the run alone: the
+                 settings file is never written; --window-size stays the window's own size,
+                 which the system's pixels are this zoom times
+  --theme        (a scripted window) every window in this theme, as Settings → Theme offers
+                 them, for the run alone: the settings file is never written
+  --accent       (a scripted window) every window's accent this colour, #RRGGBB (the # may be
+                 left off), as Settings → Theme → Accent sets it, for the run alone: the
+                 settings file is never written
+  --note-color   (a scripted window) the piano roll's notes and their velocity stems this
+                 colour, #RRGGBB, as Settings → Theme → Piano roll notes sets it, for the run
+                 alone: the settings file is never written
+  --roll-scale   (a scripted window) the piano roll's scale at start, as its Scale chooser
+                 chooses it: its name, a hyphen for each space (minor-pentatonic), or off
   --quit-after   (a scripted window) close the window this many milliseconds after start
   --midi-ports   list these MIDI input ports, comma-separated, or none, in place of the
                  system's, and connect nothing (a headless check)
@@ -120,6 +149,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --dump-params  write the parameter window --open-plugin or --open-params opens to a file: its
                  title, then each row's name, a tab and its value's text (a headless check)
   --play         start playing at start (a headless check)
+  --play-roll    play the piano roll's channel of its pattern at start, as the roll's Play
+                 does (a headless check)
   --list-instruments  print the instrument sets and shipped folders of sounds the Library
                  finds, a line each, and open no window (a headless check of an install)
   --list-help    print the folder the Help window reads its pictures from, then each picture
@@ -155,7 +186,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --show         show the export dialog (export), the Edit menu (edit-menu) or the Help
                  window on its first section (help), or on section n (help:n), at start (a
                  headless check)
-  --settings-page  the Settings window's page at start: general or keys (a headless check)
+  --settings-page  the Settings window's page at start: general, keys or theme (a headless
+                 check)
   --callouts     on: show the first-run notes not yet put away (a scripted run hides them);
                  off: hide them
   --scroll       end: the views that scroll along time start scrolled to their bar's end (a
@@ -350,15 +382,15 @@ fn take_choice<T>(
     Ok(Some(chosen))
 }
 
-/// Takes `--settings-page general|keys` out of `raw`: the Settings window's page a scripted run
-/// opens on (with `--panels settings`, which opens the window, for its screenshot).
+/// Takes `--settings-page general|keys|theme` out of `raw`: the Settings window's page a
+/// scripted run opens on (with `--panels settings`, which opens the window, for its screenshot).
 pub fn take_settings_page(
     raw: &mut Vec<String>,
 ) -> Result<Option<crate::ui::settings_layout::SettingsPage>, ArgsError> {
     take_choice(
         raw,
         "--settings-page",
-        "general or keys",
+        "general, keys or theme",
         crate::ui::settings_layout::SettingsPage::from_name,
     )
 }
@@ -536,6 +568,9 @@ pub struct Args {
     pub project: Option<PathBuf>,
     /// Initial window size in logical pixels.
     pub window_size: Size,
+    /// Where the main window opens (`--window-position`), its top-left corner in the desktop's
+    /// logical pixels; the window system's choice when none.
+    pub window_position: Option<Point>,
     /// The panels open at start.
     pub panels: Panels,
     /// The rate to open the audio device at, instead of the project's.
@@ -586,7 +621,10 @@ pub enum ArgsError {
         expected: &'static str,
         value: String,
     },
-    #[error("--screenshot and --screenshot-after go together (and --screenshot-every with them)")]
+    #[error(
+        "--screenshot and --screenshot-after go together (and --screenshot-every and \
+         --dump-layout with them)"
+    )]
     IncompleteScreenshot,
     #[error("--quit-after ({quit} ms) must be later than --screenshot-after ({shot} ms)")]
     QuitBeforeScreenshot { quit: u128, shot: u128 },
@@ -625,6 +663,7 @@ impl Args {
         let mut args = args.into_iter();
         let mut project = None;
         let mut window_size = None;
+        let mut window_position = None;
         let mut screenshot_path = None;
         let mut screenshot_after = None;
         let mut quit_after = None;
@@ -654,14 +693,22 @@ impl Args {
         let mut midi_out_ports = None;
         let mut midi_out_log = None;
         let mut play = None;
+        let mut play_roll = None;
         let mut stats = None;
         let mut null_output = None;
         let mut rehearse = None;
         let mut screenshot_every = None;
+        let mut zoom = None;
+        let mut theme = None;
+        let mut accent = None;
+        let mut note_color = None;
+        let mut roll_scale = None;
+        let mut dump_layout = None;
         while let Some(flag) = args.next() {
             let switch = match flag.as_str() {
                 "--song" => Some(&mut song),
                 "--play" => Some(&mut play),
+                "--play-roll" => Some(&mut play_roll),
                 "--stats" => Some(&mut stats),
                 "--null-output" => Some(&mut null_output),
                 _ => None,
@@ -681,6 +728,9 @@ impl Args {
             match flag.as_str() {
                 "--load" => set(&mut project, &flag, PathBuf::from(value?))?,
                 "--window-size" => set(&mut window_size, &flag, parse_size(&flag, value?)?)?,
+                "--window-position" => {
+                    set(&mut window_position, &flag, parse_position(&flag, value?)?)?;
+                }
                 "--screenshot" => set(&mut screenshot_path, &flag, PathBuf::from(value?))?,
                 "--screenshot-after" => {
                     set(&mut screenshot_after, &flag, parse_millis(&flag, value?)?)?;
@@ -690,6 +740,12 @@ impl Args {
                     set(&mut screenshot_every, &flag, parse_millis(&flag, value?)?)?;
                 }
                 "--rehearse" => set(&mut rehearse, &flag, PathBuf::from(value?))?,
+                "--zoom" => set(&mut zoom, &flag, parse_zoom(&flag, value?)?)?,
+                "--theme" => set(&mut theme, &flag, parse_theme(&flag, value?)?)?,
+                "--accent" => set(&mut accent, &flag, parse_color(&flag, value?)?)?,
+                "--note-color" => set(&mut note_color, &flag, parse_color(&flag, value?)?)?,
+                "--roll-scale" => set(&mut roll_scale, &flag, parse_scale(&flag, value?)?)?,
+                "--dump-layout" => set(&mut dump_layout, &flag, PathBuf::from(value?))?,
                 "--play-to" => set(&mut play_to, &flag, PathBuf::from(value?))?,
                 "--bars" => set(&mut bars, &flag, parse_bars(&flag, value?)?)?,
                 "--panels" => set(&mut panels, &flag, parse_panels(&flag, value?)?)?,
@@ -731,7 +787,7 @@ impl Args {
             (None, None) => None,
             _ => return Err(ArgsError::IncompleteScreenshot),
         };
-        if screenshot.is_none() && screenshot_every.is_some() {
+        if screenshot.is_none() && (screenshot_every.is_some() || dump_layout.is_some()) {
             return Err(ArgsError::IncompleteScreenshot);
         }
         if let (Some(shot), Some(quit)) = (&screenshot, quit_after) {
@@ -760,6 +816,7 @@ impl Args {
             (Some(out), bars) => {
                 let window_flag = [
                     (window_size.is_some(), "--window-size"),
+                    (window_position.is_some(), "--window-position"),
                     (panels.is_some(), "--panels"),
                     (pop_out.is_some(), "--pop-out"),
                     (screenshot.is_some(), "--screenshot"),
@@ -773,9 +830,15 @@ impl Args {
                     (midi_ports.is_some(), "--midi-ports"),
                     (midi_out_ports.is_some(), "--midi-out-ports"),
                     (play.is_some(), "--play"),
+                    (play_roll.is_some(), "--play-roll"),
                     (stats.is_some(), "--stats"),
                     (null_output.is_some(), "--null-output"),
                     (rehearse.is_some(), "--rehearse"),
+                    (zoom.is_some(), "--zoom"),
+                    (theme.is_some(), "--theme"),
+                    (accent.is_some(), "--accent"),
+                    (note_color.is_some(), "--note-color"),
+                    (roll_scale.is_some(), "--roll-scale"),
                 ]
                 .into_iter()
                 .find_map(|(given, flag)| given.then_some(flag));
@@ -838,6 +901,7 @@ impl Args {
         Ok(Self {
             project,
             window_size: window_size.unwrap_or(DEFAULT_WINDOW_SIZE),
+            window_position,
             panels: popped_out(panels.unwrap_or_default(), pop_out.unwrap_or_default()),
             device_rate,
             stream_threshold,
@@ -856,8 +920,17 @@ impl Args {
                 open_params,
                 dump_params,
                 play: play.unwrap_or(false),
+                play_roll: play_roll.unwrap_or(false),
                 rehearse,
                 null_output: null_output.unwrap_or(false),
+                zoom,
+                theme,
+                accent,
+                note_color,
+                roll_scale,
+                dump_layout,
+                // Set by main once the run is known to be scripted.
+                settings_size: None,
             },
             play_to,
             plugins,
@@ -906,6 +979,23 @@ fn parse_size(flag: &str, value: String) -> Result<Size, ArgsError> {
         None => Err(bad_value(
             flag,
             "<width>x<height> in pixels, e.g. 1000x560",
+            value,
+        )),
+    }
+}
+
+/// `"3264,0"` → the point (3264, 0), in the desktop's logical pixels: whole numbers, either
+/// below 0 for a screen left of or over the first.
+fn parse_position(flag: &str, value: String) -> Result<Point, ArgsError> {
+    let coordinate = |text: &str| text.trim().parse::<i32>().ok();
+    let point = value
+        .split_once(',')
+        .and_then(|(x, y)| Some((coordinate(x)?, coordinate(y)?)));
+    match point {
+        Some((x, y)) => Ok(Point::new(x as f32, y as f32)),
+        None => Err(bad_value(
+            flag,
+            "<x>,<y> in the desktop's pixels, e.g. 3264,0",
             value,
         )),
     }
@@ -1043,6 +1133,45 @@ fn parse_bars(flag: &str, value: String) -> Result<NonZeroU32, ArgsError> {
         .map_err(|_| bad_value(flag, "a whole number of bars above 0", value))
 }
 
+/// A zoom on one of the stops ([`Zoom::exact`]): a scripted run asks for one exactly, so a typo
+/// (123, or 1.25 for 125) is refused rather than rounded.
+fn parse_zoom(flag: &str, value: String) -> Result<Zoom, ArgsError> {
+    value.parse().ok().and_then(Zoom::exact).ok_or_else(|| {
+        bad_value(
+            flag,
+            "a zoom in percent: 50 to 200 in tens, or 75, 125 or 175",
+            value,
+        )
+    })
+}
+
+/// A theme by its name, in any case ([`ThemeId::from_name`]); a name no theme has is refused.
+fn parse_theme(flag: &str, value: String) -> Result<ThemeId, ArgsError> {
+    ThemeId::from_name(&value).ok_or_else(|| {
+        bad_value(
+            flag,
+            "a theme: graphite, slate, gilt, garnet or fjord",
+            value,
+        )
+    })
+}
+
+/// A scale of the piano roll's by its name ([`ScaleMode::from_name`]); anything else is refused.
+fn parse_scale(flag: &str, value: String) -> Result<ScaleMode, ArgsError> {
+    ScaleMode::from_name(&value).ok_or_else(|| {
+        bad_value(
+            flag,
+            "a scale as the piano roll names it, a hyphen for each space (minor-pentatonic), or off",
+            value,
+        )
+    })
+}
+
+/// A colour as `#RRGGBB` ([`Rgb::parse`]); anything else is refused.
+fn parse_color(flag: &str, value: String) -> Result<Rgb, ArgsError> {
+    Rgb::parse(&value).ok_or_else(|| bad_value(flag, "a colour as #RRGGBB", value))
+}
+
 fn bad_value(flag: &str, expected: &'static str, value: String) -> ArgsError {
     ArgsError::BadValue {
         flag: flag.to_owned(),
@@ -1061,6 +1190,128 @@ mod tests {
 
     fn words(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()
+    }
+
+    // --zoom takes a stop of the Settings stepper, exactly (a typo is refused, not rounded),
+    // for a window's run, which it makes scripted; --dump-layout goes with --screenshot.
+    #[test]
+    fn a_scripted_zoom_is_one_of_the_stops_and_the_layout_goes_with_a_shot() {
+        let shot = "--screenshot z.png --screenshot-after 800";
+        let args = parse(&format!("--zoom 125 {shot} --dump-layout z.json")).expect("valid");
+        assert_eq!(args.script.zoom.map(Zoom::percent), Some(125));
+        assert_eq!(args.script.dump_layout, Some(PathBuf::from("z.json")));
+        assert_ne!(args.script, Script::default(), "a scripted run");
+        for refused in ["123", "1.25", "250", "40", "x", "-100"] {
+            assert!(
+                matches!(
+                    parse(&format!("--zoom {refused}")),
+                    Err(ArgsError::BadValue { .. })
+                ),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            parse("--dump-layout z.json"),
+            Err(ArgsError::IncompleteScreenshot)
+        );
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --zoom 150"),
+            Err(ArgsError::PlayToWithWindowFlag("--zoom"))
+        );
+    }
+
+    // --theme names one of the five themes, in any case, for a window's run, which it makes
+    // scripted; a name no theme has is refused, and a render to a file takes none.
+    #[test]
+    fn a_scripted_theme_is_one_of_the_five() {
+        for theme in ThemeId::ALL {
+            let args = parse(&format!("--theme {}", theme.name())).expect("valid");
+            assert_eq!(args.script.theme, Some(theme));
+        }
+        let args = parse("--theme Garnet").expect("valid");
+        assert_eq!(args.script.theme, Some(ThemeId::Garnet));
+        assert_ne!(args.script, Script::default(), "a scripted run");
+        let slate = parse("--theme Slate").expect("valid");
+        assert_eq!(slate.script.theme, Some(ThemeId::Slate));
+        assert!(matches!(
+            parse("--theme oak"),
+            Err(ArgsError::BadValue { .. })
+        ));
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --theme slate"),
+            Err(ArgsError::PlayToWithWindowFlag("--theme"))
+        );
+    }
+
+    // --accent takes a colour as #RRGGBB, in any case and the # optional, for a window's run,
+    // which it makes scripted; anything else (a name, three digits, seven) is refused, and a
+    // render to a file takes none.
+    #[test]
+    fn a_scripted_accent_is_a_hex_colour() {
+        let blue = Some(Rgb([0x3F, 0xA7, 0xD6]));
+        let args = parse("--accent #3FA7D6").expect("valid");
+        assert_eq!(args.script.accent, blue);
+        assert_ne!(args.script, Script::default(), "a scripted run");
+        assert_eq!(parse("--accent 3fa7d6").expect("valid").script.accent, blue);
+        for refused in ["blue", "#36D", "#3FA7D6F", "#3FA7DG", "+3FA7D6"] {
+            assert!(
+                matches!(
+                    parse(&format!("--accent {refused}")),
+                    Err(ArgsError::BadValue { .. })
+                ),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --accent #3FA7D6"),
+            Err(ArgsError::PlayToWithWindowFlag("--accent"))
+        );
+    }
+
+    // --note-color takes a colour as --accent does, beside it and apart from it, for a window's
+    // run; anything else is refused, and a render to a file takes none.
+    #[test]
+    fn a_scripted_note_colour_is_a_hex_colour() {
+        let args = parse("--note-color 6cc24a --accent #3FA7D6").expect("valid");
+        assert_eq!(args.script.note_color, Some(Rgb([0x6C, 0xC2, 0x4A])));
+        assert_eq!(args.script.accent, Some(Rgb([0x3F, 0xA7, 0xD6])));
+        assert!(matches!(
+            parse("--note-color green"),
+            Err(ArgsError::BadValue { .. })
+        ));
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --note-color #3FA7D6"),
+            Err(ArgsError::PlayToWithWindowFlag("--note-color"))
+        );
+    }
+
+    // --roll-scale names a scale as the roll's chooser does, a hyphen for each space, any case,
+    // or off; a name the chooser has not is refused, and a render to a file takes none.
+    #[test]
+    fn a_scripted_roll_scale_is_named_as_the_chooser_names_it() {
+        use crate::ui::scale::ScaleMode;
+        for (name, mode) in [
+            ("minor-pentatonic", ScaleMode::MinorPentatonic),
+            ("Harmonic-Minor", ScaleMode::HarmonicMinor),
+            ("blues", ScaleMode::Blues),
+            ("off", ScaleMode::Off),
+        ] {
+            let args = parse(&format!("--roll-scale {name}")).expect("valid");
+            assert_eq!(args.script.roll_scale, Some(mode), "{name}");
+        }
+        for refused in ["minor_pentatonic", "pentatonic", "scale-of"] {
+            assert!(
+                matches!(
+                    parse(&format!("--roll-scale {refused}")),
+                    Err(ArgsError::BadValue { .. })
+                ),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --roll-scale blues"),
+            Err(ArgsError::PlayToWithWindowFlag("--roll-scale"))
+        );
     }
 
     // The window's extra flags come out of the line, the rest stays for Args in its order; a
@@ -1146,7 +1397,7 @@ mod tests {
         );
     }
 
-    // P2: `--scroll end` comes out of the line; another value, a missing one and a repeat are
+    // `--scroll end` comes out of the line; another value, a missing one and a repeat are
     // refused.
     #[test]
     fn scroll_end_comes_out_of_the_line() {
@@ -1168,7 +1419,7 @@ mod tests {
         );
     }
 
-    // P4: `--drag-over channel:<id>` comes out of the line; a value that names no channel id is
+    // `--drag-over channel:<id>` comes out of the line; a value that names no channel id is
     // refused.
     #[test]
     fn drag_over_comes_out_of_the_line() {
@@ -1408,6 +1659,7 @@ mod tests {
             Args {
                 project: Some(PathBuf::from("tests/fixtures/f1_four_on_floor.json")),
                 window_size: Size::new(1000.0, 560.0),
+                window_position: None,
                 panels: Panels::default(),
                 device_rate: None,
                 stream_threshold: None,
@@ -1430,8 +1682,16 @@ mod tests {
                     open_params: None,
                     dump_params: None,
                     play: false,
+                    play_roll: false,
                     rehearse: None,
                     null_output: false,
+                    zoom: None,
+                    theme: None,
+                    accent: None,
+                    note_color: None,
+                    roll_scale: None,
+                    dump_layout: None,
+                    settings_size: None,
                 },
                 play_to: None,
                 plugins: PluginFlags::default(),
@@ -2001,6 +2261,40 @@ mod tests {
         }
     }
 
+    // --window-position: x,y whole desktop pixels, either below 0 (a screen left of or over the
+    // first); none by default; given twice or with --play-to, refused; anything else is a bad
+    // value.
+    #[test]
+    fn window_position_is_x_comma_y() {
+        let at = |line: &str| parse(line).expect("valid").window_position;
+        assert_eq!(
+            at("--window-position 3264,0"),
+            Some(Point::new(3264.0, 0.0))
+        );
+        assert_eq!(
+            at("--window-position -1920,40"),
+            Some(Point::new(-1920.0, 40.0))
+        );
+        assert_eq!(at(""), None);
+        for bad in ["3264", "3264x0", "a,b", "1.5,2", ",0", "0,"] {
+            assert!(
+                matches!(
+                    parse(&format!("--window-position {bad}")),
+                    Err(ArgsError::BadValue { .. })
+                ),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            parse("--window-position 0,0 --window-position 1,1"),
+            Err(ArgsError::Repeated("--window-position".into()))
+        );
+        assert_eq!(
+            parse("--load a.json --play-to a.wav --window-position 0,0"),
+            Err(ArgsError::PlayToWithWindowFlag("--window-position"))
+        );
+    }
+
     #[test]
     fn delays_are_positive_whole_milliseconds() {
         for bad in ["0", "-1", "1.5", "soon"] {
@@ -2066,7 +2360,7 @@ mod tests {
         assert!(parse("--quit-after 5").is_ok());
     }
 
-    // 6d K4: --callouts is on or off, once.
+    // --callouts is on or off, once.
     #[test]
     fn the_callouts_flag_is_on_or_off() {
         assert_eq!(take_callouts(&mut words("--callouts on")), Ok(Some(true)));
@@ -2078,19 +2372,23 @@ mod tests {
         );
     }
 
-    // 6d K3: --settings-page names the settings panel's page a scripted run opens on, once.
+    // --settings-page names the settings panel's page a scripted run opens on, once.
     #[test]
     fn the_settings_page_flag_names_a_page() {
         use crate::ui::settings_layout::SettingsPage;
         let mut line = words("--panels settings --settings-page keys");
         assert_eq!(take_settings_page(&mut line), Ok(Some(SettingsPage::Keys)));
         assert_eq!(line, words("--panels settings"));
+        assert_eq!(
+            take_settings_page(&mut words("--settings-page theme")),
+            Ok(Some(SettingsPage::Theme))
+        );
         assert_eq!(take_settings_page(&mut words("--load a.json")), Ok(None));
         assert_eq!(
             take_settings_page(&mut words("--settings-page audio")),
             Err(bad_value(
                 "--settings-page",
-                "general or keys",
+                "general, keys or theme",
                 "audio".to_owned()
             ))
         );

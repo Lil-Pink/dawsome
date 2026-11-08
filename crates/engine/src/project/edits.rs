@@ -367,7 +367,7 @@ mod tests {
         assert_eq!((more.ops.len(), more.source), (2, found.source));
     }
 
-    // The frame maps of the spec, by hand: crop [a, b) moves f < a to 0, a <= f < b to f - a and
+    // The frame maps, by hand: crop [a, b) moves f < a to 0, a <= f < b to f - a and
     // f >= b to b - a; delete [a, b) keeps f < a, moves a <= f < b to a and f >= b back by
     // b - a. A range past the end is cut to it.
     #[test]
