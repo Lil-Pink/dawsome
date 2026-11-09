@@ -5,12 +5,11 @@
 
 Dawsome is a free, open-source music making software for Linux and Windows. It's pattern focused: you build short loops in a step grid and a piano roll, drop them on a playlist to make a song, mix it, and export it. It's written in Rust, it's small, and it comes with its own instruments and a bundled synth, so you can start making a beat without missing a BEAT (bud-um-tiss).
 
-To be completely transparent, this was mainly agentically coded, human tested. I'd like to think the way I use agentic teams for building projects is different from most, but I'm sure that's what every agentic coder would like to think lol. But hey, it's free to use as you like.
-
+To be completely transparent, this was mainly agentically coded, human tested.
 
 Dawsome is not affiliated with Dawesome, the plugin company.
 
-## What you can actually do with it
+## What you can do with it
 
 Open it, drag a drum from the Library onto the rack, click some steps, and you have a beat. Double-click an instrument to play it from your computer keyboard (Tab is the sustain pedal) or a MIDI, and draw or record notes into the piano roll. Make a few patterns, switch to Song mode, lay them out on the playlist, make a song or two.
 
@@ -27,7 +26,7 @@ Some of the features that I think are kinda nice:
 - **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it loops. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
 - **Swing.** Each pattern gets its own swing knob at the top of the channel rack, from straight (50%) up to 75%, and it nudges every second 16th note late for that shuffle feel. What you hear is what you export, WAV, stems and MIDI files included. Quantize in the piano roll has a swing setting too, and it previews where your notes will land before you commit (the originals stay as faint ghosts until you hit Quantize).
 - **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go. Its slots also take a filter, distortion, chorus, flanger, phaser, gate and stereo width (thirteen built-in effects in all, counting the limiter on the master).
-- **A synth of my own.** Dawsome Synth sits at the top of the Library's plugins: two oscillators, unison, a filter with its own envelope, an LFO and glide, all as knobs in one window. It comes with eight presets to start from (leads, basses, a pad, a pluck and more), and you can save your own sounds and load them into any project.
+- **Native Synth Plugin.** Dawsome Synth sits at the top of the Library's plugins: two oscillators, unison, a filter with its own envelope, an LFO and glide, all as knobs in one window. It comes with eight presets to start from (leads, basses, a pad, a pluck and more), and you can save your own sounds and load them into any project.
 - **Plugins.** CLAP and VST3 instruments and effects both work, their windows open in Dawsome. Plugins without a window of their own get a generated one with every parameter automatable.
 - **Virtual instruments in the box.** A piano, electric piano, three basses, acoustic and electric guitar, organ, two pads, strings, marimba and two drum kits, all made by me or public domain (CC0), plus Surge XT as a bundled synth. Bring your own SFZ instruments and sample folders.
 - **Easy to use UI windows** - All UI windows are toggleable and adjustable. Creating an easy to use and easy to digest audio workstation. (Some of this UI is intended to cleaned up in the future, some small things bother me about it) 
@@ -47,19 +46,20 @@ The full reference, every panel and setting, is in [docs/manual.md](docs/manual.
 
 ## What's missing (and what's next)
 
-Compared to the paid DAWs, Dawsome still lacks: audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though macOS probably not and VST2 definitely not (Steinberg no longer licenses it to anyone).
+Compared to the paid DAWs, Dawsome still lacks: audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though probably not MacOS and definitely not VST2 (Steinberg no longer licenses it to anyone).
 
 Roughly in the order I plan to add these features:
 
-1. **UI Clean-up** Because I built the app in Linux and on a 4k monitor, I realize the UI is not uniform across OSs/monitors. Planning to tidy this up and make the UI in general easier on the eyes.
-2. **Sample chopping** and finer, precision sample editing.
-3. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.
-4. **Piano roll helpers.** Chord, arpeggiate, strum, and a preset browser for plugin patches.
-5. **Audio warping and tempo detection**, so a dropped loop follows the song on its own.
-6. **Time signatures other than 4/4.**
-7. **Take comping.**
-8. **A clip launcher** for playing live.
-9. **macOS**, if I get my hands on a Mac or receive outside help.
+
+
+1. **Time signatures other than 4/4.**
+2. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.
+3. **Piano roll helpers.** Chord, arpeggiate, strum, and a preset browser for plugin patches.
+4. **Audio warping and tempo detection**, so a dropped loop follows the song on its own.
+5. **Sample chopping** and finer, precision sample editing.
+6. **Take comping.**
+7. **A clip launcher** for playing live.
+8. **macOS**, if I get my hands on a Mac or receive outside help.
 
 `CONTRIBUTING.md` has the build and the one check command that runs everything. Effects would be nice first contributions (an effect is one type implementing one trait, and there are two Airwindows ports to copy from) and anything on the list above. If you find a bug, one line with what you did, what you expected, and what happened is plenty.
 
