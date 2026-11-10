@@ -11,7 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # The per-user cache folder the catalogue is kept in: XDG on Linux, AppData on Windows.
-dirs = "6"
+dirs = "7"
 
 [target.'cfg(unix)'.dependencies]
 # A scan child's process group, and keeping a scan child from dumping core.
@@ -20,7 +20,7 @@ libc = "0.2"
 # the line the toolkit already pulls in, so the tree keeps one. `xinput`: the raw key events a
 # plugin window's keys are heard by while the plugin's own window takes them (no new crate; the
 # app's winit enables it already).
-x11rb = { version = "0.13", features = ["xinput"] }
+x11rb = { version = "0.14", features = ["xinput"] }
 
 [target.'cfg(windows)'.dependencies]
 # The job object a scan child runs in (and finding its first thread to resume it), keeping a
