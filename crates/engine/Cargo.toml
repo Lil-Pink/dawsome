@@ -18,7 +18,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 # The known answers' numbers as their text (`RawValue`), so a test can read a 17-digit one with
 # std's correctly rounded parser: serde_json's own reads some an ulp off. Adds a type only; no
 # parse elsewhere changes.
