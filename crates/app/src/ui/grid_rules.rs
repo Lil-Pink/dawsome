@@ -10,7 +10,7 @@
 
 use std::ops::RangeInclusive;
 
-use dawsome_engine::time::{Ticks, BEATS_PER_BAR};
+use dawsome_engine::time::Ticks;
 use iced::alignment::Vertical;
 use iced::widget::canvas::{Frame, Text};
 use iced::{Point, Size};
@@ -97,9 +97,10 @@ pub fn line_alpha(apart: f32) -> f32 {
     ((apart - LINE_FADE_FROM) / LINE_FADE_SPAN).clamp(0.0, 1.0)
 }
 
-/// How strongly beat lines show at `px_per_bar`: [`line_alpha`] of a beat's width.
-pub fn beat_alpha(px_per_bar: f32) -> f32 {
-    line_alpha(px_per_bar / f32::from(BEATS_PER_BAR))
+/// How strongly beat lines show at `px_per_bar` in a bar of `beats` beats: [`line_alpha`] of a
+/// beat's width.
+pub fn beat_alpha(px_per_bar: f32, beats: u8) -> f32 {
+    line_alpha(px_per_bar / f32::from(beats.max(1)))
 }
 
 /// Whether bar `index` (from 0: bar 1) is shaded at `px_per_bar`: every other bar from bar 1
@@ -110,7 +111,7 @@ pub fn shaded(index: i64, px_per_bar: f32) -> bool {
 }
 
 /// The bars the shading alternates by at `px_per_bar`: one, or four far out.
-fn shade_group(px_per_bar: f32) -> i64 {
+pub fn shade_group(px_per_bar: f32) -> i64 {
     if px_per_bar < SHADE_FOURS_BELOW {
         BARS_PER_GROUP
     } else {
@@ -148,9 +149,11 @@ pub fn bar_lines(from: Ticks, to: Ticks, bar: Ticks) -> RangeInclusive<i64> {
 }
 
 /// The cell a scroll along time comes to rest on: a `beat` while beat lines are drawn at
-/// `px_per_bar` ([`beat_alpha`] above 0), else a `bar`; at least a tick.
+/// `px_per_bar` ([`beat_alpha`] above 0: a beat's width, `px_per_bar · beat / bar`, past where
+/// lines show), else a `bar`; at least a tick.
 pub fn cell(beat: Ticks, bar: Ticks, px_per_bar: f32) -> Ticks {
-    if beat_alpha(px_per_bar) > 0.0 {
+    let beat_px = px_per_bar * beat.0.max(1) as f32 / bar.0.max(1) as f32;
+    if line_alpha(beat_px) > 0.0 {
         Ticks(beat.0.max(1))
     } else {
         Ticks(bar.0.max(1))

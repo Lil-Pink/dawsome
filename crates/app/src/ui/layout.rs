@@ -13,6 +13,7 @@
 
 use std::sync::OnceLock;
 
+use dawsome_engine::time::TimeSignature;
 use iced::{Point, Rectangle, Size};
 
 use crate::ui::add_words;
@@ -68,6 +69,9 @@ pub fn bars_label_x() -> f32 {
 const BARS_DOWN: (f32, f32) = (30.0, 20.0);
 const BARS_COUNT: (f32, f32) = (50.0, 32.0);
 const BARS_UP: (f32, f32) = (82.0, 20.0);
+/// The pattern's own time signature, right of "+", when it has one: as wide as "24/16" at the
+/// numbers' size and its glass (the toolbar's readout is 41 px for the same).
+const SIGNATURE: (f32, f32) = (110.0, 41.0);
 
 /// Space between the rack's header and the first rack row.
 pub const RACK_PADDING_TOP: f32 = 8.0;
@@ -102,9 +106,15 @@ pub const VOLUME_KNOB_X: f32 = 182.0;
 pub const STEPS_X: f32 = 222.0;
 /// Distance from one step's left edge to the next within a group.
 pub const STEP_PITCH: f32 = 30.0;
-/// Extra space after every group of steps.
+/// Extra space after every group of steps (none when a group is one step).
 pub const GROUP_GAP: f32 = 6.0;
-pub const STEPS_PER_GROUP: u32 = 4;
+
+/// Steps in one of a rack row's groups: a beat of the time signature (4 for a quarter, 2 for an
+/// eighth, 1 for a 16th). The unlit steps' tones alternate by group, a beat line stands between
+/// groups, and a gap follows each group of more than one step.
+pub fn steps_per_group(signature: TimeSignature) -> u32 {
+    signature.steps_per_beat().max(1)
+}
 
 /// Thickness of the playhead mark along a step's top edge.
 pub const PLAYHEAD_EDGE: f32 = 2.0;
@@ -145,6 +155,11 @@ pub fn bars_count_rect() -> Rectangle {
 
 pub fn bars_up_rect() -> Rectangle {
     bars_rect(BARS_UP)
+}
+
+/// The pattern's own time signature's readout right of "+" (shown only when it has one).
+pub fn signature_rect() -> Rectangle {
+    bars_rect(SIGNATURE)
 }
 
 /// A control of the bars' group from its offset past the "Bars" label's start and its width.
@@ -200,6 +215,8 @@ fn header_rect((x, width): (f32, f32)) -> Rectangle {
 pub enum HeaderHit {
     BarsDown,
     BarsUp,
+    /// The pattern's own time signature's readout.
+    Signature,
     /// The swing's knob or its readout.
     Swing,
 }
@@ -209,6 +226,7 @@ pub fn header_hit_test(point: Point) -> Option<HeaderHit> {
     [
         (bars_down_rect(), HeaderHit::BarsDown),
         (bars_up_rect(), HeaderHit::BarsUp),
+        (signature_rect(), HeaderHit::Signature),
         (swing_rect(), HeaderHit::Swing),
     ]
     .into_iter()
@@ -234,14 +252,16 @@ pub fn row_at(y: f32, rows: usize) -> Option<usize> {
     (row < rows).then_some(row)
 }
 
-/// Left edge of `step`, counted across bars (bar 2 starts at step 16).
-pub fn step_left(step: u32) -> f32 {
-    STEPS_X + step as f32 * STEP_PITCH + (step / STEPS_PER_GROUP) as f32 * GROUP_GAP
+/// Left edge of `step` in groups of `group` steps ([`steps_per_group`]), counted across bars
+/// (in 4/4 bar 2 starts at step 16).
+pub fn step_left(step: u32, group: u32) -> f32 {
+    let gaps = if group > 1 { step / group } else { 0 };
+    STEPS_X + step as f32 * STEP_PITCH + gaps as f32 * GROUP_GAP
 }
 
-/// The step button for `step` in `row`, rack coordinates.
-pub fn step_rect(row: usize, step: u32) -> Rectangle {
-    control_rect(step_left(step), row, CONTROL_SIZE)
+/// The step button for `step` in `row`, in groups of `group` steps, rack coordinates.
+pub fn step_rect(row: usize, step: u32, group: u32) -> Rectangle {
+    control_rect(step_left(step, group), row, CONTROL_SIZE)
 }
 
 pub fn name_button_rect(row: usize) -> Rectangle {
@@ -281,9 +301,9 @@ fn control_rect(x: f32, row: usize, width: f32) -> Rectangle {
 /// well, [`crate::app`]'s rack hover), the add row among it. (A wide "+" row, 36 px, stood
 /// under the rows until the header's "+ Instrument…" made it a second way to one place; the
 /// button later came down into a row of its own.)
-pub fn rack_size(rows: usize, steps: u32) -> Size {
+pub fn rack_size(rows: usize, steps: u32, group: u32) -> Size {
     let width = match steps.checked_sub(1) {
-        Some(last) => step_left(last) + CONTROL_SIZE + RACK_PADDING_RIGHT,
+        Some(last) => step_left(last, group) + CONTROL_SIZE + RACK_PADDING_RIGHT,
         None => STEPS_X,
     };
     Size::new(width, row_top(rows) + ADD_ROW_HEIGHT)
@@ -327,8 +347,9 @@ impl RackHit {
     }
 }
 
-/// Finds the control under `point` (rack coordinates) in a rack of `rows` rows of `steps` steps.
-pub fn hit_test(point: Point, rows: usize, steps: u32) -> Option<RackHit> {
+/// Finds the control under `point` (rack coordinates) in a rack of `rows` rows of `steps` steps
+/// in groups of `group`.
+pub fn hit_test(point: Point, rows: usize, steps: u32, group: u32) -> Option<RackHit> {
     (0..rows).find_map(|row| {
         let top = row_top(row);
         if !(top..top + CONTROL_SIZE).contains(&point.y) {
@@ -344,7 +365,7 @@ pub fn hit_test(point: Point, rows: usize, steps: u32) -> Option<RackHit> {
             return Some(hit);
         }
         (0..steps)
-            .find(|&step| step_rect(row, step).contains(point))
+            .find(|&step| step_rect(row, step, group).contains(point))
             .map(|step| RackHit::Step { row, step })
     })
 }
@@ -376,17 +397,17 @@ mod tests {
             614.0, 644.0, 674.0, 704.0,
         ];
         for (step, &x) in (0..16).zip(&expected_x) {
-            let center = step_rect(0, step).center();
+            let center = step_rect(0, step, 4).center();
             assert_eq!(center, Point::new(x, 86.0 - TOOLBAR_HEIGHT), "step {step}");
         }
-        assert_eq!(step_rect(1, 0).center().y + TOOLBAR_HEIGHT, 124.0);
+        assert_eq!(step_rect(1, 0, 4).center().y + TOOLBAR_HEIGHT, 124.0);
         // Bar 2's first step continues the rule: 222 + 30·16 + 6·4 = 726.
-        assert_eq!(step_left(16), 726.0);
+        assert_eq!(step_left(16, 4), 726.0);
     }
 
     #[test]
     fn clicks_land_on_the_control_drawn_there() {
-        let at = |x, y| hit_test(Point::new(x, y), 2, 16);
+        let at = |x, y| hit_test(Point::new(x, y), 2, 16, 4);
         assert_eq!(at(236.0, 22.0), Some(RackHit::Step { row: 0, step: 0 }));
         assert_eq!(at(362.0, 22.0), Some(RackHit::Step { row: 0, step: 4 }));
         assert_eq!(at(704.0, 22.0), Some(RackHit::Step { row: 0, step: 15 }));
@@ -421,10 +442,13 @@ mod tests {
     // and 122 with the old 38 px "+" row).
     #[test]
     fn no_row_stands_under_the_last_row() {
-        assert_eq!(hit_test(Point::new(80.0, 22.0 + 2.0 * 38.0), 2, 16), None);
-        assert_eq!(hit_test(Point::new(80.0, 22.0), 0, 16), None);
-        assert_eq!(hit_test(Point::new(236.0, 98.0), 2, 16), None);
-        let heights = [0, 1, 2].map(|rows| rack_size(rows, 16).height);
+        assert_eq!(
+            hit_test(Point::new(80.0, 22.0 + 2.0 * 38.0), 2, 16, 4),
+            None
+        );
+        assert_eq!(hit_test(Point::new(80.0, 22.0), 0, 16, 4), None);
+        assert_eq!(hit_test(Point::new(236.0, 98.0), 2, 16, 4), None);
+        let heights = [0, 1, 2].map(|rows| rack_size(rows, 16, 4).height);
         assert_eq!(heights, [32.0, 70.0, 108.0]);
     }
 
@@ -455,7 +479,7 @@ mod tests {
         assert!(near(up.x, 358.952) && near(up.x + up.width, 378.952));
         assert!((up.y, up.height) == (2.0, 20.0));
         assert!(
-            up.x + up.width < step_left(16),
+            up.x + up.width < step_left(16, 4),
             "inside the rack's 16 steps"
         );
         let width = |words| crate::ui::text_fit::text_width(words, crate::ui::fonts::size::LABEL);
@@ -544,7 +568,7 @@ mod tests {
         let add = add_instrument_rect(2);
         assert!(near(add, (28.0, 84.0, 98.395)), "{add:?}");
         assert_eq!(add.x, NAME_BUTTON_X);
-        assert_eq!(hit_test(Point::new(60.0, 96.0), 2, 16), None);
+        assert_eq!(hit_test(Point::new(60.0, 96.0), 2, 16, 4), None);
         for (at, inside, what) in [
             (Point::new(60.0, 96.0), true, "the words"),
             (Point::new(29.0, 96.0), true, "1 px inside the left edge"),
@@ -564,11 +588,11 @@ mod tests {
     #[test]
     fn the_rows_start_under_the_toolbar_and_the_header() {
         assert_eq!(
-            rack_in_window(step_rect(0, 0).center()),
+            rack_in_window(step_rect(0, 0, 4).center()),
             Point::new(236.0, 110.0)
         );
         assert_eq!(
-            rack_in_window(step_rect(1, 15).center()),
+            rack_in_window(step_rect(1, 15, 4).center()),
             Point::new(704.0, 148.0)
         );
     }
@@ -594,11 +618,11 @@ mod tests {
     #[test]
     fn rack_size_covers_every_step_and_row() {
         assert_eq!(
-            rack_size(1, 16),
+            rack_size(1, 16, 4),
             Size::new(704.0 + 14.0 + 12.0, 46.0 + 24.0)
         );
         assert_eq!(
-            rack_size(0, 0),
+            rack_size(0, 0, 4),
             Size::new(STEPS_X, RACK_PADDING_TOP + ADD_ROW_HEIGHT)
         );
     }

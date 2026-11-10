@@ -862,24 +862,26 @@ fn a_synth_channel_saves_as_version_9_and_reads_back() {
 /// Why version 9: a build reads a file's version before anything else, and refuses one it does
 /// not know by its number, naming the versions it reads, whatever the file holds. So a build of
 /// version 8 refuses a synth project as "format_version 9 is not supported (this build reads
-/// versions 1, 2, 4, 5, 6, 7 and 8)". Shown here one version on: a kind no build knows, in a
-/// version this one does not know (10), is refused by that number, the message naming 9; the
-/// same kind in a version this one reads (9) fails on the kind, naming no version, which is what
-/// version 8 would have done with a synth project written as 8.
+/// versions 1, 2, 4, 5, 6, 7 and 8)". Shown here past this build's versions: a kind no build
+/// knows, in a version this one does not know (11: 10 is now the time signature's), is refused by
+/// that number, the message naming 9 and 10; the same kind in a version this one reads (9) fails
+/// on the kind, naming no version, which is what version 8 would have done with a synth project
+/// written as 8.
 #[test]
 fn an_older_build_refuses_a_synth_project_by_its_version() {
     let text = fs::read_to_string(fixtures().join("p33_sine.json")).expect("reads");
     let unknown = text.replacen(r#""kind":"synth""#, r#""kind":"theremin""#, 1);
     assert_ne!(unknown, text);
-    let newer = unknown.replacen(r#""format_version":9"#, r#""format_version":10"#, 1);
+    let newer = unknown.replacen(r#""format_version":9"#, r#""format_version":11"#, 1);
     let error = Project::load_json(&newer).expect_err("refused");
     assert!(
-        matches!(error, LoadError::UnsupportedVersion(10)),
+        matches!(error, LoadError::UnsupportedVersion(11)),
         "{error}"
     );
     assert_eq!(
         error.to_string(),
-        "format_version 10 is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8 and 9)"
+        "format_version 11 is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8, 9 \
+         and 10)"
     );
     let error = Project::load_json(&unknown).expect_err("refused");
     assert!(matches!(error, LoadError::Json(_)), "{error}");

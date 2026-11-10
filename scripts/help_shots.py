@@ -27,9 +27,11 @@ projects it names, this script, and the parts of the app every picture shows: th
 crates/app/assets/fonts/fonts.lock, the type scale in crates/app/src/ui/fonts.rs, and the
 colours, the themes' sets in
 crates/app/src/ui/palette.rs, Graphite's in every picture, and the content colours in
-crates/app/src/ui/style.rs) and of every picture. Why those: a font or colour change alters
-every picture, and the app's code is no source otherwise, so the check would stay green over
-stale pictures.
+crates/app/src/ui/style.rs; and locks/kit.lock, the kit commit whose sets are staged, which
+the Library's lists and counts show) and of every picture. Why those: a font or colour change
+alters every picture, and a kit change the Library's (its set count in screen.png and
+library-devices.png); the app's code and the kit are no source otherwise, so the check would
+stay green over stale pictures.
 
 `check` (standard library only) fails when a source or a picture differs from the lock (a
 source changed without a rerun, or a picture changed by hand), when a picture the lock names
@@ -54,6 +56,8 @@ SHOTS = SOURCE / "shots.json"
 LOCK = SOURCE / "shots.lock"
 GUIDE = HELP / "guide.md"
 SCRIPT = Path("scripts/help_shots.py")
+# The kit commit the staged sets come from: the Library's lists and counts show them.
+KIT = Path("locks/kit.lock")
 # The parts of the app every picture shows (see the module's documentation).
 APP_LOOK = [
     Path("crates/app/assets/fonts/fonts.lock"),
@@ -85,7 +89,7 @@ def load_list():
 
 def sources(shots):
     """Every file the pictures are made from, in a fixed order."""
-    files = [SHOTS, SCRIPT, *APP_LOOK]
+    files = [SHOTS, SCRIPT, *APP_LOOK, KIT]
     projects = sorted({shot["project"] for shot in shots["shots"].values()})
     files += [SOURCE / project for project in projects]
     return files

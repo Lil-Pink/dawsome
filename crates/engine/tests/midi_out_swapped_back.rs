@@ -189,6 +189,7 @@ fn pattern_and_back(latency_ms: i32) -> Rig {
         Pattern {
             name: "Pattern 2".into(),
             length_bars: 1,
+            time_signature: None,
             copied_from: None,
             swing_tenths: STRAIGHT_SWING,
             kind: PatternKind::Pattern,

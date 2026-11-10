@@ -14,7 +14,7 @@ use crate::project::{
     ProcessorOwner, EFFECT_SLOTS, MAX_INSERTS,
 };
 use crate::source::{ClipSource, SourceSlot};
-use crate::time::Ticks;
+use crate::time::{MeterMap, Ticks};
 use crate::transport::{ParamTarget, TempoSegment};
 
 /// What a plan plays. Playback state, like Play and Stop: it is never saved or undone.
@@ -51,6 +51,10 @@ pub enum PlayMode {
 pub struct PlayPlan {
     pub(crate) sample_rate: u32,
     pub(crate) ppq: u16,
+    /// The meter that plays: the song's map in song mode, the pattern's own signature (one
+    /// segment) while a pattern plays alone. The metronome's beats and bars, the count-in's
+    /// bar, and what processors are told of the bar. Built with the plan, on the UI thread.
+    pub(crate) meter: MeterMap,
     /// Channels in ID order (rack order).
     pub(crate) channels: Vec<ChannelPlan>,
     /// Patterns in ID order.
@@ -601,43 +605,16 @@ pub(crate) struct PatternPlan {
 /// the plan it was compiled for, and a later plan's channel table may differ.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NoteEvent {
+    /// Ticks from the start of the pattern.
     pub(crate) tick: Ticks,
     pub(crate) channel: ChannelId,
+    /// 0.0..=1.0, a linear gain.
     pub(crate) velocity: f32,
+    /// Playback speed of the note's sound: 1.0 at key 60, doubling every 12 keys up.
     pub(crate) speed: f64,
     pub(crate) key: u8,
-    /// 0 for a step hit.
-    pub(crate) length: Ticks,
-}
-
-impl NoteEvent {
-    /// Ticks from the start of the pattern.
-    pub fn tick(&self) -> Ticks {
-        self.tick
-    }
-
-    pub fn channel(&self) -> ChannelId {
-        self.channel
-    }
-
-    /// 0.0..=1.0, a linear gain.
-    pub fn velocity(&self) -> f32 {
-        self.velocity
-    }
-
-    /// Playback speed of the note's sound: 1.0 at key 60, doubling every 12 keys up.
-    pub fn speed(&self) -> f64 {
-        self.speed
-    }
-
-    pub fn key(&self) -> u8 {
-        self.key
-    }
-
     /// The note's length in ticks; 0 for a step hit.
-    pub fn length(&self) -> Ticks {
-        self.length
-    }
+    pub(crate) length: Ticks,
 }
 
 impl PlayPlan {
@@ -646,18 +623,9 @@ impl PlayPlan {
         self.sample_rate
     }
 
-    /// Ticks per beat.
+    /// Ticks per quarter note.
     pub fn ppq(&self) -> u16 {
         self.ppq
-    }
-
-    /// The compiled events of pattern `id`, sorted by tick. Plans compiled by one
-    /// [`crate::compile::Compiler`] share this list until an edit touches the pattern. Why
-    /// public: `tests/edits.rs` reads it to see that sharing, and an integration test cannot
-    /// reach the `pub(crate)` field `patterns`.
-    pub fn pattern_events(&self, id: PatternId) -> Option<&Arc<[NoteEvent]>> {
-        let index = self.patterns.binary_search_by_key(&id, |p| p.id).ok()?;
-        self.patterns.get(index).map(|pattern| &pattern.events)
     }
 
     pub(crate) fn channel(&self, id: ChannelId) -> Option<&ChannelPlan> {

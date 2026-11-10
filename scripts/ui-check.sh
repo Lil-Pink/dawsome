@@ -10,13 +10,14 @@
 #    are not; with the Library, the rack, the playlist and the mixer open (a first start's
 #    panels) those four are lit, its layout dumped and checked (tests/scripts/layout_bounds.py:
 #    at 560 px the stack scrolls 11 px, as ui::panels' first-start test works it out). Both at
-#    1024 px wide: at 1000 the panel buttons fold since File and Edit are as wide as Help.
+#    1080 px wide: the panel buttons show from 1049.292 px since the time signature stands
+#    beside the tempo (they showed from 1001.292, and these stages were 1024 px wide).
 # 1g. The toolbar on F1's shot (1000 px) and on the Library, the rack and the playlist at 1920 px
 #    (positions from crates/app/src/ui/toolbar.rs): inside each group's left edge and across
 #    each line between two groups, what is drawn runs from y 9 to y 55, the groups' one height.
 #    At 1920 px the groups stand left, packed (the same layout function lays them out).
 # 1h. The toolbar's panel icons keep their size at any width: 11 px across in 25 px buttons on
-#    F1's shot at 1024 px, at 1920 px and on F1's toolbar at 2560 px drawn offscreen with the
+#    F1's shot at 1080 px, at 1920 px and on F1's toolbar at 2560 px drawn offscreen with the
 #    software renderer (app::tests::toolbar_shots). Why offscreen: the app fits its window to
 #    its monitor, and this desk's side screens, where test windows open, are 1920 px wide; the
 #    same 2560 px shot is probed as in 1g too.
@@ -114,7 +115,9 @@
 #    forced.
 # 3. p4_two_clips, p4_loop and p4_loop_off with the playlist alone: probes clips, lanes, bar
 #    lines, bar numbers and the loop strip (positions from
-#    crates/app/src/ui/playlist_layout.rs, colors as gen_p4_expected.py prints them).
+#    crates/app/src/ui/playlist_layout.rs, colors as gen_p4_expected.py prints them); then
+#    p4_two_clips with two changes of signature (--signature-change): the ruler's flags and
+#    the lanes' bars of the meter map.
 # 4. p5_gain and p5_delay_sync with the mixer alone: probes fader caps, strip bodies, the
 #    selection outline, route buttons, meters, the delay's block (its name, its lit light) and
 #    the add tile (positions from crates/app/src/ui/mixer_layout.rs, colors of the mixer's
@@ -216,7 +219,8 @@
 #    the test module's View class opens its editor embedded in a window of ours, resizes it
 #    from inside its own call, is held by its constraint when the window is resized, is
 #    served by its frame's run loop, hears our focus as XEmbed's messages, closes on every
-#    way out and twenty times over leaves nothing; then the real plugins' editors
+#    way out and twenty times over leaves nothing, and is offered a key our window hears first
+#    (onKeyDown, onKeyUp), which then goes on to the app (W11); then the real plugins' editors
 #    (crates/host-vst3/tests/real_windows.rs: Surge XT's VST3, Dexed, JS80P, DPF's 3-Band EQ, LSP's
 #    Limiter Stereo, each skipped with a line when absent) open embedded, map inside ours within
 #    2 s, three times over, and the host goes with one open; and the app (W10) opens the View's
@@ -232,7 +236,19 @@
 #    `xdotool windowsize` asks) ends where the interface holds it (C4); then Surge XT's CLAP, when
 #    fetched (crates/host-clap/tests/real_windows.rs: the fetched copy, a temp HOME), dragged
 #    wider and taller that way, our window ending each time at the size of Surge's own window
-#    inside it. Each alone, as 17.
+#    inside it, and what of the keys reaches ours (JUCE's window takes them: a key sent from it
+#    stays Surge's, one sent to our window is ours; and on a nested X server the test starts,
+#    Xvfb or Xephyr, keys typed with Surge's window focused reach ours by their raw events while
+#    Surge's window still has them, Ctrl+A giving releases alone; skipped with a line without a
+#    nested server: keys are never typed on the desktop's display). Each alone, as 17. Then the
+#    typing keyboard through the app (crates/app/tests/plugin_window_keys.rs): the GUI file's
+#    interface opened from --open-plugin, keys sent to our window around it as the X server
+#    sends them, the notes the player starts and ends (--key-monitor) those the piano row's
+#    table gives (A 60, S 62, D 64), none for Ctrl+A, Esc, or with the keyboard off; a key from
+#    the interface's own window, which takes none, reaches ours; and on a nested X server, keys
+#    typed with the interface's window focused play once, by their key event and raw event
+#    both, then by the raw event alone (the test hearing the interface's keys, as JUCE does),
+#    none for Ctrl+A, Esc or with the keyboard off (skipped likewise).
 # 18. The parameter window, shot alone (--screenshot-window params) at its first
 #    size: p27_vst3_fx's VST3 test gain, which has no editor, opened by --open-plugin effect:1;
 #    its list written out (--dump-params) is its title, "<insert> slot <n> — <plugin>" from the
@@ -311,19 +327,33 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::f1_screenshot_lights_steps_1_5_9_13 --nocapture
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::t1_every_toolbar_group_fills_its_cell --nocapture
-# At 1000 px File, Edit and Help as wide as Help fold the panel buttons (they show from
-# 1001.292 px): their probes take F1 at 1024 px.
-shot="$out_dir/f1_1024.png"
+# At 1000 px the panel buttons fold (they show from 1049.292 px with the time signature beside
+# the tempo): their probes take F1 at 1080 px.
+shot="$out_dir/f1_1080.png"
 rm -f -- "$shot"
 # No device (--null-output): the probes' spread has no notices, and an output at another rate
 # than the project's puts one up (its resampling note), which folds the panel buttons here.
 cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/f1_four_on_floor.json \
-    --window-size 1024x560 --null-output --screenshot "$shot" --screenshot-after 800 \
+    --window-size 1080x560 --null-output --screenshot "$shot" --screenshot-after 800 \
     --quit-after 4000
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::ease::a1_the_open_panels_button_is_lit_and_the_others_are_not --nocapture
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::t3_the_panel_icons_keep_their_size --nocapture
+
+# F1 in 6/8 (--time-signature, which grows its bar to two of 288 ticks): the rack's 24 steps
+# in groups of two, a beat line between groups (probe::tests, gen_p34_expected.py's step grid),
+# and the toolbar's time signature reading "6/8" right of the tempo in its layout dump.
+shot="$out_dir/f1_6_8.png"
+dump="$out_dir/f1_6_8.json"
+rm -f -- "$shot" "$dump"
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/f1_four_on_floor.json \
+    --time-signature 6/8 --panels rack --window-size 1200x560 --screenshot "$shot" \
+    --screenshot-after 800 --quit-after 4000 --dump-layout "$dump"
+scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+scripts/python.sh -I tests/scripts/signature_readout.py "$dump" 6/8
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::tests::f1_in_6_8_draws_two_bars_of_twelve_steps_in_groups_of_two --nocapture
 
 shot="$out_dir/t1_toolbar_1920.png"
 rm -f -- "$shot"
@@ -349,9 +379,9 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 shot="$out_dir/a1_first_start_panels.png"
 dump="$out_dir/a1_first_start_panels.json"
 rm -f -- "$shot" "$dump"
-# No device, as the 1024 px shot above: the probe's spread has no notices.
+# No device, as the 1080 px shot above: the probe's spread has no notices.
 cargo run -q -p dawsome-app -- --theme graphite \
-    --panels browser,rack,playlist,mixer --window-size 1024x560 --null-output \
+    --panels browser,rack,playlist,mixer --window-size 1080x560 --null-output \
     --screenshot "$shot" --screenshot-after 800 --quit-after 4000 --dump-layout "$dump"
 scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
@@ -662,6 +692,22 @@ DAWSOME_UI_SHOT="$out_dir/p4_loop.png" cargo test -q -p dawsome-app -- --ignored
     probe::tests::p4_loop_screenshot_lights_the_loop_strip --nocapture
 DAWSOME_UI_SHOT="$out_dir/p4_loop_off.png" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::tests::p4_loop_off_screenshot_dims_the_loop_strip --nocapture
+
+# p4_two_clips with two changes of the song's time signature (--signature-change: 3/4 from
+# 768, 6/8 from 1344): their flags in the ruler's number band (an accent-toned pole and the
+# readouts' glass) and the lanes' bars of the meter map, 3/4 and 6/8 bars of 288 ticks
+# (probe::tests, gen_p35_expected.py's rule), its layout checked.
+shot="$out_dir/p4_two_changes.png"
+dump="$out_dir/p4_two_changes.json"
+rm -f -- "$shot" "$dump"
+cargo run -q -p dawsome-app -- --theme graphite \
+    --load tests/fixtures/p4_two_clips.json --panels playlist \
+    --signature-change 768:3/4 --signature-change 1344:6/8 \
+    --window-size 1000x560 --screenshot "$shot" --screenshot-after 800 --quit-after 4000 \
+    --dump-layout "$dump"
+scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::tests::p4_with_two_changes_flags_the_ruler_and_counts_their_bars --nocapture
 
 # A shot of mixer fixture $1 at $2, printing the renderer that drew it; further words are
 # environment assignments for the run.
@@ -1066,13 +1112,14 @@ if dump["zoom"] != int(sys.argv[2]):
     sys.exit("ui-check: the shot at " + sys.argv[2] + " % was drawn at " + str(dump["zoom"]) + " %")' \
         "$dump" "$zoom"
     scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+    scripts/python.sh -I tests/scripts/signature_readout.py "$dump" 4/4
 done
 
 # 23. The themes: 21's shot at 100 % again in each theme but Graphite (--theme graphite),
 # which every probe above runs in. A theme changes colours alone, so each shot's layout dump must
 # be 21's at 100 % byte for byte as well as pass its checks; five of the palette's colours are
 # probed against the theme's own. Then the synth window in Gilt, its console drawn in the
-# theme's green lacquer and gold: no pixel pinned, kept in the output dir to look at.
+# theme's chocolate lacquer and gold: no pixel pinned, kept in the output dir to look at.
 for theme in slate gilt garnet fjord; do
     shot="$out_dir/th1_$theme.png"
     dump="$out_dir/th1_$theme.json"
@@ -1182,7 +1229,8 @@ for test in w3_an_editor_opens_embedded_in_our_window w4_an_editor_resizes_its_w
     w5_a_users_resize_is_held_by_the_editors_constraint \
     w6_the_frames_run_loop_serves_the_editors_file_descriptors \
     w7_our_focus_reaches_the_editor_as_xembed_messages w8_an_editor_closes_on_every_way_out \
-    w9_twenty_editors_opened_and_closed_leave_nothing; do
+    w9_twenty_editors_opened_and_closed_leave_nothing \
+    w11_a_key_to_our_window_is_offered_to_the_editor_first; do
     rm -rf -- "$window_home"
     mkdir -p -- "$window_home"
     env "${toolchain[@]}" HOME="$window_home" cargo test -q -p dawsome-host-vst3 --test windows -- \
@@ -1201,9 +1249,17 @@ for test in c1_an_interface_opens_embedded_in_our_window c2_a_plugins_request_re
 done
 rm -rf -- "$window_home"
 mkdir -p -- "$window_home"
-env "${toolchain[@]}" HOME="$window_home" cargo test -q -p dawsome-host-clap --test real_windows -- \
-    --ignored --exact surge_xt_holds_our_window_to_its_interface --nocapture
-no_test_window_left "Surge XT's CLAP interface"
+for test in surge_xt_holds_our_window_to_its_interface \
+    surge_xt_hears_its_keys_itself_and_ours_only_reach_our_window \
+    surge_xt_keys_reach_us_while_its_window_has_the_focus; do
+    rm -rf -- "$window_home"
+    mkdir -p -- "$window_home"
+    env "${toolchain[@]}" HOME="$window_home" cargo test -q -p dawsome-host-clap --test real_windows -- \
+        --ignored --exact "$test" --nocapture
+    no_test_window_left "Surge XT's CLAP interface ($test)"
+done
+cargo test -q -p dawsome-app --test plugin_window_keys -- --ignored --nocapture
+no_test_window_left "the typing keyboard in a plugin window"
 # W10: the app opens the View's editor embedded from --open-plugin and quits with it open; the
 # sine, which has no editor, opens its parameter window. No audio device or MIDI port is opened.
 vst3_cache="$out_dir/p29_catalogue.json"

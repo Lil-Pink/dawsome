@@ -696,6 +696,45 @@ impl ProcessorHost for Vst3Host {
                         frame::user_resized(&view, &frame, (width, height), Instant::now());
                     }
                 }
+                WindowEvent::Key {
+                    scancode,
+                    pressed,
+                    repeat,
+                    plugin_focused,
+                    ..
+                } => {
+                    // A key that came to our window alone is offered to the editor first (its
+                    // own window had the focus otherwise, and the key already); a press it uses
+                    // is its own and plays nothing. Every release goes on, so no note sticks.
+                    let typed = if plugin_focused {
+                        None
+                    } else {
+                        self.inner
+                            .display
+                            .borrow()
+                            .as_ref()
+                            .and_then(|display| display.typed(scancode))
+                    };
+                    let view = instance.editor.borrow().as_ref().and_then(OpenView::parts);
+                    let used = match (typed, view) {
+                        (Some(typed), Some((view, _))) => view::offer_key(&view, typed, pressed),
+                        _ => false,
+                    };
+                    if !(used && pressed) {
+                        notices.push(HostNotice {
+                            owner: instance.owner,
+                            kind: NoticeKind::Key {
+                                scancode,
+                                pressed,
+                                repeat,
+                            },
+                        });
+                    }
+                }
+                WindowEvent::KeysLost(_) => notices.push(HostNotice {
+                    owner: instance.owner,
+                    kind: NoticeKind::KeysLost,
+                }),
             }
         }
         let modules: Vec<Arc<Module>> = self.inner.modules.borrow().values().cloned().collect();

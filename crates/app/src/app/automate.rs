@@ -12,13 +12,12 @@ use dawsome_engine::edit::Edit;
 use dawsome_engine::project::{
     AutomationPoint, AutomationTarget, ProcessorOwner, Project, TrackId,
 };
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::{MeterUnit, Ticks};
 use iced::widget::{column, pin};
 use iced::{Element, Point};
 
 use super::{App, Message};
 use crate::ui::menu;
-use crate::ui::note_gesture::snap_down;
 use crate::ui::panels::Panel;
 
 /// How long a new automation clip is, and where its second point sits: four bars.
@@ -166,8 +165,13 @@ impl App {
             .tracks
             .keys()
             .position(|&track| track == clip.track);
-        let bar = time::bars_to_ticks(1, project.ppq);
-        self.arranger.grid.scroll = Ticks(snap_down(clip.start, bar).0.max(0));
+        self.arranger.grid.scroll = Ticks(
+            project
+                .meter_map()
+                .snap_down(clip.start, MeterUnit::Bar)
+                .0
+                .max(0),
+        );
         if let Some(index) = index {
             self.arranger.grid.top = index;
         }
@@ -268,9 +272,11 @@ pub(super) fn new_automation_clip(
     value: f32,
     marker: Ticks,
 ) -> Edit {
-    let ppq = project.ppq;
-    let length = time::bars_to_ticks(NEW_CLIP_BARS, ppq);
-    let start = Ticks(snap_down(marker, time::bars_to_ticks(1, ppq)).0.max(0));
+    // Four bars of the song's meter from the bar the marker is in, across any change.
+    let meter = project.meter_map();
+    let first = meter.bar_at(marker.max(Ticks(0)));
+    let start = first.start;
+    let length = Ticks(meter.bar_start(first.bar + i64::from(NEW_CLIP_BARS)).0 - start.0);
     let (track, add_track) = match free_track_below_clips(project) {
         Some(track) => (track, None),
         None => {

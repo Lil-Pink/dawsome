@@ -19,7 +19,7 @@ use dawsome_engine::project::{
     ChannelId, Effect, EffectId, InsertId, Note, PatternId, ProcessorOwner, ProcessorRef, Project,
 };
 use dawsome_engine::realtime::{self, Player, RealtimeLink};
-use dawsome_engine::time::{MilliBpm, Ticks};
+use dawsome_engine::time::{MilliBpm, Ticks, TimeSignature};
 use dawsome_engine::transport::{Control, ParamTarget};
 use dawsome_host_common::catalogue::{self, Catalogue, FileRecord, FileStatus, PluginFormat};
 use dawsome_host_vst3::{scan, Vst3Host};
@@ -603,6 +603,168 @@ fn the_latency_and_the_transport_a_plugin_is_given_are_reported() {
         (beats - number("beats")).abs() < 1e-15,
         "the generator's beats"
     );
+}
+
+// Known answers 9 of gen_p34_expected.py (p34_expected.json's "transport"): played from a
+// seek to each case's tick in each case's signature, the Latency class reports the bar the
+// block's first tick is in, in quarter notes (bar number times beats·4/unit: 5.0 at tick 480 in
+// 5/4, 3.0 in 6/8 and 3/4, 3.5 in 7/8, 3.75 in 15/16, 11.25 at 1080 in 15/16), the position in
+// quarter notes, and the signature's numerator and denominator (parameters 17 and 18), each
+// divided by 2^24.
+#[test]
+fn the_bar_and_the_signature_a_plugin_is_given_follow_the_project() {
+    let p34: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/p34_expected.json"))
+            .expect("p34_expected.json parses");
+    let expected = expected();
+    let divisor = expected["transport"]["divisor"].as_f64().expect("divisor");
+    for case in p34["transport"].as_array().expect("cases") {
+        let beats = case["signature"][0].as_u64().expect("beats") as u8;
+        let unit = case["signature"][1].as_u64().expect("unit") as u8;
+        let tick = case["tick"].as_i64().expect("a tick");
+        let mut project = project_with(None);
+        project.time_signature = TimeSignature::new(beats, unit).expect("a signature");
+        // Eight bars, so every case's tick lies inside the looping pattern.
+        project
+            .patterns
+            .get_mut(&PatternId(1))
+            .expect("pattern 1")
+            .length_bars = 8;
+        let mut late = effect(&expected, "gain_0.5", "latency", 1, 0);
+        late.processor.state = None;
+        project.mixer.inserts[usize::from(InsertId::MASTER.0)]
+            .effects
+            .push(late);
+        project.mixer.next_effect_id = EffectId(2);
+        project.validate().expect("valid");
+        let (host, _compiler, mut link, mut player) = playing(&project, false);
+        link.send(Control::Seek(Ticks(tick))).expect("room");
+        link.send(Control::Play).expect("room");
+        play(&mut player, 1, 64);
+        assert!(host.tick().is_empty(), "read-only values mark nothing");
+        let owner = ProcessorOwner::Effect(EffectId(1));
+        let number = |key: &str| case[key].as_f64().expect(key);
+        // The quarter notes from the tick (the JSON reader may be a unit in the last place off
+        // a decimal fraction such as 479/96); the bar starts are whole or binary fractions.
+        let quarters = tick as f64 / 96.0;
+        assert!((quarters - number("quarters")).abs() < 1e-15);
+        for (id, key, want) in [
+            (11, "quarters", quarters),
+            (12, "bar start", number("bar_start")),
+            (17, "numerator", f64::from(beats)),
+            (18, "denominator", f64::from(unit)),
+        ] {
+            assert_eq!(
+                host.value(owner, id),
+                Some(want / divisor),
+                "{beats}/{unit} at tick {tick}: {key} (parameter {id})"
+            );
+        }
+    }
+}
+
+// Known answers B 4 and C 6 of gen_p35_expected.py (p35_expected.json's "transport"): the bar a
+// plugin is given follows the meter that plays. Pattern 1 given 3/4 of its own and played alone,
+// tick 300 is in its bar 1, from 3.0 quarters; in song mode the song's 4/4 rules: bar 0, from
+// 0.0. Along the song's changes (3/4 from 768, 6/8 from 1344, 7/8 from 1920), each tick is in the
+// bar of its own meter, numbered on across the changes: 1100 in 3/4's bar 3 from 11.0, 1700 in
+// 6/8's bar 5 from 17.0, 2300 in 7/8's bar 7 from 23.5, 767 in 4/4's bar 1 from 4.0.
+#[test]
+fn the_bar_a_plugin_is_given_follows_the_meter_that_plays() {
+    let p35: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/p35_expected.json"))
+            .expect("p35_expected.json parses");
+    let expected = expected();
+    let divisor = expected["transport"]["divisor"].as_f64().expect("divisor");
+    let mut project = project_with(None);
+    let mut late = effect(&expected, "gain_0.5", "latency", 1, 0);
+    late.processor.state = None;
+    project.mixer.inserts[usize::from(InsertId::MASTER.0)]
+        .effects
+        .push(late);
+    project.mixer.next_effect_id = EffectId(2);
+    let pattern = project.patterns.get_mut(&PatternId(1)).expect("pattern 1");
+    pattern.length_bars = 8;
+    pattern.time_signature = TimeSignature::new(3, 4);
+    let track = *project.playlist.tracks.keys().next().expect("a track");
+    let clip = project.playlist.next_clip_id;
+    project.playlist.clips.insert(
+        clip,
+        dawsome_engine::project::Clip::of_pattern(PatternId(1), track, Ticks(0), Ticks(4000)),
+    );
+    project.playlist.next_clip_id = dawsome_engine::project::ClipId(clip.0 + 1);
+    let signature = |value: &Value| {
+        TimeSignature::new(
+            value[0].as_u64().expect("beats") as u8,
+            value[1].as_u64().expect("unit") as u8,
+        )
+        .expect("a signature")
+    };
+    project.signature_changes = p35["c"]["changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .map(|change| dawsome_engine::time::SignatureChange {
+            at: Ticks(change[0].as_i64().expect("a tick")),
+            signature: signature(&change[1]),
+        })
+        .collect();
+    project.validate().expect("valid");
+    let mut cases: Vec<(PlayMode, i64, [f64; 4])> = Vec::new();
+    for case in p35["b"]["transport"].as_array().expect("cases") {
+        let mode = match case["mode"].as_str() {
+            Some("song") => PlayMode::Song,
+            _ => PlayMode::Pattern(PatternId(1)),
+        };
+        let number = |key: &str| case[key].as_f64().expect(key);
+        let tick = case["tick"].as_i64().expect("a tick");
+        // The song's first 768 ticks are 4/4, as p35_pattern_34's song is.
+        cases.push((
+            mode,
+            tick,
+            [
+                number("bar_start"),
+                number("numerator"),
+                number("denominator"),
+                number("bar_number"),
+            ],
+        ));
+    }
+    for case in p35["c"]["transport"].as_array().expect("cases") {
+        let number = |at: usize| case[at].as_f64().expect("a number");
+        let tick = case[0].as_i64().expect("a tick");
+        cases.push((
+            PlayMode::Song,
+            tick,
+            [number(3), number(1), number(2), number(4)],
+        ));
+    }
+    for (mode, tick, [bar_start, numerator, denominator, _]) in cases {
+        let host = Vst3Host::new(catalogue());
+        let mut compiler = compiler(&host);
+        let silent = |_: &_| Ok::<_, Infallible>(SampleBuffer::from(vec![1.0]));
+        let update = compiler
+            .compile(&project, &Touched::default(), mode, silent)
+            .expect("compiles");
+        let (mut link, mut player) = realtime::link(update, project.tempo);
+        link.send(Control::Seek(Ticks(tick))).expect("room");
+        link.send(Control::Play).expect("room");
+        play(&mut player, 1, 64);
+        assert!(host.tick().is_empty(), "read-only values mark nothing");
+        let owner = ProcessorOwner::Effect(EffectId(1));
+        for (id, key, want) in [
+            (11, "quarters", tick as f64 / 96.0),
+            (12, "bar start", bar_start),
+            (17, "numerator", numerator),
+            (18, "denominator", denominator),
+        ] {
+            assert_eq!(
+                host.value(owner, id),
+                Some(want / divisor),
+                "{mode:?} at tick {tick}: {key} (parameter {id})"
+            );
+        }
+    }
 }
 
 // A plugin's output values out of a normalized value's range never reach its controller as they

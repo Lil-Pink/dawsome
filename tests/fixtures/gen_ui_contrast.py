@@ -43,10 +43,11 @@ Expected values come from these inputs and the WCAG formula, never from app code
   audio body    an audio clip's body, a token of each theme: AUDIO_BODY (crates/app/src/ui/
                 style.rs, 23332C), which every theme drew, in Graphite, Slate, Garnet and Fjord
                 (each reads it apart from its lanes by hue, not luminance: their rule fails, as
-                listed); a theme of [AUDIO_LIFTED], whose lanes are AUDIO_BODY's own green (Gilt:
-                1.06:1 on its raised band), takes AUDIO_BODY with its L* raised to the least whole
-                L* at which it reads 1.5:1 on the theme's raised band, its a* and b* kept (CIE
-                L*a*b* as for the white keys above)
+                listed); a theme of [AUDIO_LIFTED] takes AUDIO_BODY with its L* raised to the least
+                whole L* at which it reads 1.5:1 on the theme's raised band, its a* and b* kept
+                (CIE L*a*b* as for the white keys above). Gilt is lifted: its lanes were
+                AUDIO_BODY's own green (1.06:1) while it was gold on green; on its brown lanes,
+                where AUDIO_BODY reads 1.04:1, it keeps the lift and so meets the rule
 
   ui_contrast_expected.json  the rules, the colours, each theme's ratios and failing rules, the
                              text tiers, the unlit steps, the white keys and the audio body
@@ -77,9 +78,9 @@ THEMES = {
         "line_soft": "2F343B",
     },
     "gilt": {
-        "bg": "15241C", "panel": "1B2D23", "raised": "23382C", "hover": "2E4738",
-        "active": "395545", "text": "E9E2C8", "text_secondary": "9FA98F", "accent": "F2BE4C",
-        "line_strong": "8C7230", "line_soft": "2A3F33",
+        "bg": "251812", "panel": "2E201B", "raised": "382A24", "hover": "473832",
+        "active": "54453F", "text": "D7C1B3", "text_secondary": "B89E8D", "accent": "F4BC7F",
+        "line_strong": "9C7854", "line_soft": "3F312B",
     },
     "garnet": {
         "bg": "26161D", "panel": "301B25", "raised": "3B222E", "hover": "492E3A",
@@ -100,20 +101,20 @@ TEXT_TIERS = ("DCE0E5", "ACB2BA", "6B7179")
 # Graphite's unlit step tones before and after the shade down, which set the shares of L* each keeps.
 UNLIT_SHADE = (("4A4F57", "3A3E45"), ("34383E", "2A2E34"))
 # Each theme's unlit step tones before the shade down (Gilt's, Garnet's and Fjord's: the active band 2
-# lighter a channel, then the hover band); Slate's were designed darker, so it has none.
-UNLIT_BEFORE = {"graphite": ("4A4F57", "3A3E45"), "gilt": ("3B5747", "2E4738"),
+# lighter a channel, then the hover band; Gilt's 54453F + 2 = 564741 and 473832); Slate's were designed darker, so it has none.
+UNLIT_BEFORE = {"graphite": ("4A4F57", "3A3E45"), "gilt": ("564741", "473832"),
                 "garnet": ("5A3B49", "492E3A"), "fjord": ("2E5477", "1E4465")}
 UNLIT_DESIGNED = {"slate": ("34383E", "2A2E34")}
 
 # The design's white key a shade down: Graphite's before and after.
 KEY_SHADE = ("CFD3D8", "B4B9BF")
 # Each theme's white key as designed, before the shade.
-KEY_WHITES = {"graphite": "CFD3D8", "slate": "CFD3D8", "gilt": "E8DCB4", "garnet": "E8D6D2",
+KEY_WHITES = {"graphite": "CFD3D8", "slate": "CFD3D8", "gilt": "D7C1B3", "garnet": "E8D6D2",
               "fjord": "D1DCE2"}
 
 # The audio clip's body every theme drew (crates/app/src/ui/style.rs's AUDIO_BODY), the least
-# ratio it is held to on a theme's raised band, and the themes whose lanes all but swallow it,
-# which lift its L* to that ratio.
+# ratio it is held to on a theme's raised band, and the themes that lift its L* to that ratio
+# (Gilt: its lanes swallowed it while they were green, and it keeps the lift on brown ones).
 AUDIO_BODY = "23332C"
 AUDIO_LEAST = 1.5
 AUDIO_LIFTED = ("gilt",)

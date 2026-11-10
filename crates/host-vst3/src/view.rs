@@ -14,15 +14,16 @@ use std::cell::Ref;
 use std::ffi::c_void;
 
 use dawsome_engine::processor::HostError;
-use dawsome_host_common::window::{Display, WindowId};
+use dawsome_host_common::window::{Display, NamedKey, Typed, WindowId};
 #[cfg(windows)]
 use vst3::Steinberg::kPlatformTypeHWND;
 #[cfg(not(windows))]
 use vst3::Steinberg::kPlatformTypeX11EmbedWindowID;
+use vst3::Steinberg::VirtualKeyCodes_ as vkey;
 use vst3::Steinberg::Vst::{IEditController, IEditControllerTrait, ViewType};
 use vst3::Steinberg::{
-    kResultOk, kResultTrue, FIDString, IPlugView, IPlugViewContentScaleSupport,
-    IPlugViewContentScaleSupportTrait, IPlugViewTrait, ViewRect,
+    char16, int16, kResultOk, kResultTrue, FIDString, IPlugView, IPlugViewContentScaleSupport,
+    IPlugViewContentScaleSupportTrait, IPlugViewTrait, ViewRect, VirtualKeyCodes,
 };
 use vst3::{ComPtr, ComWrapper};
 
@@ -81,6 +82,50 @@ impl Drop for OpenView {
         }
         self.frame.window().close();
     }
+}
+
+/// A key as `IPlugView::onKeyDown` takes it (pluginterfaces/gui/iplugview.h): `key` the
+/// character it types, or 0 and `keyCode` one of keycodes.h's virtual key codes for a key that
+/// types none.
+pub(crate) fn vst3_key(typed: Typed) -> (char16, int16) {
+    let code = match typed {
+        Typed::Char(character) => return (u16::try_from(u32::from(character)).unwrap_or(0), 0),
+        Typed::Named(named) => match named {
+            NamedKey::Backspace => vkey::KEY_BACK,
+            NamedKey::Tab => vkey::KEY_TAB,
+            NamedKey::Enter => vkey::KEY_RETURN,
+            NamedKey::Escape => vkey::KEY_ESCAPE,
+            NamedKey::Delete => vkey::KEY_DELETE,
+            NamedKey::Insert => vkey::KEY_INSERT,
+            NamedKey::Home => vkey::KEY_HOME,
+            NamedKey::End => vkey::KEY_END,
+            NamedKey::PageUp => vkey::KEY_PAGEUP,
+            NamedKey::PageDown => vkey::KEY_PAGEDOWN,
+            NamedKey::Left => vkey::KEY_LEFT,
+            NamedKey::Up => vkey::KEY_UP,
+            NamedKey::Right => vkey::KEY_RIGHT,
+            NamedKey::Down => vkey::KEY_DOWN,
+            // KEY_F1 to KEY_F12 run on one after another.
+            NamedKey::F(n) => vkey::KEY_F1 + VirtualKeyCodes::from(n.clamp(1, 12) - 1),
+        },
+    };
+    (0, int16::try_from(code).unwrap_or(0))
+}
+
+/// Offers `view` a key that came to our window, not to the editor's own (the editor never had
+/// it): its `onKeyDown` (`pressed`) or `onKeyUp`, no modifier held (a chord's press never comes
+/// here). Whether the editor says it used the key (kResultTrue). Why: the SDK has the host hand
+/// keys on this way, and a key the editor uses is its own, not a note.
+pub(crate) fn offer_key(view: &ComPtr<IPlugView>, typed: Typed, pressed: bool) -> bool {
+    let (key, code) = vst3_key(typed);
+    let answer = if pressed {
+        // SAFETY: the view is live (our reference), called on the main thread.
+        unsafe { view.onKeyDown(key, code, 0) }
+    } else {
+        // SAFETY: as above.
+        unsafe { view.onKeyUp(key, code, 0) }
+    };
+    answer == kResultTrue
 }
 
 /// Tells `view` the scale our window is drawn at, once it is attached: the SDK's
@@ -179,4 +224,30 @@ pub(crate) fn open<'a>(
         opened.frame.size_window(settled);
     }
     Ok(Some(opened))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // pluginterfaces/base/keycodes.h's VirtualKeyCodes: KEY_BACK 1, KEY_TAB 2, KEY_RETURN 4,
+    // KEY_ESCAPE 6, KEY_LEFT 11, KEY_DELETE 22, KEY_F1 40 and KEY_F12 51, each with no character;
+    // a character key is its UTF-16 unit with no code ('a' 97, ';' 59, 'ä' 228); one past the
+    // 16 bits a char16 holds (U+1F3B9, a keyboard) has none to give.
+    #[test]
+    fn a_key_is_handed_on_by_its_character_or_its_virtual_code() {
+        let named = |key| vst3_key(Typed::Named(key));
+        assert_eq!(named(NamedKey::Backspace), (0, 1));
+        assert_eq!(named(NamedKey::Tab), (0, 2));
+        assert_eq!(named(NamedKey::Enter), (0, 4));
+        assert_eq!(named(NamedKey::Escape), (0, 6));
+        assert_eq!(named(NamedKey::Left), (0, 11));
+        assert_eq!(named(NamedKey::Delete), (0, 22));
+        assert_eq!(named(NamedKey::F(1)), (0, 40));
+        assert_eq!(named(NamedKey::F(12)), (0, 51));
+        assert_eq!(vst3_key(Typed::Char('a')), (97, 0));
+        assert_eq!(vst3_key(Typed::Char(';')), (59, 0));
+        assert_eq!(vst3_key(Typed::Char('\u{E4}')), (228, 0));
+        assert_eq!(vst3_key(Typed::Char('\u{1F3B9}')), (0, 0));
+    }
 }

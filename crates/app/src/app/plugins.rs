@@ -726,6 +726,12 @@ impl App {
                         .map_or_else(String::new, |r| r.display_name().to_owned());
                     self.notice = Some(format!("Plugin failed: {name}: {reason}"));
                 }
+                NoticeKind::Key {
+                    scancode,
+                    pressed,
+                    repeat,
+                } => self.plugin_key(scancode, pressed, repeat),
+                NoticeKind::KeysLost => self.plugin_keys_lost(),
             }
         }
         // A capture waits while its plugin's slider is still being dragged.
@@ -746,6 +752,11 @@ impl App {
         for owner in due {
             self.captures.remove(&owner);
             self.capture_now(owner, true);
+        }
+        // A --key-monitor run prints the player's notes as they start and end: read on this
+        // timer, which runs while a plugin window is open.
+        if self.host.key_monitor {
+            self.read_player_events();
         }
         self.poll_scan();
     }

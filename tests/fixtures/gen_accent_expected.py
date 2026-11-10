@@ -72,9 +72,9 @@ SQUARE_POINTS = [[38.0, 38.0], [122.0, 122.0], [80.0, 80.0], [59.0, 101.0], [0.0
 PROBE = "3FA7D6"
 
 PANEL = {"graphite": "2B2E33"}
-BG = {"graphite": "1F2125", "slate": "15171B", "gilt": "15241C", "garnet": "26161D",
+BG = {"graphite": "1F2125", "slate": "15171B", "gilt": "251812", "garnet": "26161D",
       "fjord": "092237"}
-THEME_ACCENT = {"slate": "F29A2E", "gilt": "F2BE4C", "garnet": "F0B39B", "fjord": "95DDEF"}
+THEME_ACCENT = {"slate": "F29A2E", "gilt": "F4BC7F", "garnet": "F0B39B", "fjord": "95DDEF"}
 LEAST = 3.0
 # Hand-picked greys either side of 3:1 on Graphite's panel.
 CONTRAST_PAIR = {"below": "767676", "above": "777777"}
@@ -83,7 +83,7 @@ CONTRAST_PAIR = {"below": "767676", "above": "777777"}
 TARGETS = ["Accent", "Piano roll notes"]
 # The piano roll's row tones as the design gives them (white keys', black keys'), each theme.
 ROLL_ROWS = {"graphite": ("34373D", "2D3035"), "slate": ("262A30", "1E2127"),
-             "gilt": ("23382C", "1D2F25"), "garnet": ("3B222E", "321D27"),
+             "gilt": ("382A24", "30221D"), "garnet": ("3B222E", "321D27"),
              "fjord": ("123652", "0F2D46")}
 # The channels' own colours, the same in every theme.
 CHANNELS = ["E5533D", "4DA3E0", "6CC24A", "D9B23A", "B06AD4", "3FC1B0", "E07AA8", "9AA0A8"]

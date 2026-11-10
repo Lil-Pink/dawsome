@@ -85,6 +85,21 @@ pub enum NoticeKind {
     Params,
     /// It failed in a way the user should hear about.
     Failed(String),
+    /// A key went down (`pressed`) or up while its window, or the plugin's interface inside it,
+    /// had the keyboard focus: `scancode` as the window system numbers the key's place (winit's
+    /// `PhysicalKeyExtScancode::from_scancode` reads it: on X11 the keycode less 8, on Windows
+    /// the scan code with 0xE000 added for an extended key), `repeat` when the system repeats a
+    /// key held down. Nothing is taken from the plugin for it. A press with Ctrl, Alt or the
+    /// logo key held never comes; every release does. Why: the app's typing keyboard plays on
+    /// while a plugin's window is in front, as it does in the app's own windows.
+    Key {
+        scancode: u32,
+        pressed: bool,
+        repeat: bool,
+    },
+    /// Its window, and everything inside it, lost the keyboard focus: a key held down now is let
+    /// go of in another window, which the app never hears of, so its typed notes end here.
+    KeysLost,
 }
 
 /// The host of one plugin format. Registered in a [`super::Registry`] under its format name;

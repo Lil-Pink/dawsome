@@ -27,12 +27,13 @@ pub struct PlayedNote {
 /// clip that is not a pattern clip plays none. Whether the clip plays at all (muted, or its
 /// track) is [`Project::clip_plays`]'s to say.
 pub fn clip_notes(project: &Project, clip: &Clip) -> Vec<PlayedNote> {
-    let Some(pattern) = clip.pattern().and_then(|id| project.patterns.get(&id)) else {
+    let Some((id, pattern)) = clip
+        .pattern()
+        .and_then(|id| Some((id, project.patterns.get(&id)?)))
+    else {
         return Vec::new();
     };
-    let length = time::bars_to_ticks(pattern.length_bars, project.ppq)
-        .0
-        .max(1);
+    let length = project.pattern_ticks(id).0.max(1);
     let step = time::step_to_ticks(1, project.ppq).0;
     let offset = clip.offset.0.rem_euclid(length);
     let end = clip.end().0;

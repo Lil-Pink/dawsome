@@ -5,7 +5,7 @@
 //! is written for it.
 
 use dawsome_engine::project::{ChannelId, ClipId, ClipItem, PatternId, Project};
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::Ticks;
 use iced::Task;
 
 use super::{App, Message, PlayMode};
@@ -114,12 +114,12 @@ impl App {
         else {
             return Task::none();
         };
-        let Some(length) = project.patterns.get(&pattern).map(|p| p.length_bars) else {
+        if !project.patterns.contains_key(&pattern) {
             return Task::none();
-        };
+        }
         // Where the clip starts in its pattern: a clip trimmed on the left starts past its
         // pattern's first notes.
-        let end = time::bars_to_ticks(length, project.ppq).0.max(1);
+        let end = project.pattern_ticks(pattern).0.max(1);
         let from = Ticks(offset.0.rem_euclid(end));
         let channel = first_channel_with_notes(project, pattern);
         if Some(pattern) != self.pattern {
@@ -201,6 +201,7 @@ mod tests {
             Pattern {
                 name: "Pattern 1".to_owned(),
                 length_bars: 1,
+                time_signature: None,
                 copied_from: None,
                 swing_tenths: STRAIGHT_SWING,
                 kind: PatternKind::Pattern,
@@ -214,6 +215,7 @@ mod tests {
         let pattern = Pattern {
             name: name.to_owned(),
             length_bars: 4,
+            time_signature: None,
             copied_from: None,
             swing_tenths: STRAIGHT_SWING,
             kind: PatternKind::Pattern,
@@ -428,6 +430,7 @@ mod tests {
         let verse = Pattern {
             name: "Verse".to_owned(),
             length_bars: 8,
+            time_signature: None,
             copied_from: None,
             swing_tenths: STRAIGHT_SWING,
             kind: PatternKind::Pattern,

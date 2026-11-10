@@ -915,6 +915,23 @@ impl ProcessorHost for ClapHost {
                 WindowEvent::Resized { width, height, .. } => {
                     self.user_resized(instance, window, (width, height), Instant::now());
                 }
+                WindowEvent::Key {
+                    scancode,
+                    pressed,
+                    repeat,
+                    ..
+                } => notices.push(HostNotice {
+                    owner: instance.owner,
+                    kind: NoticeKind::Key {
+                        scancode,
+                        pressed,
+                        repeat,
+                    },
+                }),
+                WindowEvent::KeysLost(_) => notices.push(HostNotice {
+                    owner: instance.owner,
+                    kind: NoticeKind::KeysLost,
+                }),
             }
         }
         let now = Instant::now();

@@ -349,7 +349,9 @@ impl Vst3Processor {
     }
 
     /// The transport for a block: tempo, playing, the song position in quarter notes and in
-    /// samples (at the tempo in force), the bar it is in, 4/4, and the output clock.
+    /// samples (at the tempo in force), the bar it is in and that bar's time signature (of the
+    /// meter that plays: the song's, or a pattern's own while it plays alone), and the output
+    /// clock.
     fn fill_context(&mut self, context: &ProcessContext<'_>) {
         let transport = context.transport;
         let beats = transport.song_tick.0 as f64 / f64::from(context.ppq);
@@ -370,10 +372,10 @@ impl Vst3Processor {
         ctx.projectTimeSamples = i64::try_from(at).unwrap_or(i64::MAX);
         ctx.continousTimeSamples = i64::try_from(transport.steady_time).unwrap_or(i64::MAX);
         ctx.projectTimeMusic = beats;
-        ctx.barPositionMusic = (beats / 4.0).floor() * 4.0;
+        ctx.barPositionMusic = context.bar_in_quarters().1;
         ctx.tempo = f64::from(context.tempo.0) / 1000.0;
-        ctx.timeSigNumerator = 4;
-        ctx.timeSigDenominator = 4;
+        ctx.timeSigNumerator = i32::from(context.bar.signature.beats());
+        ctx.timeSigDenominator = i32::from(context.bar.signature.unit());
     }
 
     /// One `process` call over `len` frames (0: a flush of values alone, with no buses); false

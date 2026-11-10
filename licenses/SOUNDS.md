@@ -39,7 +39,7 @@ states each file's SHA-256 and how it was made; the drums are the starter kit
 ## The instrument sets of dawsome-kit
 
 The dawsome-kit repository, installed with the programs, at the commit `locks/kit.lock` pins:
-`081b109502308476dc09bbf942bf0f37f25bdf48`. Its `MANIFEST.json` names the source, the license page
+`eec55c0dcc29f62a169873fcda999094eb9f3059`. Its `MANIFEST.json` names the source, the license page
 and the SHA-256 of every one of its files, and its `tools/check.py --manifest` holds the files
 to it. Files counts every file of a set: its sounds, its .sfz and its `set.json`.
 
@@ -51,7 +51,10 @@ to it. Files counts every file of a set: its sounds, its .sfz and its `set.json`
 | `drums-acoustic` | Acoustic Drums | Karoryfer Samples | Karoryfer Big Rusty Drums, stick hits, close and overhead microphones, at a pinned commit | 86 | CC0-1.0 | https://github.com/sfzinstruments/karoryfer.big-rusty-drums/blob/f07ce00df34a46b6b08375be56fe116cf15782bc/LICENSE |
 | `drums-electronic` | Electronic Drums | Sonic Pi contributors; each sound's Freesound uploader (listed in etc/samples/README.md) | Sonic Pi sample set (etc/samples), at a pinned commit of the dev branch | 39 | CC0-1.0 | https://github.com/sonic-pi-net/sonic-pi/blob/df6f17e4625b0451fa2af8accf2e1e641c7ad458/LICENSE.md |
 | `ep` | Electric Piano | Roberto, for FreePats, recorded from the Hexter synthesizer (the Yamaha DX7's 'E. Piano 1' patch) | FreePats FM Synthesized Piano #1, version 2019-09-16 (SFZ + FLAC) | 39 | CC0-1.0 | https://freepats.zenvoid.org/ElectricPiano/synthesized-piano.html |
-| `guitar-acoustic` | Acoustic Guitar | dawsome-kit, from Karoryfer Shinyguitar's recorded archtop (CC0, played by D. Smolken) and the kit's modelled steel string and body | dawsome-kit's acoustic guitar: Karoryfer Shinyguitar's recorded pluck driving a modelled steel string and body | 105 | CC0-1.0 | https://creativecommons.org/publicdomain/zero/1.0/ |
+| `ep-dreamy` | Dreamy EP | Dawsome | procedural / physically modelled synthesis, curated by ear | 96 | CC0-1.0 | https://creativecommons.org/publicdomain/zero/1.0/ |
+| `ep-reed` | Reed Piano | Dawsome | procedural / physically modelled synthesis, curated by ear | 96 | CC0-1.0 | https://creativecommons.org/publicdomain/zero/1.0/ |
+| `ep-turismo` | Turismo EP | Dawsome | procedural / physically modelled synthesis, curated by ear | 96 | CC0-1.0 | https://creativecommons.org/publicdomain/zero/1.0/ |
+| `guitar-acoustic` | Acoustic Guitar | Dawsome | a real pluck from Karoryfer Shinyguitar's recordings driving a modelled steel string and flat-top body | 105 | CC0-1.0 | https://creativecommons.org/publicdomain/zero/1.0/ |
 | `guitar-electric` | Electric Guitar | FreePats: a Fender electric guitar sampled direct, processed through an amplifier and effects rack | FreePats FSBS Electric Guitar Clean #1, version 2026-08-07, bridge pickup (SFZ + FLAC) | 33 | CC0-1.0 | https://freepats.zenvoid.org/ElectricGuitar/clean-electric-guitar.html |
 | `mallets` | Marimba | Versilian Studios LLC | Versilian Community Sample Library (VCSL), at a pinned commit | 32 | CC0-1.0 | https://github.com/sgossner/VCSL |
 | `one-shots` | One-shots and Loops | Sonic Pi contributors; each sound's Freesound uploader (listed in etc/samples/README.md) | Sonic Pi sample set (etc/samples), at a pinned commit of the dev branch | 35 | CC0-1.0 | https://github.com/sonic-pi-net/sonic-pi/blob/df6f17e4625b0451fa2af8accf2e1e641c7ad458/LICENSE.md |
@@ -60,6 +63,7 @@ to it. Files counts every file of a set: its sounds, its .sfz and its `set.json`
 | `pad-sweep` | Sweep Pad | FreePats, made with ZynAddSubFX / Yoshimi | FreePats Sweep Pad, version 2019-08-13 (SFZ + FLAC) | 15 | CC0-1.0 | https://freepats.zenvoid.org/Synthesizer/synth-pad.html |
 | `piano` | Upright Piano | FreePats: recorded by Gonzalo and Roberto, edited by Roberto | FreePats Upright Piano KW, version 2022-02-21 (SFZ + FLAC) | 68 | CC0-1.0 | https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html |
 | `strings` | Strings | Versilian Studios LLC (Sam Gossner) and Simon Dalzell | VS Chamber Orchestra 2: Community Edition (raw WAV), at a pinned commit | 36 | CC0-1.0 | https://versilian-studios.com/vsco-community/ |
+| `upright-knight` | Upright Knight | Dawsome | re-voiced from public-domain (CC0) VCSL Knight recordings with a pedal and variation layer of the kit's own | 93 | CC0-1.0 | https://creativecommons.org/publicdomain/zero/1.0/ |
 
 ## The bundled plugin: Surge XT
 

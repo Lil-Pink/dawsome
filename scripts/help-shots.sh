@@ -7,7 +7,8 @@
 # assets/instruments), cuts each picture out, draws its rings and arrows (Pillow) and writes
 # assets/help/*.png and assets/help/source/shots.lock, which scripts/check.sh holds the
 # pictures to. Run it after changing a shot, a source project, the
-# script, or a part of the app a picture shows; then look at the pictures.
+# script, the kit (locks/kit.lock), or a part of the app a picture shows; then look at the
+# pictures.
 # Needs a graphical session (Wayland or X11) and Python 3 with Pillow.
 # Usage: scripts/help-shots.sh
 set -euo pipefail

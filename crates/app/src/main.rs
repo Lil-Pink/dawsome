@@ -23,6 +23,8 @@ mod desktop;
 mod document;
 mod edit_names;
 mod executor;
+#[cfg(any(windows, test))]
+mod focus_guard;
 mod former_folders;
 mod headless;
 mod help;
@@ -55,7 +57,8 @@ use std::sync::Arc;
 
 use app::{App, Start};
 use args::{Args, PluginFlags};
-use dawsome_engine::project::ChannelId;
+use dawsome_engine::project::{ChannelId, PatternId};
+use dawsome_engine::time::Ticks;
 use dawsome_host_common::catalogue::PluginFormat;
 use dawsome_host_common::scan::ChildCommand;
 use dawsome_host_common::PluginSetup;
@@ -226,6 +229,27 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let time_signature = match args::take_time_signature(&mut raw) {
+        Ok(signature) => signature,
+        Err(error) => {
+            eprintln!("dawsome-app: {error}\n\n{}", args::USAGE);
+            return ExitCode::from(2);
+        }
+    };
+    let pattern_time_signature = match args::take_pattern_time_signature(&mut raw) {
+        Ok(signature) => signature,
+        Err(error) => {
+            eprintln!("dawsome-app: {error}\n\n{}", args::USAGE);
+            return ExitCode::from(2);
+        }
+    };
+    let signature_changes = match args::take_signature_changes(&mut raw) {
+        Ok(changes) => changes,
+        Err(error) => {
+            eprintln!("dawsome-app: {error}\n\n{}", args::USAGE);
+            return ExitCode::from(2);
+        }
+    };
     let scroll_to_end = match args::take_scroll(&mut raw) {
         Ok(at_end) => at_end,
         Err(error) => {
@@ -283,6 +307,7 @@ fn main() -> ExitCode {
         }
     };
     let drop_monitor = args::take_drop_monitor(&mut raw);
+    let key_monitor = args::take_key_monitor(&mut raw);
     let sample_editor = match args::take_sample_editor(&mut raw) {
         Ok(editor) => editor,
         Err(error) => {
@@ -318,6 +343,9 @@ fn main() -> ExitCode {
             || shown.is_some()
             || shot_window.is_some()
             || scroll_to_end
+            || time_signature.is_some()
+            || pattern_time_signature.is_some()
+            || !signature_changes.is_empty()
             || drag_over.is_some()
             || channel_menu.is_some()
             || select_clip.is_some()
@@ -326,13 +354,14 @@ fn main() -> ExitCode {
             || library_menu.is_some()
             || midi_monitor.is_some()
             || drop_monitor
+            || key_monitor
             || sample_editor.is_some())
     {
         eprintln!(
-            "dawsome-app: --open-adder, --hints, --show, --scroll, --drag-over, --channel-menu, \
+            "dawsome-app: --open-adder, --hints, --show, --scroll, --time-signature, --drag-over, --channel-menu, \
              --select-clip, --curve-menu, --slot-menu, --library-menu, --midi-monitor, \
-             --drop-monitor, --open-sample-editor and --screenshot-window are for the window, \
-             not --play-to\n\n{}",
+             --drop-monitor, --key-monitor, --open-sample-editor and --screenshot-window are for \
+             the window, not --play-to\n\n{}",
             args::USAGE
         );
         return ExitCode::from(2);
@@ -376,6 +405,9 @@ fn main() -> ExitCode {
         || extras.scripted()
         || shown.is_some()
         || scroll_to_end
+        || time_signature.is_some()
+        || pattern_time_signature.is_some()
+        || !signature_changes.is_empty()
         || drag_over.is_some()
         || channel_menu.is_some()
         || select_clip.is_some()
@@ -385,6 +417,7 @@ fn main() -> ExitCode {
         || library_preview.is_some()
         || midi_monitor.is_some()
         || drop_monitor
+        || key_monitor
         || sample_editor.is_some();
     // Before the first thread (the audio stream, the plugin hosts, the toolkit): on a Wayland
     // session the windows open on X11 through XWayland, so the pop-out windows can stay above
@@ -444,6 +477,7 @@ fn main() -> ExitCode {
         host.midi_monitor = true;
     }
     host.drop_monitor = drop_monitor;
+    host.key_monitor = key_monitor;
     // The output device the settings choose (what they keep for it and the name it was shown
     // by), read before the window, which reads them again.
     let saved = settings::Settings::load(host.settings_file.as_deref());
@@ -608,6 +642,15 @@ fn main() -> ExitCode {
             }
             if let Some(on) = callouts {
                 app.set_callouts(on);
+            }
+            if let Some(signature) = time_signature {
+                app.set_time_signature_at_start(signature);
+            }
+            if let Some((pattern, signature)) = pattern_time_signature {
+                app.set_pattern_time_signature_at_start(PatternId(pattern), signature);
+            }
+            for &(at, signature) in &signature_changes {
+                app.set_signature_change_at_start(Ticks(at), signature);
             }
             if scroll_to_end {
                 app.scroll_to_end();

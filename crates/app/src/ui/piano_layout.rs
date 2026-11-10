@@ -29,7 +29,7 @@
 //! row is y 216..228.
 
 use dawsome_engine::project::{Note, MAX_KEY};
-use dawsome_engine::time::{Ticks, BEATS_PER_BAR};
+use dawsome_engine::time::{Ticks, TimeSignature};
 use iced::{Point, Rectangle, Size};
 
 use crate::ui::grid_rules::{self, ZoomRange, NUMBER_BAND_HEIGHT};
@@ -66,6 +66,14 @@ pub const GLYPH_SWITCH_ICON: f32 = 12.0;
 /// name after the arrow and the padding, so it shows the arrow alone (no name's first letter
 /// and "…" fit), the root beside it and the hint and the menu saying the scale.
 pub const SCALE_FOLDED_WIDTH: f32 = 48.0;
+/// The Notes menu button's arrow: a small triangle pointing down, drawn in a [`MENU_ARROW`]
+/// square [`MENU_ARROW_GAP`] after the button's word (`toolbar::menu_arrow`). Why drawn and
+/// not a "▾" in the label: the bundled Inter has no U+25BE, so the toolkit drew it in whatever
+/// face the system falls back to, as wide as that face makes it (7.91 px on one Linux, over
+/// 8.7 on Windows), and the strip's width, its fold law and the roll window's least width
+/// came out different on each system.
+pub const MENU_ARROW: f32 = 8.0;
+pub const MENU_ARROW_GAP: f32 = 4.0;
 /// The ruler between the strip and the grid: the bar numbers, in a band as tall as the
 /// playlist's.
 pub const RULER_HEIGHT: f32 = NUMBER_BAND_HEIGHT;
@@ -182,6 +190,9 @@ pub struct View {
     pub zoom: f32,
     /// Ticks in one step (ppq / 4), at least 1.
     pub step: Ticks,
+    /// The project's time signature: its beats a bar and the steps a beat (4 for a quarter, 2
+    /// for an eighth, 1 for a 16th), which the beat and bar lines follow.
+    pub signature: TimeSignature,
     /// The keys with rows: every key unless folded.
     pub rows: Rows,
 }
@@ -196,13 +207,13 @@ impl View {
         self.px_per_step() * (self.bar().0 / self.step.0.max(1)) as f32
     }
 
-    /// Ticks in one beat and in one bar.
+    /// Ticks in one beat of the time signature (its steps a beat) and in one bar (its beats).
     pub fn beat(&self) -> Ticks {
-        Ticks(self.step.0 * 4)
+        Ticks(self.step.0 * i64::from(self.signature.steps_per_beat()))
     }
 
     pub fn bar(&self) -> Ticks {
-        Ticks(self.beat().0 * i64::from(BEATS_PER_BAR))
+        Ticks(self.beat().0 * i64::from(self.signature.beats()))
     }
 
     /// The lines between the bars, finest first: half steps, steps and beats, each as its ticks
@@ -223,7 +234,7 @@ impl View {
     /// How strongly the beat lines show at this zoom ([`grid_rules::beat_alpha`]); the ruler's
     /// beat ticks fade with them.
     pub fn beat_alpha(&self) -> f32 {
-        grid_rules::beat_alpha(self.px_per_bar())
+        grid_rules::beat_alpha(self.px_per_bar(), self.signature.beats())
     }
 
     /// The finest grid line, which follows the zoom (the snap Line): the finest of
@@ -636,6 +647,7 @@ mod tests {
             scroll: Ticks(0),
             zoom: ZOOM.default,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: crate::ui::piano_layout::Rows::ALL,
         }
     }

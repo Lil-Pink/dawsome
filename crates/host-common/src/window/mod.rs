@@ -6,6 +6,7 @@
 
 use std::sync::Mutex;
 
+mod keys;
 mod settle;
 #[cfg(windows)]
 mod win32;
@@ -14,6 +15,7 @@ mod x11;
 #[cfg(unix)]
 mod xembed;
 
+pub use keys::{NamedKey, Typed};
 pub use settle::{Settle, SETTLE_AFTER, SETTLE_TRIES};
 #[cfg(windows)]
 pub use win32::{pointer_in, Display, WindowHandle, WindowId, UNAVAILABLE};
@@ -52,13 +54,36 @@ pub enum WindowEvent {
         width: u32,
         height: u32,
     },
+    /// A key went down (`pressed`) or up while the window, or the plugin's interface inside it,
+    /// had the keyboard focus. `scancode` is the key's place as winit's
+    /// `PhysicalKeyExtScancode::from_scancode` takes it on this platform (X11: the keycode less
+    /// 8; Windows: the scan code, 0xE000 added for an extended key); `repeat`: a press the
+    /// system repeats while the key is held. `plugin_focused`: the plugin's own window had the
+    /// key itself and this is a copy (Windows: the keyboard hook, with the plugin's window
+    /// focused; X11: the key's raw event, a window of the plugin's having taken its key event);
+    /// false for a key that came to our window. A press with Ctrl, Alt or the logo key held is not
+    /// passed on (those chords are the plugin's shortcuts); every release is, so a note started
+    /// by a key never outlives it. Nothing is taken from the plugin: the key reaches it as before.
+    Key {
+        window: WindowId,
+        scancode: u32,
+        pressed: bool,
+        repeat: bool,
+        plugin_focused: bool,
+    },
+    /// The keyboard focus left the window and everything inside it: a key held down now is let
+    /// go of where no window of ours hears it.
+    KeysLost(WindowId),
 }
 
 impl WindowEvent {
     /// The window it happened to.
     pub fn window(self) -> WindowId {
         match self {
-            WindowEvent::Closed(window) | WindowEvent::Resized { window, .. } => window,
+            WindowEvent::Closed(window)
+            | WindowEvent::KeysLost(window)
+            | WindowEvent::Resized { window, .. }
+            | WindowEvent::Key { window, .. } => window,
         }
     }
 }

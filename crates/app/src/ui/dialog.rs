@@ -8,13 +8,13 @@ use dawsome_media::{BitDepth, Dither};
 use iced::alignment::Horizontal;
 use iced::widget::{
     button, column, container, mouse_area, opaque, pick_list, row, rule, scrollable, slider, space,
-    text, text_input,
+    text, text_input, Id,
 };
-use iced::{Center, Element, Fill, Padding};
+use iced::{Center, Element, Fill, Padding, Point};
 
 use crate::app::{
     Choice, ExportKind, ExportMessage, FileMessage, MediaMessage, Message, PatternMessage,
-    PlayMode, RecordMessage, TakeKind,
+    PlayMode, RecordMessage, SignatureMessage, TakeKind,
 };
 use crate::keys::{Action, Keys};
 use crate::play_to::RecordSource;
@@ -686,8 +686,8 @@ pub struct PatternMenu {
     pub can_delete: bool,
 }
 
-/// The pattern name's menu: Rename, and Delete (dim when it cannot delete). A press anywhere
-/// else closes it.
+/// The pattern name's menu: Rename, Delete (dim when it cannot delete) and Time signature…
+/// (the pattern's own, [`signature_menu`]). A press anywhere else closes it.
 pub fn pattern_menu<'a>(menu: PatternMenu) -> Element<'a, Message> {
     let pattern = |message| Message::Pattern(message);
     let list = column![
@@ -703,6 +703,12 @@ pub fn pattern_menu<'a>(menu: PatternMenu) -> Element<'a, Message> {
             menu.can_delete.then(|| pattern(PatternMessage::Delete)),
             !menu.can_delete
         ),
+        entry(
+            "Time signature\u{2026}".into(),
+            "",
+            Some(Message::Signature(SignatureMessage::ForPattern)),
+            false
+        ),
     ]
     .spacing(2);
     let panel = container(list).width(160).padding(6).style(style::dialog);
@@ -713,6 +719,88 @@ pub fn pattern_menu<'a>(menu: PatternMenu) -> Element<'a, Message> {
     iced::widget::stack![
         mouse_area(container(space()).width(Fill).height(Fill))
             .on_press(pattern(PatternMessage::CloseMenu)),
+        placed,
+    ]
+    .into()
+}
+
+/// A row of the time signature menu: a choice (ticked when it is the one in force), or a note
+/// that names what the menu is about.
+pub struct SignatureRow {
+    label: String,
+    message: Option<Message>,
+    ticked: bool,
+}
+
+impl SignatureRow {
+    /// A row a press acts on.
+    pub fn act(label: String, message: Message, ticked: bool) -> Self {
+        Self {
+            label,
+            message: Some(message),
+            ticked,
+        }
+    }
+
+    /// A row that only says something.
+    pub fn note(label: String) -> Self {
+        Self {
+            label,
+            message: None,
+            ticked: false,
+        }
+    }
+}
+
+/// What the time signature menu shows.
+pub struct SignatureMenuView {
+    /// Where it opens, window coordinates.
+    pub at: Point,
+    pub rows: Vec<SignatureRow>,
+    /// The typed box's text, while "Other…" has opened it.
+    pub typed: Option<String>,
+}
+
+/// The time signature menu: its rows, the one in force ticked, and under them the typed box
+/// "Other…" opens (Enter applies, a wrong one says why in the hint bar). A press anywhere else
+/// closes it.
+pub fn signature_menu<'a>(menu: SignatureMenuView) -> Element<'a, Message> {
+    let mut list = column![].spacing(2);
+    for row in menu.rows {
+        list = list.push(match row.message {
+            Some(message) => entry(
+                row.label,
+                if row.ticked { "\u{2713}" } else { "" },
+                Some(message),
+                false,
+            ),
+            None => container(
+                text(row.label)
+                    .size(size::LABEL)
+                    .color(style::palette().text_secondary),
+            )
+            .padding([4, 10])
+            .into(),
+        });
+    }
+    if let Some(typed) = menu.typed {
+        list = list.push(
+            text_input("3/4, 6/8 \u{2026}", &typed)
+                .id(Id::new(crate::app::SIGNATURE_MENU_INPUT))
+                .on_input(|typed| Message::Signature(SignatureMessage::Typed(typed)))
+                .on_submit(Message::Signature(SignatureMessage::Submitted))
+                .size(size::BODY)
+                .padding([4, 8]),
+        );
+    }
+    let panel = container(list).width(170).padding(6).style(style::dialog);
+    let placed = container(panel)
+        .width(Fill)
+        .height(Fill)
+        .padding(Padding::ZERO.top(menu.at.y).left(menu.at.x));
+    iced::widget::stack![
+        mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::Signature(SignatureMessage::Close)),
         placed,
     ]
     .into()

@@ -28,7 +28,6 @@ use dawsome_engine::project::{
     StretchMode, MAX_VOLUME,
 };
 use dawsome_engine::song::{self, PlayedNote};
-use dawsome_engine::time;
 
 use super::file_name_part;
 use super::zip::ZipWriter;
@@ -300,6 +299,9 @@ fn decimal32(value: f32) -> String {
     }
 }
 
+/// The id of the Transport's time signature, which the song's changes of signature automate.
+const TIME_SIGNATURE: &str = "time-signature";
+
 /// `numerator / denominator` as a double, as [`decimal`] writes it.
 fn ratio(numerator: u128, denominator: u128) -> String {
     decimal(numerator as f64 / denominator.max(1) as f64)
@@ -393,14 +395,16 @@ fn project_xml(project: &Project, contents: &Contents) -> String {
             ("value", ratio(u128::from(project.tempo.0), 1000)),
         ],
     );
-    // Dawsome's bars are four beats.
-    xml.empty(
-        "TimeSignature",
-        &[
-            ("numerator", "4".to_owned()),
-            ("denominator", "4".to_owned()),
-        ],
-    );
+    // With changes along the song, the Transport's signature (the first meter) is the parameter
+    // the TimeSignatureAutomation names; without, it is written as it always was.
+    let mut signature = vec![
+        ("numerator", project.time_signature.beats().to_string()),
+        ("denominator", project.time_signature.unit().to_string()),
+    ];
+    if !project.signature_changes.is_empty() {
+        signature.push(("id", TIME_SIGNATURE.to_owned()));
+    }
+    xml.empty("TimeSignature", &signature);
     xml.close("Transport");
     xml.open("Structure", &[]);
     for (&id, channel) in &project.channels {
@@ -501,6 +505,28 @@ fn project_xml(project: &Project, contents: &Contents) -> String {
             xml.close("Lanes");
         }
         xml.close("Lanes");
+    }
+    if !project.signature_changes.is_empty() {
+        xml.open(
+            "TimeSignatureAutomation",
+            &[("timeUnit", "beats".to_owned())],
+        );
+        xml.empty("Target", &[("parameter", TIME_SIGNATURE.to_owned())]);
+        let first = dawsome_engine::time::SignatureChange {
+            at: dawsome_engine::time::Ticks(0),
+            signature: project.time_signature,
+        };
+        for change in std::iter::once(&first).chain(&project.signature_changes) {
+            xml.empty(
+                "TimeSignaturePoint",
+                &[
+                    ("time", beats(change.at.0, project.ppq)),
+                    ("numerator", change.signature.beats().to_string()),
+                    ("denominator", change.signature.unit().to_string()),
+                ],
+            );
+        }
+        xml.close("TimeSignatureAutomation");
     }
     xml.close("Arrangement");
     xml.close("Project");
@@ -720,7 +746,7 @@ fn lines(project: &Project, contents: &Contents) -> Vec<String> {
     }
     let mut clips: Vec<(&ClipId, &Clip)> = project.playlist.clips.iter().collect();
     clips.sort_by_key(|(id, clip)| (clip.start, **id));
-    let bar = time::bars_to_ticks(1, project.ppq).0.max(1);
+    let meter = project.meter_map();
     for (_, clip) in clips {
         let ClipItem::Audio {
             channel,
@@ -738,7 +764,7 @@ fn lines(project: &Project, contents: &Contents) -> Vec<String> {
             .channels
             .get(&channel)
             .map_or("", |channel| channel.name.as_str());
-        let at = clip.start.0.div_euclid(bar) + 1;
+        let at = meter.bar_at(clip.start).bar + 1;
         if gain != 1.0 {
             lines.push(format!(
                 "{name} clip at bar {at}: gain {gain} is not carried"

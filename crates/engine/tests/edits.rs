@@ -1,26 +1,27 @@
-//! Known answers (a) to (c) of tests/fixtures/gen_p2_expected.py: edits, undo and redo checked byte
-//! for byte on the canonical JSON, and the incremental compiler sharing the event lists of
-//! untouched patterns. Expected values come from tests/fixtures/gen_p2_expected.py, never from the
-//! engine.
+//! Known answers (a) and (b) of tests/fixtures/gen_p2_expected.py: edits, undo and redo checked
+//! byte for byte on the canonical JSON. Expected values come from that script, never from the
+//! engine. Its (c), the incremental compiler sharing the event lists of untouched patterns, is
+//! in src/compile.rs's tests, with the checks that no playlist or mixer edit recompiles a pattern
+//! and the swing edit's set and undo with the events it swings: they read the plan's event
+//! lists, which only the crate itself can.
 //!
 //! Note edits as `ReplaceNotes` and `Transaction`, checked against the documents
 //! tests/fixtures/gen_p3_expected.py wrote.
 
 use std::collections::BTreeSet;
-use std::convert::Infallible;
-use std::path::Path;
-use std::sync::Arc;
 
-use dawsome_engine::compile::Compiler;
-use dawsome_engine::dsp::sampler::SampleBuffer;
 use dawsome_engine::edit::{self, copies, Edit, EditError, History, Touched};
-use dawsome_engine::plan::{NoteEvent, PlanUpdate, PlayMode};
 use dawsome_engine::project::{
     ChannelId, Clip, ClipId, ClipItem, EffectId, InsertId, LoopRange, Note, PatternId,
     ProcessorRef, Project, TrackId, ValidationError,
 };
 use dawsome_engine::time::{self, MilliBpm, Ticks};
 use sha2::{Digest, Sha256};
+
+#[path = "../../../tests/support/edit_lists.rs"]
+mod edit_lists;
+
+use edit_lists::{every_mixer_edit, every_playlist_edit, insert, pattern_clip, range};
 
 const F1: &str = include_str!("../../../tests/fixtures/f1_four_on_floor.json");
 const F2: &str = include_str!("../../../tests/fixtures/f2_tempo_140_48k.json");
@@ -457,70 +458,6 @@ fn a_channel_an_audio_clip_plays_cannot_be_removed() {
     assert_eq!(project, before);
 }
 
-fn events(update: &PlanUpdate, pattern: u32) -> &Arc<[NoteEvent]> {
-    update
-        .plan()
-        .pattern_events(PatternId(pattern))
-        .expect("pattern compiled")
-}
-
-fn ticks(events: &[NoteEvent]) -> Vec<i64> {
-    events.iter().map(|event| event.tick().0).collect()
-}
-
-#[test]
-fn c_recompiling_after_an_edit_rebuilds_only_the_touched_pattern() {
-    let mut project = load(P2_THREE);
-    let mut compiler = Compiler::new();
-    let mut compile = |project: &Project, touched: &Touched| {
-        let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
-        compiler
-            .compile(project, touched, PlayMode::Pattern(PatternId(1)), silent)
-            .expect("in-memory samples load")
-    };
-    let before = compile(&project, &Touched::default());
-    assert_eq!(ticks(events(&before, 1)), [0, 96, 192, 288]);
-
-    let applied = edit::apply(&mut project, toggle(1, 2)).expect("toggles");
-    assert_eq!(applied.touched.patterns, BTreeSet::from([PatternId(1)]));
-    let after = compile(&project, &applied.touched);
-    let pattern_1 = ticks(events(&after, 1));
-    assert_eq!(pattern_1, [0, 48, 96, 192, 288]);
-    let samples: Vec<u64> = pattern_1
-        .iter()
-        .map(|&tick| time::tick_to_sample(Ticks(tick), 44100, project.tempo, 96).expect("in range"))
-        .collect();
-    assert_eq!(samples, [0, 11025, 22050, 44100, 66150]);
-    assert_eq!(ticks(events(&after, 2)), [48, 144]);
-    assert!(events(&after, 3).is_empty());
-    assert!(!Arc::ptr_eq(events(&before, 1), events(&after, 1)));
-    assert!(Arc::ptr_eq(events(&before, 2), events(&after, 2)));
-    assert!(Arc::ptr_eq(events(&before, 3), events(&after, 3)));
-
-    // Channel and tempo edits recompile no pattern.
-    let mut previous = after;
-    let edits = [
-        Edit::SetChannelVolume {
-            channel: ChannelId(1),
-            value: 0.5,
-        },
-        Edit::SetTempo {
-            mbpm: MilliBpm(140_000),
-        },
-    ];
-    for edit in edits {
-        let applied = edit::apply(&mut project, edit.clone()).expect("applies");
-        let next = compile(&project, &applied.touched);
-        for pattern in 1..=3 {
-            assert!(
-                Arc::ptr_eq(events(&previous, pattern), events(&next, pattern)),
-                "{edit:?} recompiled pattern {pattern}"
-            );
-        }
-        previous = next;
-    }
-}
-
 fn note(channel: u32, tick: i64, length: i64, velocity: f32, key: u8) -> Note {
     Note {
         channel: ChannelId(channel),
@@ -819,71 +756,6 @@ fn p4_fixtures_round_trip_byte_for_byte() {
     for text in P4_FIXTURES {
         assert_eq!(json(&load(text)), canonical(text));
     }
-}
-
-fn pattern_clip(pattern: u32, track: u32, start: i64, length: i64) -> Clip {
-    Clip::of_pattern(
-        PatternId(pattern),
-        TrackId(track),
-        Ticks(start),
-        Ticks(length),
-    )
-}
-
-fn range(start: i64, end: i64, on: bool) -> LoopRange {
-    LoopRange {
-        start: Ticks(start),
-        end: Ticks(end),
-        on,
-    }
-}
-
-/// One of every playlist edit that p4_loop accepts.
-fn every_playlist_edit() -> Vec<Edit> {
-    vec![
-        Edit::PlaceClips {
-            first: ClipId(4),
-            clips: vec![pattern_clip(3, 2, 0, 384), pattern_clip(1, 8, 37, 250)],
-        },
-        Edit::UnplaceClips {
-            first: ClipId(3),
-            count: 1,
-        },
-        Edit::DuplicateClips {
-            ids: vec![ClipId(2), ClipId(1)],
-            first: ClipId(4),
-        },
-        Edit::DeleteClips {
-            ids: vec![ClipId(3), ClipId(1)],
-        },
-        Edit::MoveClips {
-            moves: vec![
-                (ClipId(1), Ticks(1152), TrackId(2)),
-                (ClipId(3), Ticks(0), TrackId(1)),
-            ],
-        },
-        Edit::ResizeClip {
-            id: ClipId(3),
-            length: Ticks(96),
-        },
-        Edit::SetLoop { value: None },
-        Edit::SetLoop {
-            value: Some(range(0, 96, false)),
-        },
-        Edit::AddTrack {
-            id: TrackId(9),
-            name: "Track 9".into(),
-        },
-        Edit::RemoveTrack { id: TrackId(8) },
-        Edit::RenameTrack {
-            id: TrackId(1),
-            name: "Drums".into(),
-        },
-        Edit::SetTrackMute {
-            id: TrackId(2),
-            mute: true,
-        },
-    ]
 }
 
 #[test]
@@ -1235,29 +1107,6 @@ fn the_playlist_holds_at_most_500_tracks() {
     assert_eq!(json(&project), before);
 }
 
-// `Touched.playlist` never recompiles a pattern list.
-#[test]
-fn playlist_edits_recompile_no_pattern() {
-    let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
-    for edit in every_playlist_edit() {
-        let mut project = load(P4_LOOP);
-        let mut compiler = Compiler::new();
-        let before = compiler
-            .compile(&project, &Touched::default(), PlayMode::Song, silent)
-            .expect("in-memory samples load");
-        let applied = edit::apply(&mut project, edit.clone()).expect("applies");
-        let after = compiler
-            .compile(&project, &applied.touched, PlayMode::Song, silent)
-            .expect("in-memory samples load");
-        for pattern in 1..=3 {
-            assert!(
-                Arc::ptr_eq(events(&before, pattern), events(&after, pattern)),
-                "{edit:?} recompiled pattern {pattern}"
-            );
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Mixer edits, each undone byte for byte, and the p5 fixtures tests/fixtures/gen_p5_expected.py
 // wrote.
@@ -1313,147 +1162,6 @@ fn an_unknown_processor_round_trips_untouched() {
         1,
     );
     assert_eq!(json(&load(&unknown)), canonical(&unknown));
-}
-
-fn insert(id: u16) -> InsertId {
-    InsertId(id)
-}
-
-fn mixer_only() -> Touched {
-    Touched {
-        mixer: true,
-        ..Touched::default()
-    }
-}
-
-fn effects_touched(id: u32, mixer: bool) -> Touched {
-    Touched {
-        mixer,
-        effects: BTreeSet::from([EffectId(id)]),
-        ..Touched::default()
-    }
-}
-
-/// One of every mixer edit p5_delay_sync accepts, with what it touches.
-fn every_mixer_edit() -> Vec<(Edit, Touched)> {
-    let param = |key: &str, value| Edit::SetEffectParam {
-        effect: EffectId(1),
-        key: key.into(),
-        value,
-    };
-    vec![
-        (
-            Edit::SetInsertVolume {
-                insert: insert(2),
-                fader: 0.5,
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::SetInsertPan {
-                insert: insert(3),
-                pan: -0.25,
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::MuteInsert {
-                insert: insert(4),
-                mute: true,
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::RenameInsert {
-                insert: insert(1),
-                name: "Echo".into(),
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::SoloInsert {
-                set: BTreeSet::from([insert(1), insert(5)]),
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::RouteChannel {
-                channel: ChannelId(1),
-                insert: insert(7),
-            },
-            Touched {
-                channels: BTreeSet::from([ChannelId(1)]),
-                ..Touched::default()
-            },
-        ),
-        (
-            Edit::SetSend {
-                from: insert(2),
-                to: insert(3),
-                amount: Some(0.5),
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::SetSend {
-                from: insert(1),
-                to: InsertId::MASTER,
-                amount: Some(0.25),
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::SetSend {
-                from: insert(1),
-                to: InsertId::MASTER,
-                amount: None,
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::AddEffect {
-                insert: insert(1),
-                slot: 3,
-                id: EffectId(2),
-                processor: ProcessorRef::new("dawsome.reverb"),
-                on: true,
-            },
-            effects_touched(2, true),
-        ),
-        (
-            Edit::RemoveEffect { id: EffectId(1) },
-            effects_touched(1, true),
-        ),
-        (param("feedback", Some(0.75)), effects_touched(1, false)),
-        (param("time_ms", Some(20.0)), effects_touched(1, false)),
-        (param("mix", None), effects_touched(1, false)),
-        // A value outside the processor's range is the processor's to clamp.
-        (param("feedback", Some(5.0)), effects_touched(1, false)),
-        (
-            Edit::MoveEffect {
-                effect: EffectId(1),
-                slot: 4,
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::SetEffectOn {
-                effect: EffectId(1),
-                on: false,
-            },
-            mixer_only(),
-        ),
-        (
-            Edit::AddEffect {
-                insert: insert(1),
-                slot: 1,
-                id: EffectId(2),
-                processor: ProcessorRef::new("dawsome.eq3"),
-                on: false,
-            },
-            effects_touched(2, true),
-        ),
-    ]
 }
 
 // An effect's light goes with it: one switched off and removed comes back off on undo, and one
@@ -1775,32 +1483,9 @@ fn a_send_that_would_close_a_loop_is_refused_with_the_loop_named() {
     ));
 }
 
-// Mixer and effect edits never recompile a pattern's event list.
-#[test]
-fn mixer_edits_recompile_no_pattern() {
-    let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
-    for (edit, _) in every_mixer_edit() {
-        let mut project = load(P5_DELAY_SYNC);
-        let mut compiler = Compiler::new();
-        let mode = PlayMode::Pattern(PatternId(1));
-        let before = compiler
-            .compile(&project, &Touched::default(), mode, silent)
-            .expect("compiles");
-        let applied = edit::apply(&mut project, edit.clone()).expect("applies");
-        let after = compiler
-            .compile(&project, &applied.touched, mode, silent)
-            .expect("compiles");
-        assert!(
-            Arc::ptr_eq(events(&before, 1), events(&after, 1)),
-            "{edit:?} recompiled pattern 1"
-        );
-    }
-}
-
 // ---------- Swing: a pattern's swing as an edit (tests/fixtures/gen_p31_expected.py) ----------
 
 const P31_PLAIN: &str = include_str!("../../../tests/fixtures/p31_plain.json");
-const P31_TRIPLET: &str = include_str!("../../../tests/fixtures/p31_triplet_120.json");
 const P31_SONG: &str = include_str!("../../../tests/fixtures/p31_song.json");
 
 fn swing(pattern: u32, swing_tenths: u16) -> Edit {
@@ -1810,33 +1495,9 @@ fn swing(pattern: u32, swing_tenths: u16) -> Edit {
     }
 }
 
-// Known answers (gen_p31): the straight 16 steps set to 66.7 % are p31_triplet_120.json byte for
-// byte (the two files differ in the swing alone), and the step's inverse gives p31_plain.json's
-// bytes back. The edit touches its pattern, so a recompile swings that pattern's events: the
-// second 16th of each pair at 48p + 32, the stored notes still on 24k.
-#[test]
-fn a_patterns_swing_is_set_and_undone_byte_for_byte() {
-    let mut project = load(P31_PLAIN);
-    let mut compiler = Compiler::new();
-    let mode = PlayMode::Pattern(PatternId(1));
-    let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
-    let before = compiler
-        .compile(&project, &Touched::default(), mode, silent)
-        .expect("compiles");
-    let applied = edit::apply(&mut project, swing(1, 667)).expect("in range");
-    assert_eq!(json(&project), canonical(P31_TRIPLET));
-    assert_eq!(applied.touched.patterns, BTreeSet::from([PatternId(1)]));
-    assert_eq!(applied.inverse, swing(1, 500));
-    let after = compiler
-        .compile(&project, &applied.touched, mode, silent)
-        .expect("compiles");
-    let straight: Vec<i64> = (0..16).map(|k| 24 * k).collect();
-    let swung: Vec<i64> = (0..8).flat_map(|p| [48 * p, 48 * p + 32]).collect();
-    assert_eq!(ticks(events(&before, 1)), straight);
-    assert_eq!(ticks(events(&after, 1)), swung);
-    edit::apply(&mut project, applied.inverse).expect("undoes");
-    assert_eq!(json(&project), canonical(P31_PLAIN));
-}
+// The swing set to 66.7 % and undone byte for byte (p31_triplet_120.json), with the events a
+// recompile swings, is `a_patterns_swing_is_set_and_undone_byte_for_byte` in src/compile.rs's
+// tests.
 
 // The knob's range, 50 to 75 %: 499 and 751 are refused and change nothing; an unknown pattern
 // is refused too.
@@ -1906,6 +1567,38 @@ fn a_swung_pattern_cannot_be_unadded() {
     );
     assert_eq!(project, before);
     edit::apply(&mut project, swing(2, 500)).expect("in range");
+    edit::apply(&mut project, Edit::UnaddPattern { id: PatternId(2) }).expect("as added");
+    assert_eq!(json(&project), canonical(P31_PLAIN));
+}
+
+// A pattern with a time signature of its own is not "as added" either: `AddPattern` makes one
+// that follows the project's, so taking it out would lose the signature on undo (the bytes would
+// go back to version 2 with no field). Given the project's back, it can be taken out.
+#[test]
+fn a_pattern_in_its_own_meter_cannot_be_unadded() {
+    let mut project = load(P31_PLAIN);
+    edit::apply(
+        &mut project,
+        Edit::AddPattern {
+            id: PatternId(2),
+            name: "Pattern 2".into(),
+            bars: 1,
+            copied_from: None,
+        },
+    )
+    .expect("adds");
+    let own = |signature| Edit::SetPatternTimeSignature {
+        pattern: PatternId(2),
+        signature,
+    };
+    edit::apply(&mut project, own(time::TimeSignature::new(3, 4))).expect("in range");
+    let before = json(&project);
+    assert_eq!(
+        edit::apply(&mut project, Edit::UnaddPattern { id: PatternId(2) }),
+        Err(EditError::PatternNotRemovable(2))
+    );
+    assert_eq!(json(&project), before);
+    edit::apply(&mut project, own(None)).expect("the project's again");
     edit::apply(&mut project, Edit::UnaddPattern { id: PatternId(2) }).expect("as added");
     assert_eq!(json(&project), canonical(P31_PLAIN));
 }

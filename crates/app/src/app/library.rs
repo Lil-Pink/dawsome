@@ -290,7 +290,13 @@ impl App {
             // The drop target is snapped already: placed at its tick exactly.
             let place = self.pattern.and_then(|pattern| {
                 let index = clip_gesture::index_of(project, track)?;
-                clip_gesture::place(project, pattern, index, tick, Ticks(1))
+                clip_gesture::place(
+                    project,
+                    pattern,
+                    index,
+                    tick,
+                    clip_gesture::SnapGrid::Every(Ticks(1)),
+                )
             });
             let edit = match place {
                 Some(place) => Edit::Transaction(vec![add, place]),
@@ -342,7 +348,13 @@ impl App {
             // The drop target is snapped already: placed at its tick exactly.
             let place = self.pattern.and_then(|pattern| {
                 let index = clip_gesture::index_of(project, track)?;
-                clip_gesture::place(project, pattern, index, tick, Ticks(1))
+                clip_gesture::place(
+                    project,
+                    pattern,
+                    index,
+                    tick,
+                    clip_gesture::SnapGrid::Every(Ticks(1)),
+                )
             });
             edits.extend(place);
         } else if !self.browse.rack_hover {
@@ -982,7 +994,7 @@ mod tests {
     /// What the device drop target over the rack sends with the cursor on rack row `row`.
     fn over_row(app: &App, row: usize) -> Option<Message> {
         let project = app.session.project();
-        let size = layout::rack_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16, 4);
         let target = DeviceDrop {
             project,
             over: app.browse.drop_channel,
@@ -1330,7 +1342,7 @@ mod tests {
     /// What the sound target over the rack sends with the cursor on rack point `at`.
     fn over_header(app: &App, at: Point) -> Option<Message> {
         let project = app.session.project();
-        let size = layout::rack_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16, 4);
         let target = crate::ui::rack::SoundDrop {
             project,
             over: app.browse.drop_header,
@@ -1512,7 +1524,7 @@ mod tests {
         let over = over_header(&app, layout::channel_header_rect(0).center());
         send(&mut app, over);
         assert_eq!(app.browse.drop_header, Some(ChannelId(1)));
-        let off = over_header(&app, layout::step_rect(0, 3).center());
+        let off = over_header(&app, layout::step_rect(0, 3, 4).center());
         send(&mut app, off);
         assert_eq!(app.browse.drop_header, None);
         let between = Point::new(80.0, layout::row_top(1) - 4.0);

@@ -468,6 +468,7 @@ mod tests {
             pattern: PatternId(1),
             length_bars: 1,
             ppq: 96,
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             channel: ChannelId(1),
             notes,
         }

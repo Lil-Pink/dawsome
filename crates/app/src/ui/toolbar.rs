@@ -1,6 +1,6 @@
 //! The toolbar along the top of the window, in groups a thin line apart: the transport (Play,
 //! Stop, Record with the input meter under it, beside it what a take records, Notes over Audio,
-//! over Capture, then the metronome) | the tempo | the pattern (its
+//! over Capture, then the metronome) | the tempo and the time signature | the pattern (its
 //! arrows and name) | the play mode (Pat over Song, then Loop) | the play position | the
 //! computer keyboard (its labeled switch, the octave's + and − with its name between) | the
 //! notices, on one short line, and Retry while audio is off | the panel buttons | File, Edit and
@@ -33,13 +33,13 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use dawsome_engine::project::{PatternId, TEMPO_RANGE};
-use dawsome_engine::time::{self, MilliBpm, Ticks};
+use dawsome_engine::time::{self, MeterMap, MilliBpm, Ticks, TimeSignature};
 use iced::alignment::Horizontal;
 use iced::widget::text::Wrapping;
 use iced::widget::{
     button, canvas, column, container, mouse_area, row, text, text_input, tooltip, Id,
 };
-use iced::{mouse, Center, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
+use iced::{mouse, Bottom, Center, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::{
     FileMessage, Message, PatternMessage, PlayMode, RecordMessage, TakeKind, PATTERN_RENAME_INPUT,
@@ -124,29 +124,52 @@ const FRAME: f32 = 1.0;
 /// A side of a two-row switch in a group's height (Pat over Song, N over A): the height inside
 /// the frame, halved.
 const SWITCH_SIDE: f32 = (BUTTON_HEIGHT - 2.0 * FRAME) / 2.0;
-/// A side of the switch over Capture, Notes over Audio, in its two rows.
-const TAKE_SIDE_HEIGHT: f32 = TAKE_ROW - FRAME;
 
 /// The readouts: digits of the type scale's title size, 16 px (were 18), 4 px either side, each
 /// as wide as its widest value ([`readout_width`]): the tempo's shape, 10 to 522 BPM with three
 /// decimals (it shows one when the others are zero, [`format_tempo`], but a tempo typed to the
-/// thousandth shows three), and the position's, bar:step:tick up to bar 99.
+/// thousandth shows three), and the position's, bar:step:tick up to bar 99 (two step digits
+/// hold the 96 steps of 24 quarters).
 const READOUT_PADDING: f32 = 4.0;
 const TEMPO_SHAPE: &str = "000.000";
 const POSITION_SHAPE: &str = "00:00:00";
+/// The time signature's readout beside the tempo: half its footprint, its digits at the type
+/// scale's numbers size (11 px, not the readouts' 16), as wide as "24/16" in that size's widest
+/// digits and the readouts' padding either side, 24 px tall (the least a control is pressed at),
+/// its bottom on the tempo's bottom, so the two read as one row.
+/// Why smaller: at the readouts' size it read as a second tempo, and took 58 px of the bar.
+const SIGNATURE_SHAPE: &str = "00/00";
+const SIGNATURE_HEIGHT: f32 = 24.0;
 
 /// The input meter under the Record button (was 60 × 6).
 const INPUT_METER: Size = Size::new(54.0, 5.0);
 
 /// The column right of Record (Recording v2): Notes over Audio, one switch saying what a take
-/// records, then Capture, in rows of [`TAKE_ROW`] and [`CAPTURE_ROW`] the groups' height in all,
-/// their words at the type scale's label size. Why always on the bar: a tick left in Record's menu, out of
-/// sight, once turned note takes into audio takes for an evening. Why this small: 54 px was what
-/// the 1000 px window had left beside the panel buttons; narrower ([`Column::Letters`]) the switch
-/// says N and A in two rows and Capture folds into the Notes menu (and Ctrl+Shift+R). Rows of 14,
-/// 14 and 16 px, words of 12 px (were 16, 16, 18 and 12, then 11 until the type scale).
-const TAKE_ROW: f32 = 14.0;
-const CAPTURE_ROW: f32 = BUTTON_HEIGHT - 2.0 * TAKE_ROW - PART_SPACING;
+/// records, then Capture, three rows of one face, [`TAKE_FACE`], their words at the type scale's
+/// label size. Why always on the bar: a tick left in Record's menu, out of sight, once turned
+/// note takes into audio takes for an evening. Why this small: 54 px was what the 1000 px window
+/// had left beside the panel buttons; narrower ([`Column::Letters`]) the switch says N and A in
+/// two rows and Capture folds into the Notes menu (and Ctrl+Shift+R).
+///
+/// The rows, in the groups' 46 px (y 9 to 55 in the 64 px bar): the switch's frame, its line
+/// round Notes and Audio and between them, 1 + 13 + 1 + 13 + 1 = 29 (Notes' face y 10 to 23,
+/// the line 23 to 24, Audio's 24 to 37), [`PART_SPACING`] 2, then Capture, its own edge round
+/// the same 13 px face, 1 + 13 + 1 = 15 (y 40 to 55, its face 41 to 54): 29 + 2 + 15 = 46. The
+/// words, 12 px, stand on a line the face's 13 px tall. Why: the
+/// toolkit's own line, 1.3 em = 15.6 px, was taller than the 13 px face, so the words' box was
+/// cut to the face and the words drawn from its top, their foot 0.69 px over the row under it,
+/// and the lit Notes, with no line between, read as drawn over Audio. On a line no taller than
+/// the face, centred in it, the baseline lies 6.5 + (0.969 − 0.241) / 2 · 12 = 10.865 px down
+/// (cosmic-text centres the font's ascent and descent in the line; Inter's typo metrics, in em):
+/// Notes' and Audio's ink 1.85 to 11.01 px of the 13, clear of either edge by 1.8 px. Capture's
+/// p reaches 0.204 em (2.45 px) under its baseline, so its words take the button's top 13 px (2 px
+/// of padding under them): ink 2.02 to 13.31 of the 15 px button, inside its face (1 to 14) by
+/// 1.02 above and 0.69 below (1.2 device px at the 4K screen's 1.7). Were rows of 14, 14 and 16
+/// px with no line between Notes and Audio (faces 13, 13 and 14), words of 12 px (16, 16, 18 and
+/// 12 before, then 11 until the type scale).
+const TAKE_FACE: f32 = 13.0;
+const CAPTURE_ROW: f32 = TAKE_FACE + 2.0 * FRAME;
+const _: () = assert!(2.0 * TAKE_FACE + 3.0 * FRAME + PART_SPACING + CAPTURE_ROW == BUTTON_HEIGHT);
 const TAKE_SIDE: f32 = 4.0;
 const NOTES: &str = "Notes";
 const AUDIO: &str = "Audio";
@@ -515,17 +538,17 @@ impl Spread {
     }
 }
 
-/// The width a readout of `shape` takes: the shape with every digit the font's widest, at the
-/// readouts' size, and their padding either side, in whole pixels, so every value of the shape
+/// The width a readout of `shape` takes: the shape with every digit the font's widest, at
+/// `text_size` (the readouts' 16 px, the time signature's 11), and their padding either side, in whole pixels, so every value of the shape
 /// fits in it. Why the widest digit: the app's font has proportional digits (its "1" about two
 /// thirds of its "4"), iced 0.14 cannot ask a font for its tabular ones, and a changed copy of
 /// the font was ruled out (one more font to license, ship and lock, for looks alone), so a
 /// readout reserves its widest value and its digits stand centred in it ([`readout`]), a "1" no
 /// longer as wide as a "4". ASCII text is shaped without kerning, so no value of the shape is
 /// wider than that.
-fn readout_width(shape: &str) -> f32 {
+fn readout_width(shape: &str, text_size: f32) -> f32 {
     let widest = ('0'..='9').fold(('0', 0.0), |(widest, most), digit| {
-        let width = text_width(digit.encode_utf8(&mut [0; 4]), size::TITLE);
+        let width = text_width(digit.encode_utf8(&mut [0; 4]), text_size);
         if width > most {
             (digit, width)
         } else {
@@ -536,22 +559,38 @@ fn readout_width(shape: &str) -> f32 {
         .chars()
         .map(|c| if c.is_ascii_digit() { widest.0 } else { c })
         .collect();
-    (text_width(&form, size::TITLE) + 2.0 * READOUT_PADDING).ceil()
+    (text_width(&form, text_size) + 2.0 * READOUT_PADDING).ceil()
 }
 
-/// The tempo's and the position's readouts' widths, measured once: the font is the app's own and
-/// never changes while it runs, and the bar is laid out several times a frame.
-fn readout_widths() -> [f32; 2] {
-    static WIDTHS: OnceLock<[f32; 2]> = OnceLock::new();
-    *WIDTHS.get_or_init(|| [TEMPO_SHAPE, POSITION_SHAPE].map(readout_width))
+/// The tempo's, the time signature's and the position's readouts' widths, measured once: the
+/// font is the app's own and never changes while it runs, and the bar is laid out several times
+/// a frame.
+fn readout_widths() -> [f32; 3] {
+    static WIDTHS: OnceLock<[f32; 3]> = OnceLock::new();
+    *WIDTHS.get_or_init(|| {
+        [
+            readout_width(TEMPO_SHAPE, size::TITLE),
+            readout_width(SIGNATURE_SHAPE, size::DENSE),
+            readout_width(POSITION_SHAPE, size::TITLE),
+        ]
+    })
 }
 
 fn tempo_width() -> f32 {
     readout_widths()[0]
 }
 
-fn position_width() -> f32 {
+fn signature_width() -> f32 {
     readout_widths()[1]
+}
+
+fn position_width() -> f32 {
+    readout_widths()[2]
+}
+
+/// The tempo's group: its readout, then the time signature's beside it, [`PART_SPACING`] apart.
+fn tempo_group_width() -> f32 {
+    tempo_width() + PART_SPACING + signature_width()
 }
 
 /// The width of the transport: Play, Stop, Record (the input meter's width while it shows under
@@ -692,7 +731,7 @@ fn groups(
 ) -> Vec<(Group, f32)> {
     let mut groups = vec![
         (Group::Transport, transport_width(input_meter, column)),
-        (Group::Tempo, tempo_width()),
+        (Group::Tempo, tempo_group_width()),
         (Group::Pattern, pattern_width(tier)),
         (Group::Mode, mode_width()),
         (Group::Position, position_width()),
@@ -754,6 +793,12 @@ pub struct Toolbar<'a> {
     pub width: f32,
     pub playing: bool,
     pub tempo: MilliBpm,
+    /// The time signature shown right of the tempo: the song's at the song position (the
+    /// project's own, from tick 0, but while the song plays past a change).
+    pub time_signature: TimeSignature,
+    /// The meter the position counts bars of: the song's map, or the pattern's own signature
+    /// while a pattern plays alone.
+    pub meter: MeterMap,
     pub pattern_name: &'a str,
     pub previous_pattern: Option<PatternId>,
     /// The text of the pattern's name while it is being renamed.
@@ -763,7 +808,6 @@ pub struct Toolbar<'a> {
     /// The loop range's state: on, off, or `None` when there is no range.
     pub loop_on: Option<bool>,
     pub position: Ticks,
-    pub ppq: u16,
     /// Why the last action failed.
     pub error: Option<&'a str>,
     /// What is wrong with live audio, such as it being off. Shown last, beside any error.
@@ -786,6 +830,8 @@ pub struct Toolbar<'a> {
     pub metronome: bool,
     /// The text typed in the tempo's box while it is open (a click on the tempo opens it).
     pub tempo_edit: Option<&'a str>,
+    /// The text typed in the time signature's box while it is open (a click on it opens it).
+    pub signature_edit: Option<&'a str>,
     pub record: RecordLook,
     /// Audio clip blocks that played silence because their stream was not ready.
     pub underruns: u64,
@@ -965,6 +1011,45 @@ impl<'a> Toolbar<'a> {
             ),
         };
         let tempo = tool(tempo, Tool::Tempo);
+        // Drag up or down, or scroll, to change the beats a bar; Shift for the beat's note; a
+        // click opens a box to type it in.
+        let signature: Element<'a, Message> = match self.signature_edit {
+            Some(typed) => container(
+                text_input("4/4", typed)
+                    .id(Id::new(crate::app::SIGNATURE_INPUT))
+                    .on_input(Message::SignatureEdited)
+                    .on_submit(Message::SignatureSubmitted)
+                    .size(size::DENSE)
+                    .padding([
+                        ((SIGNATURE_HEIGHT - 1.3 * size::DENSE) / 2.0).floor(),
+                        READOUT_PADDING,
+                    ])
+                    .width(signature_width()),
+            )
+            .height(SIGNATURE_HEIGHT)
+            .center_y(SIGNATURE_HEIGHT)
+            .into(),
+            None => with_tip(
+                mouse_area(readout_box(
+                    self.time_signature.to_string(),
+                    signature_width(),
+                    size::DENSE,
+                    SIGNATURE_HEIGHT,
+                ))
+                .on_press(Message::SignaturePressed)
+                .on_scroll(Message::SignatureScrolled)
+                .interaction(mouse::Interaction::ResizingVertically),
+                "Time signature \u{b7} drag or scroll; Shift for the note; click to type it",
+            ),
+        };
+        // The signature's bottom on the tempo's: the tempo box's top + its height − the
+        // readout's height, 9 + 46 − 24 = y 31 in the 64 px bar (was 9 + (46 − 24) / 2 = 20,
+        // centred), so it ends at y 55 with the tempo. The row is the tempo's height, so the
+        // row's bottom is the tempo's.
+        let tempo: Element<'a, Message> = row![tempo, tool(signature, Tool::TimeSignature)]
+            .spacing(PART_SPACING)
+            .align_y(Bottom)
+            .into();
         // Why measured to fit: the toolbar is one line, and a notice longer than its share
         // wrapped into lines the toolbar has no height for, and showed nothing at all.
         let notices = self
@@ -1018,7 +1103,10 @@ impl<'a> Toolbar<'a> {
         .spacing(MENU_SPACING);
         let typing = typing_keyboard(self.typing, tier);
         let position = tool(
-            readout(format_position(self.position, self.ppq), position_width()),
+            readout(
+                format_position(self.position, &self.meter),
+                position_width(),
+            ),
             Tool::Position,
         );
         let status: Option<Element<'a, Message>> = match (notices, retry) {
@@ -1117,22 +1205,25 @@ fn record_tip(keys: &Keys, kind: TakeKind) -> String {
 /// alone, its sides N and A; none as [`Column::Badge`], where Record says it.
 fn take_column<'a>(kind: TakeKind, column: Column, keys: &Keys) -> Option<Element<'a, Message>> {
     let width = take_column_width(column);
-    let (notes, audio, row) = match column {
-        Column::Words => (NOTES, AUDIO, TAKE_SIDE_HEIGHT),
-        Column::Letters => ("N", "A", SWITCH_SIDE),
+    // Words: the frame's line between Notes and Audio (rows of 13 px, [`TAKE_FACE`]); letters:
+    // none, two sides of 22 px filling the frame as Pat over Song do.
+    let (notes, audio, row, line) = match column {
+        Column::Words => (NOTES, AUDIO, TAKE_FACE, FRAME),
+        Column::Letters => ("N", "A", SWITCH_SIDE, 0.0),
         Column::Badge => return None,
     };
     let side = |label: &'a str, side: TakeKind, radius, tip: &'static str, which| {
-        let face = button(
-            container(text(label).size(size::LABEL).wrapping(Wrapping::None))
-                .center_x(Fill)
-                .center_y(Fill),
-        )
-        .width(width - 2.0 * FRAME)
-        .height(row)
-        .padding(0)
-        .style(style::switch_side(kind == side, radius))
-        .on_press(Message::Record(RecordMessage::Kind(side)));
+        // On a line the side's height, never taller than its face ([`TAKE_FACE`]'s why).
+        let words = text(label)
+            .size(size::LABEL)
+            .line_height(iced::Pixels(row))
+            .wrapping(Wrapping::None);
+        let face = button(container(words).center_x(Fill).center_y(Fill))
+            .width(width - 2.0 * FRAME)
+            .height(row)
+            .padding(0)
+            .style(style::switch_side(kind == side, radius))
+            .on_press(Message::Record(RecordMessage::Kind(side)));
         let face = mouse_area(face).on_right_press(Message::Record(RecordMessage::Menu(side)));
         tool(with_tip(face, tip), which)
     };
@@ -1151,12 +1242,20 @@ fn take_column<'a>(kind: TakeKind, column: Column, keys: &Keys) -> Option<Elemen
             "Audio \u{b7} Record takes what you hear (or the line in) into a sound file; right-click: which",
             Tool::TakeAudio
         ),
-    ]);
+    ]
+    .spacing(line));
     if column == Column::Letters {
         return Some(switch);
     }
+    // In the button's top 13 px, 2 px of padding under the words: its p clear of its edge
+    // ([`TAKE_FACE`]'s why).
+    let words = text(CAPTURE)
+        .size(size::LABEL)
+        .line_height(iced::Pixels(TAKE_FACE))
+        .wrapping(Wrapping::None);
     let capture = button(
-        container(text(CAPTURE).size(size::LABEL).wrapping(Wrapping::None))
+        container(words)
+            .padding(iced::Padding::ZERO.bottom(2.0 * FRAME))
             .center_x(Fill)
             .center_y(Fill),
     )
@@ -1491,22 +1590,33 @@ pub fn parse_tempo(typed: &str) -> Result<MilliBpm, String> {
     Ok(MilliBpm(milli))
 }
 
-/// `bar:step:tick`, counted from 1:01:00 at the start of the pattern.
-fn format_position(position: Ticks, ppq: u16) -> String {
-    let (bars, steps, ticks) = bars_steps_ticks(position, ppq);
-    format!("{}:{:02}:{ticks:02}", bars + 1, steps + 1)
+/// `bar:step:tick`, counted from 1:01:00 at the start, in the bars of `meter` (numbered on
+/// across its changes; 12 steps a bar in 3/4 and 6/8, 16 in 4/4).
+pub fn format_position(position: Ticks, meter: &MeterMap) -> String {
+    let position = Ticks(position.0.max(0));
+    let bar = meter.bar_at(position);
+    let step_ticks = time::step_to_ticks(1, meter.ppq()).0.max(1);
+    let into = position.0 - bar.start.0;
+    format!(
+        "{}:{:02}:{:02}",
+        bar.bar + 1,
+        into / step_ticks + 1,
+        into % step_ticks
+    )
 }
 
-/// A length as `bars:steps:ticks`, counted from 0:00:00: a step is 0:01:00.
-pub fn format_length(length: Ticks, ppq: u16) -> String {
-    let (bars, steps, ticks) = bars_steps_ticks(length, ppq);
+/// A length as `bars:steps:ticks` in bars of `signature`, counted from 0:00:00: a step is
+/// 0:01:00.
+pub fn format_length(length: Ticks, signature: TimeSignature, ppq: u16) -> String {
+    let (bars, steps, ticks) = bars_steps_ticks(length, signature, ppq);
     format!("{bars}:{steps:02}:{ticks:02}")
 }
 
-/// Whole bars, then whole steps, then ticks in a span from tick 0 (negative counts as 0).
-fn bars_steps_ticks(span: Ticks, ppq: u16) -> (i64, i64, i64) {
-    let bar_ticks = time::bars_to_ticks(1, ppq).0;
-    let step_ticks = time::step_to_ticks(1, ppq).0;
+/// Whole bars of `signature`, then whole steps, then ticks in a span from tick 0 (negative
+/// counts as 0).
+fn bars_steps_ticks(span: Ticks, signature: TimeSignature, ppq: u16) -> (i64, i64, i64) {
+    let bar_ticks = signature.bar_ticks(ppq).0.max(1);
+    let step_ticks = time::step_to_ticks(1, ppq).0.max(1);
     let ticks = span.0.max(0);
     (
         ticks / bar_ticks,
@@ -1520,16 +1630,27 @@ fn bars_steps_ticks(span: Ticks, ppq: u16) -> (i64, i64, i64) {
 /// or "120.0", sat with most of the room on its left and read off-centre. The box
 /// keeps its width, so it never jitters; only the digits move within it as they change.
 fn readout<'a>(content: String, width: f32) -> Element<'a, Message> {
+    readout_box(content, width, size::TITLE, BUTTON_HEIGHT)
+}
+
+/// A readout of `text_size` digits, `width` by `height`, its digits centred: the glass the
+/// readouts share ([`readout`]; the time signature's smaller one, [`SIGNATURE_HEIGHT`]).
+fn readout_box<'a>(
+    content: String,
+    width: f32,
+    text_size: f32,
+    height: f32,
+) -> Element<'a, Message> {
     container(
         text(content)
-            .size(size::TITLE)
+            .size(text_size)
             .color(style::palette().lcd_text),
     )
     .width(width)
-    .height(BUTTON_HEIGHT)
+    .height(height)
     .padding([0.0, READOUT_PADDING])
     .align_x(Horizontal::Center)
-    .center_y(BUTTON_HEIGHT)
+    .center_y(height)
     .style(style::lcd)
     .into()
 }
@@ -1756,6 +1877,24 @@ pub fn glyph_switch<'a>(
         .into()
 }
 
+/// A menu button's arrow ([`Glyph::MenuArrow`]) in a `side` px square, in the colour a
+/// [`style::tool_button`]'s words take: the accent while `lit` (its menu open), else the
+/// text's. The piano roll strip's Notes draws it after its word.
+pub fn menu_arrow<'a>(lit: bool, side: f32) -> Element<'a, Message> {
+    let color = if lit {
+        style::accent()
+    } else {
+        style::palette().text
+    };
+    canvas(Icon {
+        glyph: Glyph::MenuArrow,
+        color,
+    })
+    .width(side)
+    .height(side)
+    .into()
+}
+
 /// One of the pattern's arrows: a 13 px glyph in a 20 px wide part of the pattern's piece,
 /// inside its frame, `radius` rounding the piece's outer corners inside the frame's.
 fn arrow_button<'a>(
@@ -1819,6 +1958,9 @@ pub enum Glyph {
     Speaker,
     /// The piano roll's Follow folded: an arrow pointing on along time.
     Follow,
+    /// A menu button's arrow: a small triangle pointing down, 1 px in from either side of its
+    /// square and 3.5 px tall about its middle (6 × 3.5 in the strip's 8 px square).
+    MenuArrow,
 }
 
 /// The bars of the octave's `glyph` (+ or −) in a square `side` wide: one across its middle,
@@ -1913,6 +2055,11 @@ impl canvas::Program<Message> for Icon {
                 frame.fill(&head, self.color);
                 return vec![frame.into_geometry()];
             }
+            Glyph::MenuArrow => triangle([
+                (1.0, s / 2.0 - 1.75),
+                (w - 1.0, s / 2.0 - 1.75),
+                (w / 2.0, s / 2.0 + 1.75),
+            ]),
             Glyph::Previous => triangle([(s - 2.0, 0.5), (2.0, s / 2.0), (s - 2.0, s - 0.5)]),
             Glyph::Next => triangle([(2.0, 0.5), (s - 2.0, s / 2.0), (2.0, s - 0.5)]),
             Glyph::Keyboard => {
@@ -2081,14 +2228,21 @@ mod tests {
     // targets, pins moved (were 271 and 287, 323 and 339): the previous arrow 24 px (was 20), 275
     // and 291; the column's words at the type scale's 12 px, "Capture" 45.386 px and 4 px either
     // side, 54 (gen_u1_expected.py), so with them the name lies 54 + 2 further right, 331 and
-    // 347.
+    // 347. With the time signature right of the tempo, pins moved (were 275 and 291, 331 and
+    // 347): the tempo's group is the 75 px tempo, 2 px (PART_SPACING) and the 41 px signature
+    // ("44/44" at the numbers size, 11 px: (4 · 1323 + 738) · 11 / 2048 = 32.388, and 4 px
+    // either side, rounded up; gen_u1_expected.py), 118 px, 43 more, so the name lies at 275 +
+    // 43 = 318 and 291 + 43 = 334, with the column's words 331 + 43 = 374 and 347 + 43 = 390.
     #[test]
     fn the_pattern_name_starts_past_the_transport_tempo_and_arrow() {
         assert_eq!(known()["take_column_words"], 54);
         assert_eq!(take_column_width(Column::Words), 54.0);
         // With the badge on Record (no column) the name's box lies where it lay
         // before Recording v2.
-        for (input_meter, x) in [(false, 275.0), (true, 291.0)] {
+        assert_eq!(known()["readout"]["signature_width"], 41);
+        assert_eq!(signature_width(), 41.0);
+        assert_eq!(tempo_group_width(), 75.0 + 2.0 + 41.0);
+        for (input_meter, x) in [(false, 318.0), (true, 334.0)] {
             let least = least_width(&groups(
                 Tier::Full,
                 Column::Badge,
@@ -2106,7 +2260,7 @@ mod tests {
             assert_eq!(spread.column, Column::Badge);
             assert_eq!(spread.pattern_name_x(), x);
         }
-        for (input_meter, x) in [(false, 331.0), (true, 347.0)] {
+        for (input_meter, x) in [(false, 374.0), (true, 390.0)] {
             let least = least_width(&groups(
                 Tier::Full,
                 Column::Words,
@@ -2167,6 +2321,9 @@ mod tests {
             (880.0, None, true, false),
             (1280.0, None, false, true),
             (1400.0, None, false, false),
+            // With the time signature's 43 px the bar's least width with the column's words,
+            // the panel buttons and no notice is 1105.292 px, so a notice of its most (288) keeps
+            // its own width from 1105.292 + 288 = 1393.292 px, 1400 among them.
             (1400.0, Some(NOTICE_MOST), false, false),
             (1400.0, Some(150.0), true, true),
             (2259.0, None, false, false),
@@ -2446,6 +2603,24 @@ mod tests {
     // 1000 px those shorten. Each fold is worked out here from the least widths of the looks on
     // either side of it (printed), so the pins follow the sizes; the narrow pin holds every
     // place.
+    // The time signature right of the tempo (the tempo's group 75 + 2 + 41 = 118 px, 43 more)
+    // moves every fold 43 px wider, as printed and by hand from the groups' widths (transport
+    // 158 with the badge, 214 with the column's words; pattern 187, short 95; Pat over Song and
+    // Loop 84.689; position 80; keyboard 140.603, short 79.563; panel buttons 79; File, Edit and
+    // Help 146, short 120; Retry 39.906; 8 px padding either side, 5 px a gap): the full labels,
+    // the badge, no panel buttons, nothing to say: 16 + 158 + 118 + 187 + 84.689 + 80 + 140.603
+    // + 146 + 6 · 5 = 960.292 px; the panel buttons with their empty cell, two groups and two
+    // gaps more, from 960.292 + 79 + 10 = 1049.292 (1006.292 before), beside a notice's least
+    // room from 1049.292 + 48 = 1097.292 (1054.292); the column's words, 56 px more, from
+    // 1105.292 (1062.292), beside a notice from 1153.292 (1110.292); the full labels without
+    // the panel buttons beside a notice from 960.292 + 48 + 5 = 1013.292 (970.292), so at 1000
+    // px with a notice the labels now shorten, the panel buttons showing (the short labels with
+    // them beside a notice: 16 + 158 + 118 + 95 + 84.689 + 80 + 79.563 + 48 + 79 + 120 + 8 · 5 =
+    // 918.253 px); with Retry and a notice from 960.292 + 48 + 2 + 39.906 + 5 = 1055.198
+    // (1012.198). At 880 px with Retry and a notice the short labels without the panel buttons
+    // take 960.292 − 92 − 61.039 − 26 = 781.253 px with no status, and the status (Retry, 2 px
+    // and the notice) and its gap leave the notice 880 − 781.253 − 5 − 2 − 39.906 = 51.841 px,
+    // over its least room (48 px).
     #[test]
     fn everything_fits_1000_px_and_the_labels_shorten_below() {
         let least = |tier, column, panels, notice: Option<f32>, retry| {
@@ -2468,9 +2643,22 @@ mod tests {
         assert!(spread_at(badge_quiet, false, false).panels);
         assert!(!spread_at(badge_quiet - 0.1, false, false).panels);
         let busy = spread_at(1000.0, false, true);
-        assert_eq!((busy.tier, busy.panels), (Tier::Full, false));
+        assert_eq!((busy.tier, busy.panels), (Tier::Short, true));
         assert!(busy.notice_width >= NOTICE_ROOM);
         assert!(badge_beside > 1000.0, "{badge_beside}");
+        let full_beside = least(Tier::Full, Column::Badge, false, room, false);
+        assert!((full_beside - 1013.292).abs() < 1e-3, "{full_beside}");
+        assert_eq!(spread_at(full_beside, false, true).tier, Tier::Full);
+        assert_eq!(spread_at(full_beside - 0.1, false, true).tier, Tier::Short);
+        for (fold, want) in [
+            (badge_quiet, 1049.292),
+            (badge_beside, 1097.292),
+            (words_quiet, 1105.292),
+            (words_beside, 1153.292),
+            (full_with_retry, 1055.198),
+        ] {
+            assert!((fold - want).abs() < 1e-3, "{fold} against {want} by hand");
+        }
         assert_eq!(spread_at(words_quiet, false, false).column, Column::Words);
         assert_ne!(
             spread_at(words_quiet - 0.1, false, false).column,
@@ -2490,8 +2678,8 @@ mod tests {
         );
         assert!(!spread_at(badge_beside - 0.1, false, true).panels);
         assert!(take_column_width(Column::Letters) < 24.0);
-        // With Retry and a notice the full labels hold down to 1012.198 px, past 1000 since File
-        // and Edit are as wide as Help, the column given up for the badge first.
+        // With Retry and a notice the full labels hold down to 1055.198 px (1012.198 before the
+        // time signature), past 1000, the column given up for the badge first.
         assert!(full_with_retry > 1000.0, "{full_with_retry}");
         assert_eq!(spread_at(1000.0, true, true).tier, Tier::Short);
         let audio_off = spread_at(full_with_retry, true, true);
@@ -2505,9 +2693,15 @@ mod tests {
             Tier::Short
         );
         let short = spread_at(880.0, true, true);
-        assert_eq!(short.tier, Tier::Short);
+        assert_eq!((short.tier, short.panels), (Tier::Short, false));
         assert!(short.notice_width >= NOTICE_ROOM, "{}", short.notice_width);
-        // Beside a notice at the narrowest that keeps the panel buttons (1054.292 px; was 1051).
+        assert!(
+            (short.notice_width - 51.841).abs() < 1e-3,
+            "{}",
+            short.notice_width
+        );
+        // Beside a notice at the narrowest that keeps the panel buttons (1097.292 px; was
+        // 1054.292 before the time signature).
         let wide = spread_at(badge_beside, false, true);
         let switch = wide.keyboard_switch();
         assert!(switch.x + switch.width < wide.left(Group::Panels).expect("panels"));
@@ -2780,10 +2974,10 @@ mod tests {
     // tick 2 of that step.
     #[test]
     fn position_reads_bar_step_tick_from_one() {
-        assert_eq!(format_position(Ticks(0), 96), "1:01:00");
-        assert_eq!(format_position(Ticks(120), 96), "1:06:00");
-        assert_eq!(format_position(Ticks(383), 96), "1:16:23");
-        assert_eq!(format_position(Ticks(434), 96), "2:03:02");
+        assert_eq!(format_position(Ticks(0), &common()), "1:01:00");
+        assert_eq!(format_position(Ticks(120), &common()), "1:06:00");
+        assert_eq!(format_position(Ticks(383), &common()), "1:16:23");
+        assert_eq!(format_position(Ticks(434), &common()), "2:03:02");
     }
 
     // The notices are one line of at most NOTICE_MOST (about 38
@@ -2862,7 +3056,8 @@ mod tests {
             panel_tip(Panel::Settings, &keys),
             "Settings \u{b7} 6 or F10"
         );
-        // At 1051 px: from File and Edit as wide as Help, 1000 px with nothing to say folds them.
+        // At 1051 px: with the time signature's 43 px the panel buttons show with nothing to say
+        // from 1049.292 px (1006.292 before), 1.708 px short of it.
         let rects = panel_button_rects(&spread_at(1051.0, false, false));
         assert_eq!(rects.len(), 6);
         // Two rows of three, the groups' 46 px centered on the 64 px toolbar: 9..31 and 33..55
@@ -2988,6 +3183,21 @@ mod tests {
     // fold (1), with Retry and a notice the labels shorten (2); at 1051 px with nothing to say
     // the column's words give way to its letters (1), with Retry and the meter the panel buttons
     // fold (1), with a notice the panel buttons fold (2).
+    // Rewritten by the same line with the time signature right of the tempo (the tempo's group
+    // 75 + 2 + 41 = 118 px, 43 more at both tiers), checked line by line apart from the layout:
+    // every group's width read off the old pin but the tempo's, the tempo's worked out by hand
+    // (118), then the look (the first of the looks in order whose least width the window holds,
+    // the notices keeping their least room), the notices' width, every group's place and line,
+    // the gaps' even shares and the flex gap's rest, the pattern's name and the keyboard switch,
+    // recomputed from the rule by a script of its own and compared with the new pin, all 60 to a
+    // thousandth of a pixel. 36 keep their look; 24 give a step more to the 43 px: at 880 px the
+    // panel buttons fold with the meter, with Retry, with a notice (4); at 930 px with nothing to
+    // say the full labels shorten, the panel buttons showing (1), with a notice and the meter or
+    // Retry the panel buttons fold (4); at 1000 px with Retry or a notice the labels shorten, the
+    // panel buttons showing (6); at 1051 px with nothing to say the column's letters give way to
+    // the badge (1; with the meter the panel buttons fold too, 1), with Retry the panel buttons
+    // fold (1), with Retry and a notice the labels shorten (4); at 1200 px with the meter, Retry
+    // and a notice the column's words give way to its letters (2).
     #[test]
     fn narrow_windows_lay_the_bar_out_as_before() {
         let pinned = include_str!(concat!(
@@ -3095,11 +3305,111 @@ mod tests {
         );
     }
 
+    /// tests/fixtures/gen_p34_expected.py's known answers (p34_expected.json).
+    fn p34() -> serde_json::Value {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p34_expected.json"
+        )))
+        .expect("p34_expected.json")
+    }
+
+    // Known answers 10 of gen_p34_expected.py: the position and a length count bars of the time
+    // signature and its steps a bar: 300 in 3/4 and 6/8 is "2:01:12" (bar 2 from 288, 12 ticks
+    // in), 372 in 6/8 "2:04:12", one 6/8 bar "1:00:00" long, the last tick of a 24/4 bar
+    // "1:96:23" (two digits hold its 96 steps), 359 in 15/16 "1:15:23".
+    #[test]
+    fn the_readouts_count_bars_of_the_time_signature() {
+        for case in p34()["readouts"].as_array().expect("readouts") {
+            let sig = &case["signature"];
+            let signature = TimeSignature::new(
+                sig[0].as_u64().expect("beats") as u8,
+                sig[1].as_u64().expect("unit") as u8,
+            )
+            .expect("a signature");
+            let tick = Ticks(case["tick"].as_i64().expect("a tick"));
+            assert_eq!(
+                format_position(tick, &MeterMap::single(signature, 96)),
+                case["position"].as_str().expect("a position"),
+                "{signature} at {tick:?}"
+            );
+            assert_eq!(
+                format_length(tick, signature, 96),
+                case["length"].as_str().expect("a length"),
+                "{signature}, {tick:?} long"
+            );
+        }
+    }
+
+    /// A song of one 4/4 at 96 ppq.
+    fn common() -> MeterMap {
+        MeterMap::single(dawsome_engine::time::TimeSignature::COMMON, 96)
+    }
+
+    // Known answers B 4 and C 6 of gen_p35_expected.py: the position counts the bars of the
+    // meter that plays. Pattern 2 of p35_pattern_34 alone (its own 3/4): tick 300 is "2:01:12";
+    // the song (4/4): "1:13:12". Along p35_meter's changes the bar comes from the map: 1100 is
+    // "4:02:20" (44 into bar 4, 3/4 from 1056), 1700 "6:03:20", 2300 "8:02:20".
+    #[test]
+    fn the_position_counts_the_bars_of_the_meter_that_plays() {
+        let p35: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p35_expected.json"
+        )))
+        .expect("p35_expected.json");
+        let load = |name: &str| {
+            let text = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/fixtures")
+                    .join(name),
+            )
+            .expect("a p35 fixture");
+            dawsome_engine::project::Project::load_json(&text).expect("loads")
+        };
+        let b = load(p35["b"]["project"].as_str().expect("a file"));
+        for case in p35["b"]["readouts"].as_array().expect("readouts") {
+            let meter = match case["mode"].as_str() {
+                Some("song") => b.meter_map(),
+                _ => MeterMap::single(
+                    b.pattern_signature(dawsome_engine::project::PatternId(2)),
+                    96,
+                ),
+            };
+            let tick = Ticks(case["tick"].as_i64().expect("a tick"));
+            assert_eq!(
+                format_position(tick, &meter),
+                case["position"].as_str().expect("a position"),
+                "{case}"
+            );
+        }
+        let meter = load(p35["c"]["project"].as_str().expect("a file")).meter_map();
+        for case in p35["c"]["readouts"].as_array().expect("readouts") {
+            let tick = Ticks(case[0].as_i64().expect("a tick"));
+            assert_eq!(
+                format_position(tick, &meter),
+                case[1].as_str().expect("a position"),
+                "{case}"
+            );
+        }
+    }
+
     #[test]
     fn lengths_read_bar_step_tick_from_zero() {
-        assert_eq!(format_length(Ticks(24), 96), "0:01:00");
-        assert_eq!(format_length(Ticks(96), 96), "0:04:00");
-        assert_eq!(format_length(Ticks(434), 96), "1:02:02");
-        assert_eq!(format_length(Ticks(1), 96), "0:00:01");
+        assert_eq!(
+            format_length(Ticks(24), dawsome_engine::time::TimeSignature::COMMON, 96),
+            "0:01:00"
+        );
+        assert_eq!(
+            format_length(Ticks(96), dawsome_engine::time::TimeSignature::COMMON, 96),
+            "0:04:00"
+        );
+        assert_eq!(
+            format_length(Ticks(434), dawsome_engine::time::TimeSignature::COMMON, 96),
+            "1:02:02"
+        );
+        assert_eq!(
+            format_length(Ticks(1), dawsome_engine::time::TimeSignature::COMMON, 96),
+            "0:00:01"
+        );
     }
 }

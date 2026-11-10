@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use dawsome_engine::edit::{takes, Edit};
 use dawsome_engine::project::{ChannelId, Note, PatternId, Project};
 use dawsome_engine::realtime::EngineEvent;
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::Ticks;
 
 use crate::session::{Session, SessionError, TakeParts};
 use crate::ui::note_gesture::snap_nearest;
@@ -230,12 +230,20 @@ impl NoteTake {
     /// The playhead is at `playhead`: a song take's pattern grows to hold the bar it is
     /// in (a pattern take holds its pattern's length). Returns whether they grew.
     pub fn follow(&mut self, session: &mut Session, playhead: Ticks) -> Result<bool, SessionError> {
-        let Into::Song { start, bars, .. } = self.into else {
+        let Into::Song {
+            start,
+            bars,
+            pattern,
+        } = self.into
+        else {
             return Ok(false);
         };
         self.reached = self.reached.max(playhead);
-        let wanted =
-            takes::bars_holding(Ticks(self.reached.0 - start.0 + 1), session.project().ppq);
+        let project = session.project();
+        let wanted = takes::bars_holding(
+            Ticks(self.reached.0 - start.0 + 1),
+            project.pattern_signature(pattern).bar_ticks(project.ppq),
+        );
         self.grow_to(session, wanted)?;
         Ok(wanted > bars)
     }
@@ -269,7 +277,8 @@ impl NoteTake {
             bars,
         } = self.into
         {
-            let ppq = session.project().ppq;
+            let project = session.project();
+            let bar = project.pattern_signature(pattern).bar_ticks(project.ppq);
             let reached = self.reached.max(tick);
             let last = session.project().patterns.get(&pattern).map_or(0, |held| {
                 held.notes
@@ -278,8 +287,8 @@ impl NoteTake {
                     .max()
                     .unwrap_or(0)
             });
-            let held = takes::bars_holding(Ticks(reached.0 - start.0), ppq)
-                .max(takes::bars_holding(Ticks(last + 1), ppq));
+            let held = takes::bars_holding(Ticks(reached.0 - start.0), bar)
+                .max(takes::bars_holding(Ticks(last + 1), bar));
             if held != bars {
                 let edit = Edit::SetPatternBars {
                     pattern,
@@ -343,7 +352,11 @@ impl NoteTake {
             return Ok(());
         };
         // A song take's note snapped onto its pattern's end: the pattern grows to hold it.
-        let bars = takes::bars_holding(Ticks(last + 1), session.project().ppq);
+        let project = session.project();
+        let bar = project
+            .pattern_signature(self.pattern())
+            .bar_ticks(project.ppq);
+        let bars = takes::bars_holding(Ticks(last + 1), bar);
         self.grow_to(session, bars)?;
         let pattern = self.pattern();
         let Some(held) = session.project().patterns.get(&pattern) else {
@@ -386,9 +399,9 @@ impl NoteTake {
         let Some(found) = project.channels.get(&channel) else {
             return Vec::new();
         };
-        let Some(pattern) = project.patterns.get(&self.pattern()) else {
+        if !project.patterns.contains_key(&self.pattern()) {
             return Vec::new();
-        };
+        }
         if !found.takes_midi_input() {
             return Vec::new();
         }
@@ -406,8 +419,8 @@ impl NoteTake {
             key,
         };
         match self.into {
-            Into::Pattern(_) => {
-                let length = time::bars_to_ticks(pattern.length_bars, project.ppq).0;
+            Into::Pattern(id) => {
+                let length = project.pattern_ticks(id).0;
                 if length <= 0 {
                     return Vec::new();
                 }

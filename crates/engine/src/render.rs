@@ -35,6 +35,7 @@ use crate::dsp::laws::{channel_pan_gains, fader_gain, insert_pan, insert_pan_gai
 use crate::dsp::pitch::{bend_ratio, Pitch, Vibrato};
 use crate::dsp::sampler::{self, playback_speed, SampleBuffer};
 use crate::dsp::shape::{ended, wheel_tone, Cut, FilterMemory, Shape};
+use crate::edit::STEP_VELOCITY;
 use crate::input::InputFeeds;
 use crate::plan::{
     AudioClipPlan, AutomationPlan, AutomationWindow, ChannelPlan, ChannelSound, ClipPlan,
@@ -44,6 +45,7 @@ use crate::plan::{
 use crate::processor::{PortEvent, ProcessContext, Processor, TransportInfo};
 use crate::project::{
     ChannelId, ClipId, Curve, ProcessorOwner, MAX_AUDIO_CLIPS, MAX_AUTOMATIONS, MAX_INSERTS,
+    NEW_CHANNEL_VOLUME,
 };
 use crate::source::{ClipSource, SourceRead};
 use crate::time::{self, Ticks};
@@ -1646,6 +1648,7 @@ pub(crate) fn block(
         sample_rate: plan.sample_rate,
         tempo: timeline.tempo(),
         ppq: plan.ppq,
+        bar: plan.meter.bar_at(timeline.tick_at(start)),
         transport: TransportInfo {
             playing: true,
             song_tick: timeline.tick_at(start),
@@ -1707,7 +1710,16 @@ impl Runtime {
     }
 }
 
-/// Adds the previewed file's next `len` frames into the master's bus at unity.
+/// The level a raw preview (a Library click: the file itself, no channel) plays at: as a step
+/// of the file plays on a channel just added, [`NEW_CHANNEL_VOLUME`] × [`STEP_VELOCITY`] =
+/// 9/16 × 100/128 = 9/16 × 25/32 = 225/512 = 0.439453125 (−7.14 dB), exact in f32, both sides (a
+/// centred channel's pan law gives 1.0 a side). Why not unity: the preview is what the sound
+/// will sound like on the rack, and at unity it was 512/225 = 2.28 times (7 dB) louder than the
+/// rack's step of it, which misleads the ear.
+pub(crate) const PREVIEW_GAIN: f32 = NEW_CHANNEL_VOLUME * STEP_VELOCITY;
+
+/// Adds the previewed file's next `len` frames into the master's bus at [`PREVIEW_GAIN`], before
+/// the master's effects, which treat it as they treat the song.
 fn preview(runtime: &mut Runtime, len: usize) {
     let Runtime {
         buses,
@@ -1727,8 +1739,8 @@ fn preview(runtime: &mut Runtime, len: usize) {
     }
     if let Some(bus) = feed(buses, fed, 0, len) {
         for (frame, value) in bus.iter_mut().zip(scratch.iter()) {
-            frame[0] += value[0];
-            frame[1] += value[1];
+            frame[0] += value[0] * PREVIEW_GAIN;
+            frame[1] += value[1] * PREVIEW_GAIN;
         }
     }
 }
@@ -2737,6 +2749,7 @@ mod tests {
         PlayPlan {
             sample_rate: 44100,
             ppq: 96,
+            meter: crate::time::MeterMap::single(crate::time::TimeSignature::COMMON, 96),
             channels: vec![ChannelPlan {
                 id: ChannelId(1),
                 sound: ChannelSound::Sampler(SampleBuffer::from(vec![1.0; len])),

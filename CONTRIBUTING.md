@@ -3,6 +3,9 @@
 Issues and pull requests are welcome. Contributions are licensed GPL-3.0-or-later, like the rest
 of Dawsome. A security problem goes in a private report, not an issue: `SECURITY.md` says how.
 
+- **Start with the map.** [docs/architecture.md](docs/architecture.md) says what each crate
+  owns, which crates depend on which, what each library is for, and the invariants every
+  change keeps.
 - **Build.** The manual's (docs/manual.md) "Build and run" lists what to install on Linux (Rust, a C and C++
   compiler, clang, pkg-config, the ALSA, PipeWire, JACK and D-Bus development files, Python 3);
   `docs/windows.md` does so for Windows. Then `cargo build --workspace` builds everything and

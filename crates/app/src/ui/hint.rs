@@ -299,12 +299,15 @@ pub enum ClipRow {
     Unlink,
     /// "Link back to <name>": shown while the clip plays a copy of a pattern that still exists.
     LinkBack,
+    /// "Use the time signature here": shown while the clip's pattern counts in another
+    /// signature than the song's meter at the clip's start.
+    UseSignature,
 }
 
 impl ClipRow {
     /// Every row, as the hint table's test walks them.
     #[cfg(test)]
-    pub const ALL: [ClipRow; 2] = [ClipRow::Unlink, ClipRow::LinkBack];
+    pub const ALL: [ClipRow; 3] = [ClipRow::Unlink, ClipRow::LinkBack, ClipRow::UseSignature];
 }
 
 /// A row of the File menu; `Recent` stands for each recent file.
@@ -569,6 +572,7 @@ pub enum Tool {
     Capture,
     Metronome,
     Tempo,
+    TimeSignature,
     PreviousPattern,
     PatternName,
     NextPattern,
@@ -602,6 +606,7 @@ impl Tool {
             Tool::Capture,
             Tool::Metronome,
             Tool::Tempo,
+            Tool::TimeSignature,
             Tool::PreviousPattern,
             Tool::PatternName,
             Tool::NextPattern,
@@ -802,6 +807,18 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
         Hover::RackHeader(HeaderHit::BarsUp) => {
             three("Bars", bars(context), "lengthens the pattern by a bar")
         }
+        Hover::RackHeader(HeaderHit::Signature) => three(
+            "Time signature",
+            context
+                .pattern
+                .and_then(|id| project.patterns.get(&id))
+                .and_then(|shown| shown.time_signature)
+                .map(|own| own.to_string()),
+            &format!(
+                "this pattern's time signature; the project's is {}. Click to change it",
+                project.time_signature
+            ),
+        ),
         Hover::RackHeader(HeaderHit::Swing) => three(
             "Swing",
             swing(context),
@@ -910,7 +927,8 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
         Hover::Ruler(RulerBand::Numbers) => three(
             "Bars",
             None,
-            "click sets where the song plays from; Stop comes back there",
+            "click sets where the song plays from; Stop comes back there; right-click changes \
+             the time signature from that bar; drag a flag along the bars",
         ),
         Hover::Ruler(RulerBand::LoopStrip) => three(
             "Loop range",
@@ -1107,6 +1125,10 @@ fn menu_parts(row: MenuRow, keys: &Keys) -> [Option<String>; 3] {
             ClipRow::LinkBack => two(
                 "Link back",
                 "this clip plays the pattern its copy was made from again; the copy goes when no other clip plays it",
+            ),
+            ClipRow::UseSignature => two(
+                "Use the time signature here",
+                "gives the pattern the song's time signature where this clip starts; every clip of it follows",
             ),
         },
         MenuRow::Record(row) => {
@@ -1435,11 +1457,20 @@ fn tool_parts(tool: Tool, context: &Context) -> [Option<String>; 3] {
             Some(tempo_text(context.project.tempo)),
             "drag left or right, or scroll; Shift for 0.001 steps",
         ),
+        Tool::TimeSignature => three(
+            "Time signature at the start",
+            Some(context.project.time_signature.to_string()),
+            "beats a bar over the beat's note; drag or scroll the beats, Shift for the note; \
+             click to type one (3/4, 6/8); right-click the ruler for a change along the song",
+        ),
         Tool::PreviousPattern => three("Previous pattern", None, "shows the pattern before"),
         Tool::PatternName => [
             pattern_name,
             None,
-            Some("the pattern the rack shows; right-click: rename or delete".to_owned()),
+            Some(
+                "the pattern the rack shows; right-click: rename, delete or its time signature"
+                    .to_owned(),
+            ),
         ],
         Tool::NextPattern => three(
             "Next pattern",
@@ -1578,7 +1609,11 @@ fn roll_parts(part: RollPart, context: &Context) -> [Option<String>; 3] {
             format!("Snap: {}", context.roll_snap),
             Some(format!(
                 "draws {}",
-                format_length(context.draw_length, context.project.ppq)
+                format_length(
+                    context.draw_length,
+                    crate::ui::step_grid::signature_of(context.project, context.pattern),
+                    context.project.ppq
+                )
             )),
             "what notes land on when drawn or moved",
         ),
@@ -2318,9 +2353,9 @@ mod tests {
         }
         // The rack and its header.
         let mut kinds = BTreeSet::new();
-        let size = layout::rack_size(f1.channels.len(), 16);
+        let size = layout::rack_size(f1.channels.len(), 16, 4);
         for at in sweep(size) {
-            if let Some(hit) = layout::hit_test(at, f1.channels.len(), 16) {
+            if let Some(hit) = layout::hit_test(at, f1.channels.len(), 16, 4) {
                 kinds.insert(format!("{:?}", std::mem::discriminant(&hit)));
                 hinted(&crate::ui::rack::hover_of(hit), &context);
             }
@@ -2330,17 +2365,24 @@ mod tests {
             5,
             "mute, name, pan, volume and step were all found (no \"+\" row under the rows)"
         );
-        // The header's controls end at the bars' "+", 378.952 (layout's header test): swept to
-        // 400 (to 460 while "+ Instrument…" and the swing came first, the swing ending them at
-        // 484). "+ Instrument…" stands under the rows.
+        // The header's controls end at the pattern's own signature right of the bars' "+"
+        // (which ends at 378.952, layout's header test): the "Bars" label at 378.952 − 102 =
+        // 276.952, the signature from 110 past it for 41, to 427.952; swept to 440 (to 400
+        // while "+" ended them; to 460 while "+ Instrument…" and the swing came first, the
+        // swing ending them at 484). "+ Instrument…" stands under the rows. The sweep finds the
+        // signature whether or not a pattern has one: the hit test is the layout's.
         let mut header = BTreeSet::new();
-        for at in sweep(Size::new(400.0, layout::RACK_HEADER_HEIGHT)) {
+        for at in sweep(Size::new(440.0, layout::RACK_HEADER_HEIGHT)) {
             if let Some(hit) = layout::header_hit_test(at) {
                 header.insert(format!("{hit:?}"));
                 hinted(&Hover::RackHeader(hit), &context);
             }
         }
-        assert_eq!(header.len(), 3, "\"−\", \"+\" and the swing: {header:?}");
+        assert_eq!(
+            header.len(),
+            4,
+            "\"−\", \"+\", the swing and the pattern's signature: {header:?}"
+        );
         hinted(&Hover::RackAdd, &context);
         // The piano roll: the key column, notes (bodies and edges), empty grid, the stems.
         let view = piano_layout::View {
@@ -2348,6 +2390,7 @@ mod tests {
             scroll: Ticks(0),
             zoom: piano_layout::ZOOM.default,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: crate::ui::piano_layout::Rows::ALL,
         };
         let notes: Vec<_> = f1.patterns[&dawsome_engine::project::PatternId(1)]

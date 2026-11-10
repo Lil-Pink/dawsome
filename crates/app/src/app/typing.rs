@@ -156,7 +156,7 @@ impl Typing {
     }
 
     /// The first shortcut the keyboard takes from a note key, said as [`Typing::summary`] says
-    /// a taken key: what the toolbar's switch and the first-run note warn of.
+    /// a taken key: what the toolbar switch's hint warns of.
     pub fn taken_example(&self, keys: &Keys) -> Option<String> {
         Action::ALL.into_iter().find_map(|action| {
             keys.chords(action).iter().find_map(|chord| {
@@ -202,6 +202,15 @@ impl App {
         let moved = i16::from(self.typing.base) + i16::from(octaves) * i16::from(OCTAVE);
         let clamped = moved.clamp(i16::from(LOWEST_BASE), i16::from(HIGHEST_BASE));
         self.typing.base = u8::try_from(clamped).unwrap_or(self.typing.layout.start());
+    }
+
+    /// A key of the typing keyboard, from any window ([`super::Message::TypingKey`], a plugin
+    /// window's key): played, then what the player posted so far read now, not only on the
+    /// timer, so its ring never fills while the roll is closed.
+    pub(super) fn typing_key(&mut self, code: Code, pressed: bool, repeat: bool) {
+        self.live_wake = Some(std::time::Instant::now());
+        self.typed(code, pressed, repeat);
+        self.read_player_events();
     }
 
     /// A key went down (`pressed`) or up while the keyboard plays notes.

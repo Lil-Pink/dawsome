@@ -6,4 +6,4 @@
 # url: where the kit is published. Until it is, a local clone's path, which a clone elsewhere
 # replaces with $DAWSOME_KIT_URL.
 url=https://github.com/Lil-Pink/dawsome-kit
-commit=081b109502308476dc09bbf942bf0f37f25bdf48
+commit=eec55c0dcc29f62a169873fcda999094eb9f3059

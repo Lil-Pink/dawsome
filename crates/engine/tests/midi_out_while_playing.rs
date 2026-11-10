@@ -376,6 +376,7 @@ fn another_pattern_without_a_jump_sends_its_notes_due_within_the_latency() {
         Pattern {
             name: "Pattern 2".into(),
             length_bars: 1,
+            time_signature: None,
             copied_from: None,
             swing_tenths: STRAIGHT_SWING,
             kind: PatternKind::Pattern,

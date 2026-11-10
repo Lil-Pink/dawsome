@@ -307,6 +307,7 @@ fn every_refused_pattern_edit_changes_nothing() {
                 pattern: Pattern {
                     name: "Again".to_owned(),
                     length_bars: 1,
+                    time_signature: None,
                     copied_from: None,
                     swing_tenths: STRAIGHT_SWING,
                     kind: PatternKind::Pattern,

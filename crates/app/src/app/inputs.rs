@@ -173,11 +173,16 @@ impl App {
         format!("{port} [{}] {what}", bytes.join(" "))
     }
 
-    /// `--midi-monitor`: the player's live notes as it started and ended them, a line each.
+    /// `--midi-monitor` and `--key-monitor`: the player's live notes as it started and ended
+    /// them, a line each.
     pub(super) fn print_live_notes(&self, events: &[EngineEvent]) {
-        if !self.midi_monitor {
+        let monitor = if self.midi_monitor {
+            "midi-monitor"
+        } else if self.host.key_monitor {
+            "key-monitor"
+        } else {
             return;
-        }
+        };
         let project = self.session.project();
         for event in events {
             let (started, channel) = match event {
@@ -190,7 +195,7 @@ impl App {
                 .get(&channel)
                 .map_or_else(|| format!("channel {}", channel.0), |c| c.name.clone());
             let what = if started { "started" } else { "ended" };
-            println!("midi-monitor: player {what} a note on {name}: {event:?}");
+            println!("{monitor}: player {what} a note on {name}: {event:?}");
         }
     }
 

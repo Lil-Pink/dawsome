@@ -147,6 +147,7 @@ mod tests {
             scroll: Ticks(0),
             zoom: ZOOM.default,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: crate::ui::piano_layout::Rows::ALL,
         }
     }

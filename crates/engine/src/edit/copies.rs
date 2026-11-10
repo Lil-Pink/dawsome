@@ -105,11 +105,12 @@ fn pattern_of(project: &Project, clip: ClipId) -> Result<PatternId, EditError> {
 }
 
 /// Gives pattern clip `clip` its own copy of its pattern: a new pattern named by [`copy_name`],
-/// with the same length, swing, kind and notes (every channel's), made from it, and the clip
-/// playing it. One transaction (`AddPattern`, `SetPatternSwing` when it swings,
-/// `SetPatternKind` for a take, `ReplaceNotes` when there are notes, `SetClipPattern`), whose
-/// inverse takes the clip back, the notes out, the copy straight, a pattern and away, giving
-/// its ID back.
+/// with the same length, swing, kind, time signature and notes (every channel's), made from it,
+/// and the clip playing it. One transaction (`AddPattern`, `SetPatternSwing` when it swings,
+/// `SetPatternKind` for a take, `SetPatternTimeSignature` when it has its own,
+/// `ReplaceNotes` when there are notes, `SetClipPattern`), whose inverse takes the clip back,
+/// the notes out, the copy straight, a pattern, the project's signature and away, giving its ID
+/// back.
 pub fn unlink(project: &Project, clip: ClipId) -> Result<Unlink, EditError> {
     let source = pattern_of(project, clip)?;
     let shared = project
@@ -135,6 +136,13 @@ pub fn unlink(project: &Project, clip: ClipId) -> Result<Unlink, EditError> {
         edits.push(Edit::SetPatternKind {
             pattern: copy,
             kind: shared.kind,
+        });
+    }
+    // Before the notes, so the copy keeps the bars it was given rather than growing to them.
+    if shared.time_signature.is_some() {
+        edits.push(Edit::SetPatternTimeSignature {
+            pattern: copy,
+            signature: shared.time_signature,
         });
     }
     if !shared.notes.is_empty() {

@@ -201,6 +201,9 @@ pub struct Host {
     pub pointer: fn(WindowId) -> Option<(i32, i32)>,
     /// A `--drop-monitor` run: where each file dropped on the window lands is printed.
     pub drop_monitor: bool,
+    /// A `--key-monitor` run: each key a plugin window passes on, and the player's live notes,
+    /// are printed.
+    pub key_monitor: bool,
 }
 
 impl Host {
@@ -276,6 +279,7 @@ impl Host {
             },
             pointer: dawsome_host_common::window::pointer_in,
             drop_monitor: false,
+            key_monitor: false,
         }
     }
 
@@ -313,6 +317,7 @@ impl Host {
             audio_inputs: InputDevices::Given(Vec::new()),
             pointer: |_| None,
             drop_monitor: false,
+            key_monitor: false,
         }
     }
 

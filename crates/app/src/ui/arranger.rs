@@ -18,16 +18,15 @@ use dawsome_engine::project::{
     max_song_tick, AutomationId, AutomationPoint, Clip, ClipId, ClipItem, Curve, LoopRange,
     PatternId, Project, StretchMode, TrackId, MAX_TRACKS,
 };
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::{self, MeterMap, MeterUnit, SignatureChange, Ticks, TimeSignature};
 use iced::keyboard::Modifiers;
 use iced::{mouse, Point, Rectangle, Size};
 
 use crate::app::ClipLink;
-use crate::ui::clip_gesture::{self, ClipSnap};
+use crate::ui::clip_gesture::{self, ClipSnap, SnapGrid};
 use crate::ui::clips;
 use crate::ui::grid_rules::PIXELS_PER_NOTCH;
 use crate::ui::hint::{ClipRow, TrackRow};
-use crate::ui::note_gesture::{snap_down, snap_nearest};
 use crate::ui::playlist::{automation_handles, automation_points};
 use crate::ui::playlist_layout::{
     self, ClipPart, Grid, HeaderHit, Lanes, LoopEdge, RulerBand, EDGE_SCROLL_INSET,
@@ -133,6 +132,9 @@ pub enum Command {
         clip: ClipId,
         mode: Option<StretchMode>,
     },
+    /// A right press on the ruler's numbers: the time signature menu for a change at bar line
+    /// `at` (the one there, or a new one), opened at ruler point `place`.
+    SignatureMenu { at: Ticks, place: Point },
     /// A double press on a pattern clip's body: show its pattern in the piano roll.
     OpenInRoll(ClipId),
     /// A double press on an audio clip's body: its channel's sound in the sample editor, the
@@ -148,6 +150,11 @@ enum Gesture {
     Move {
         ids: Vec<ClipId>,
         from: Point,
+        to: Point,
+    },
+    /// A change of signature's flag dragged along the ruler from its tick `from`.
+    MoveChange {
+        from: Ticks,
         to: Point,
     },
     Resize {
@@ -247,6 +254,12 @@ pub enum Preview {
 pub struct Arranger {
     pub grid: Grid,
     pub snap: ClipSnap,
+    /// The song's meter map as of the last [`Arranger::refresh`]: the ruler's bars, the grid's
+    /// lines and the snap's bars and beats. With the signature it starts in and its changes,
+    /// which a flag's drag snaps by.
+    pub meter: MeterMap,
+    first_meter: TimeSignature,
+    changes: Vec<SignatureChange>,
     pub selection: BTreeSet<ClipId>,
     /// The track being renamed, and the name typed so far.
     pub rename: Option<(TrackId, String)>,
@@ -293,7 +306,7 @@ impl Arranger {
         let grid = Grid {
             scroll: Ticks(0),
             zoom: playlist_layout::ZOOM.default,
-            bar: time::bars_to_ticks(1, ppq),
+            bar: TimeSignature::COMMON.bar_ticks(ppq),
             top: 0,
             lane,
             area: tracks_size.height,
@@ -301,6 +314,9 @@ impl Arranger {
         Self {
             grid,
             snap: ClipSnap::default(),
+            meter: MeterMap::single(TimeSignature::COMMON, ppq),
+            first_meter: TimeSignature::COMMON,
+            changes: Vec::new(),
             selection: BTreeSet::new(),
             rename: None,
             curve_menu: None,
@@ -393,12 +409,18 @@ impl Arranger {
             return false;
         }
         let span = self.span(project);
-        let bar = self.grid.bar.0 as f64;
+        // The bar of the meter the song position is in.
+        let bar = self
+            .meter
+            .signature_at(at)
+            .bar_ticks(self.meter.ppq())
+            .0
+            .max(1) as f64;
         let Some(offset) = scroll::follow(span.offset, span.view, at.0 as f64, bar) else {
             return false;
         };
         let before = self.grid.scroll;
-        self.grid.scroll = self.grid.cell_start(Ticks(offset as i64));
+        self.grid.scroll = self.grid.cell_start(&self.meter, Ticks(offset as i64));
         self.clamp(project);
         self.grid.scroll != before
     }
@@ -471,7 +493,8 @@ impl Arranger {
             | Gesture::TrimStart { to, .. }
             | Gesture::TrimEnd { to, .. }
             | Gesture::Stretch { to, .. }
-            | Gesture::MovePoint { to, .. } => Some(*to),
+            | Gesture::MovePoint { to, .. }
+            | Gesture::MoveChange { to, .. } => Some(*to),
             Gesture::Gain { .. } | Gesture::Tension { .. } => None,
         }
     }
@@ -480,8 +503,37 @@ impl Arranger {
     pub fn ruler_held(&self) -> bool {
         matches!(
             self.gesture,
-            Some(Gesture::DrawLoop { .. } | Gesture::MoveLoopEdge { .. })
+            Some(
+                Gesture::DrawLoop { .. }
+                    | Gesture::MoveLoopEdge { .. }
+                    | Gesture::MoveChange { .. }
+            )
         )
+    }
+
+    /// The change of signature whose flag a drag holds, and the bar line it would land on.
+    pub fn moving_change(&self) -> Option<(Ticks, Ticks)> {
+        match self.gesture.as_ref()? {
+            Gesture::MoveChange { from, to } => Some((*from, self.change_target(*from, *to)?)),
+            _ => None,
+        }
+    }
+
+    /// Where the flag of the change at `from` dragged to ruler point `to` lands: the bar line at
+    /// or before the pointer in the song's meter without that change, after the song's first
+    /// bar, the very place the move's edit puts it ([`Edit::MoveSignatureChange`]). Why not the
+    /// nearest line: without the change the next one may start off the bar lines before it,
+    /// and "nearest" would then land on that change (and replace it) from half a bar away.
+    fn change_target(&self, from: Ticks, to: Point) -> Option<Ticks> {
+        let rest: Vec<SignatureChange> = self
+            .changes
+            .iter()
+            .filter(|change| change.at != from)
+            .copied()
+            .collect();
+        let without = MeterMap::new(self.first_meter, &rest, self.meter.ppq());
+        let tick = without.snap_down(self.grid.tick_at(to.x), MeterUnit::Bar);
+        (tick > Ticks(0)).then_some(tick)
     }
 
     /// Ends a gesture without committing it.
@@ -499,9 +551,15 @@ impl Arranger {
         }
     }
 
-    /// Brings the state in line with a changed document: selected clips that are gone are
-    /// dropped, a rename of a track that is gone ends, and the view stays on the tracks.
+    /// Brings the state in line with a changed document: the grid takes the project's time
+    /// signature, selected clips that are gone are dropped, a rename of a track that is gone
+    /// ends, and the view stays on the tracks.
     pub fn refresh(&mut self, project: &Project) {
+        // The scale stays the first meter's bar: pixels per bar of the song's start.
+        self.grid.bar = Ticks(project.time_signature.bar_ticks(project.ppq).0.max(1));
+        self.meter = project.meter_map();
+        self.first_meter = project.time_signature;
+        self.changes.clone_from(&project.signature_changes);
         let clips = &project.playlist.clips;
         self.selection.retain(|id| clips.contains_key(id));
         if self.properties.is_some_and(|id| !clips.contains_key(&id)) {
@@ -528,7 +586,7 @@ impl Arranger {
 
     /// What the held drag would do if released now.
     pub fn preview(&self, project: &Project) -> Option<Preview> {
-        let unit = self.unit(project);
+        let unit = self.snapping();
         let step = time::step_to_ticks(1, project.ppq);
         match self.gesture.as_ref()? {
             Gesture::Move { ids, from, to } => {
@@ -579,7 +637,11 @@ impl Arranger {
                 let end = clip_gesture::stretched_end(clip, self.dragged(*from, *to), unit);
                 Some(Preview::Clips(vec![(clip.start, end, index)]))
             }
-            Gesture::Gain { .. } | Gesture::MovePoint { .. } | Gesture::Tension { .. } => None,
+            // The flag moving draws itself on the ruler.
+            Gesture::Gain { .. }
+            | Gesture::MovePoint { .. }
+            | Gesture::Tension { .. }
+            | Gesture::MoveChange { .. } => None,
         }
     }
 
@@ -602,7 +664,7 @@ impl Arranger {
             .grid
             .shown_index_at(at.y)
             .or_else(|| self.add_track_band(project, at.y))?;
-        let tick = snap_down(self.grid.tick_at(at.x), self.unit(project));
+        let tick = self.snapping().down(self.grid.tick_at(at.x));
         (tick.0 >= 0).then_some((index, tick))
     }
 
@@ -690,10 +752,17 @@ impl Arranger {
             }
             PlaylistMessage::ClipMenu(row) => {
                 let (id, _) = self.clip_menu.take()?;
-                Some(Command::Link(match row {
-                    ClipRow::Unlink => ClipLink::Unlink(id),
-                    ClipRow::LinkBack => ClipLink::LinkBack(id),
-                }))
+                Some(match row {
+                    ClipRow::Unlink => Command::Link(ClipLink::Unlink(id)),
+                    ClipRow::LinkBack => Command::Link(ClipLink::LinkBack(id)),
+                    ClipRow::UseSignature => {
+                        let clip = project.playlist.clips.get(&id)?;
+                        Command::Edit(Edit::SetPatternTimeSignature {
+                            pattern: clip.pattern()?,
+                            signature: Some(self.meter.signature_at(clip.start)),
+                        })
+                    }
+                })
             }
             PlaylistMessage::TracksDragged(at) | PlaylistMessage::RulerDragged(at) => {
                 self.drag_to(at);
@@ -732,14 +801,14 @@ impl Arranger {
                 self.grid.scroll = if held {
                     to
                 } else {
-                    self.grid.landed_towards(to)
+                    self.grid.landed_towards(&self.meter, to)
                 };
                 self.clamp(project);
                 None
             }
             PlaylistMessage::Bar(BarMessage::LetGo) => {
                 self.bar_held = false;
-                self.grid.scroll = self.grid.landed(self.grid.scroll);
+                self.grid.scroll = self.grid.landed(&self.meter, self.grid.scroll);
                 self.clamp(project);
                 None
             }
@@ -761,9 +830,9 @@ impl Arranger {
         Some(edit)
     }
 
-    /// The snap unit in ticks.
-    fn unit(&self, project: &Project) -> Ticks {
-        self.snap.unit(project.ppq)
+    /// The lines positions snap to: the snap's, in the song's meter.
+    fn snapping(&self) -> SnapGrid<'_> {
+        self.snap.grid(&self.meter)
     }
 
     /// The ticks between the press at `from`, on the view as it was then, and the cursor at
@@ -792,7 +861,7 @@ impl Arranger {
     ) -> Vec<(ClipId, Ticks, usize)> {
         let rows = self.grid.track_index_at(to.y) - self.grid.track_index_at(from.y);
         let ticks = self.dragged(from, to);
-        clip_gesture::move_targets(project, ids, ticks, rows, self.unit(project))
+        clip_gesture::move_targets(project, ids, ticks, rows, self.snapping())
     }
 
     /// The clip under tracks-canvas point `at` and the part of it, the one drawn on top when
@@ -929,7 +998,7 @@ impl Arranger {
             (mouse::Button::Left, None) => {
                 self.selection.clear();
                 let tick = self.grid.tick_at(at.x);
-                clip_gesture::place(project, brush?, index, tick, self.unit(project))
+                clip_gesture::place(project, brush?, index, tick, self.snapping())
                     .map(Command::Edit)
             }
             _ => None,
@@ -977,10 +1046,22 @@ impl Arranger {
         self.rename = None;
         let tick = self.grid.tick_at(at.x);
         let current = project.playlist.loop_range;
+        let flag = playlist_layout::flag_under(&self.grid, &project.signature_changes, at);
         match (playlist_layout::ruler_band(at.y)?, button) {
-            (RulerBand::Numbers, mouse::Button::Left) => Some(Command::Seek(Ticks(
-                snap_down(tick, self.unit(project)).0.max(0),
-            ))),
+            (RulerBand::Numbers, mouse::Button::Left) if flag.is_some() => {
+                self.gesture = flag.map(|from| Gesture::MoveChange { from, to: at });
+                None
+            }
+            (RulerBand::Numbers, mouse::Button::Left) => {
+                Some(Command::Seek(Ticks(self.snapping().down(tick).0.max(0))))
+            }
+            // The signature menu for the bar line under the pointer: the change flagged there,
+            // or a new one.
+            (RulerBand::Numbers, mouse::Button::Right) => Some(Command::SignatureMenu {
+                at: flag
+                    .unwrap_or_else(|| self.meter.snap_down(Ticks(tick.0.max(0)), MeterUnit::Bar)),
+                place: at,
+            }),
             (RulerBand::LoopStrip, mouse::Button::Right) => {
                 current.map(|_| Command::Edit(Edit::SetLoop { value: None }))
             }
@@ -1009,6 +1090,7 @@ impl Arranger {
         match &mut self.gesture {
             Some(
                 Gesture::Move { to, .. }
+                | Gesture::MoveChange { to, .. }
                 | Gesture::Resize { to, .. }
                 | Gesture::Box { to, .. }
                 | Gesture::DrawLoop { to, .. }
@@ -1028,7 +1110,7 @@ impl Arranger {
     /// or none when it changed nothing.
     fn release(&mut self, project: &Project, modifiers: Modifiers) -> Option<Command> {
         let gesture = self.gesture.take()?;
-        let unit = self.unit(project);
+        let unit = self.snapping();
         let edit = match gesture {
             Gesture::TrimStart { .. } | Gesture::TrimEnd { .. } => {
                 self.gesture = Some(gesture);
@@ -1065,6 +1147,10 @@ impl Arranger {
                 let targets = self.move_targets(project, &ids, from, to);
                 clip_gesture::moved(project, &targets)
             }
+            Gesture::MoveChange { from, to } => self
+                .change_target(from, to)
+                .filter(|&to| to != from)
+                .map(|to| Edit::MoveSignatureChange { from, to }),
             Gesture::Resize { id, from, to } => {
                 clip_gesture::resized(project, id, self.dragged(from, to), unit)
             }
@@ -1217,7 +1303,7 @@ impl Arranger {
                     });
                 }
                 if left && double {
-                    let song = snap_down(self.grid.tick_at(at.x), self.unit(project));
+                    let song = self.snapping().down(self.grid.tick_at(at.x));
                     let tick = Ticks(song.0 - clip.start.0 + clip.offset.0);
                     let value =
                         playlist_layout::automation_value(body.y, body.y + body.height, at.y);
@@ -1259,7 +1345,7 @@ impl Arranger {
             if modifiers.alt() {
                 raw
             } else {
-                snap_nearest(raw, self.unit(project))
+                self.snapping().nearest(raw)
             }
         };
         let sample = |tick: Ticks| {
@@ -1312,7 +1398,7 @@ impl Arranger {
         let song = if modifiers.alt() {
             raw
         } else {
-            snap_nearest(raw, self.unit(project))
+            self.snapping().nearest(raw)
         };
         let lowest = index
             .checked_sub(1)
@@ -1401,7 +1487,7 @@ impl Arranger {
             let ticks = (f64::from(PIXELS_PER_NOTCH) * self.grid.bar.0 as f64
                 / f64::from(self.grid.px_per_bar())) as i64;
             let moved = self.grid.scroll.0 + if up { -ticks } else { ticks };
-            self.grid.scroll = self.grid.landed_towards(Ticks(moved.max(0)));
+            self.grid.scroll = self.grid.landed_towards(&self.meter, Ticks(moved.max(0)));
         } else {
             let rows = if up {
                 -TRACKS_PER_NOTCH
@@ -1417,7 +1503,7 @@ impl Arranger {
     /// of the new zoom (a beat's start is no bar's once beats are no longer drawn).
     fn step_zoom(&mut self, closer: bool) {
         self.grid.zoom = playlist_layout::ZOOM.stepped(self.grid.zoom, closer);
-        self.grid.scroll = self.grid.landed(self.grid.scroll);
+        self.grid.scroll = self.grid.landed(&self.meter, self.grid.scroll);
     }
 
     /// Keeps the view on the song (no further than its longest possible end) and on the tracks

@@ -402,12 +402,14 @@ fn queued(event: NoteEvent, dialect: Dialect) -> Queued {
     }
 }
 
-/// The CLAP transport for a block: tempo, playing, the song position in beats and seconds (at
-/// the tempo in force), 4/4.
+/// The CLAP transport for a block: tempo, playing, the song position in beats (quarter notes)
+/// and seconds (at the tempo in force), and the bar the block is in with its time signature (of
+/// the song's meter, or of the pattern playing alone).
 fn transport_event(context: &ProcessContext<'_>) -> TransportEvent {
     let bpm = f64::from(context.tempo.0) / 1000.0;
     let beats = context.transport.song_tick.0 as f64 / f64::from(context.ppq);
-    let bar = (beats / 4.0).floor();
+    let (bar, bar_start) = context.bar_in_quarters();
+    let signature = context.bar.signature;
     let mut flags = TransportFlags::HAS_TEMPO
         | TransportFlags::HAS_BEATS_TIMELINE
         | TransportFlags::HAS_SECONDS_TIMELINE
@@ -426,10 +428,10 @@ fn transport_event(context: &ProcessContext<'_>) -> TransportEvent {
         loop_end_beats: BeatTime::from_int(0),
         loop_start_seconds: SecondsTime::from_int(0),
         loop_end_seconds: SecondsTime::from_int(0),
-        bar_start: BeatTime::from_float(bar * 4.0),
-        bar_number: bar as i32,
-        time_signature_numerator: 4,
-        time_signature_denominator: 4,
+        bar_start: BeatTime::from_float(bar_start),
+        bar_number: i32::try_from(bar).unwrap_or(i32::MAX),
+        time_signature_numerator: u16::from(signature.beats()),
+        time_signature_denominator: u16::from(signature.unit()),
     }
 }
 
@@ -537,6 +539,113 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    // Known answers 9 of gen_p34_expected.py (p34_expected.json's "transport"): the transport
+    // event a block starting on each case's tick in each case's signature gives a plugin: the
+    // bar's start in quarter notes (bar number times beats·4/unit: 5.0 at tick 480 in 5/4, 3.0
+    // in 6/8 and 3/4, 3.5 in 7/8, 3.75 in 15/16), the bar number, the position, and the
+    // signature as numerator and denominator.
+    #[test]
+    fn the_transport_carries_the_projects_bar_and_signature() {
+        let p34: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/p34_expected.json"))
+                .expect("p34_expected.json parses");
+        for case in p34["transport"].as_array().expect("cases") {
+            let beats = case["signature"][0].as_u64().expect("beats") as u8;
+            let unit = case["signature"][1].as_u64().expect("unit") as u8;
+            let tick = case["tick"].as_i64().expect("a tick");
+            let context = ProcessContext {
+                sample_rate: 48_000,
+                tempo: dawsome_engine::time::MilliBpm(120_000),
+                ppq: 96,
+                bar: dawsome_engine::time::MeterMap::single(
+                    dawsome_engine::time::TimeSignature::new(beats, unit).expect("a signature"),
+                    96,
+                )
+                .bar_at(dawsome_engine::time::Ticks(tick)),
+                transport: dawsome_engine::processor::TransportInfo {
+                    playing: true,
+                    song_tick: dawsome_engine::time::Ticks(tick),
+                    steady_time: 0,
+                },
+                events: &[],
+            };
+            let event = transport_event(&context);
+            let shown = format!("{beats}/{unit} at tick {tick}");
+            let bar_start = case["bar_start"].as_f64().expect("a bar start");
+            assert_eq!(
+                event.bar_start.to_float(),
+                BeatTime::from_float(bar_start).to_float(),
+                "{shown}: bar start"
+            );
+            assert_eq!(
+                i64::from(event.bar_number),
+                case["bar_number"].as_i64().expect("a bar"),
+                "{shown}: bar number"
+            );
+            assert_eq!(
+                event.song_pos_beats.to_float(),
+                BeatTime::from_float(tick as f64 / 96.0).to_float(),
+                "{shown}: position"
+            );
+            assert_eq!(event.time_signature_numerator, u16::from(beats), "{shown}");
+            assert_eq!(event.time_signature_denominator, u16::from(unit), "{shown}");
+        }
+    }
+
+    // Known answers C 6 of gen_p35_expected.py (p35_expected.json's "c" "transport"): along the
+    // song's changes (3/4 from 768, 6/8 from 1344, 7/8 from 1920) a block's transport event gives
+    // the bar of the meter its tick is in, numbered on across the changes: 1100 -> bar 3 from
+    // 11.0 in 3/4, 1700 -> bar 5 from 17.0 in 6/8, 2300 -> bar 7 from 23.5 in 7/8.
+    #[test]
+    fn the_transport_carries_the_bar_of_the_songs_meter() {
+        use dawsome_engine::time::{MeterMap, SignatureChange, Ticks, TimeSignature};
+        let p35: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/p35_expected.json"))
+                .expect("p35_expected.json parses");
+        let signature = |value: &serde_json::Value| {
+            TimeSignature::new(
+                value[0].as_u64().expect("beats") as u8,
+                value[1].as_u64().expect("unit") as u8,
+            )
+            .expect("a signature")
+        };
+        let changes: Vec<SignatureChange> = p35["c"]["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .map(|change| SignatureChange {
+                at: Ticks(change[0].as_i64().expect("a tick")),
+                signature: signature(&change[1]),
+            })
+            .collect();
+        let map = MeterMap::new(TimeSignature::COMMON, &changes, 96);
+        for case in p35["c"]["transport"].as_array().expect("cases") {
+            let tick = case[0].as_i64().expect("a tick");
+            let context = ProcessContext {
+                sample_rate: 48_000,
+                tempo: dawsome_engine::time::MilliBpm(120_000),
+                ppq: 96,
+                bar: map.bar_at(Ticks(tick)),
+                transport: dawsome_engine::processor::TransportInfo {
+                    playing: true,
+                    song_tick: Ticks(tick),
+                    steady_time: 0,
+                },
+                events: &[],
+            };
+            let event = transport_event(&context);
+            let number = |at: usize| case[at].as_f64().expect("a number");
+            assert_eq!(event.time_signature_numerator as f64, number(1), "{case}");
+            assert_eq!(event.time_signature_denominator as f64, number(2), "{case}");
+            assert_eq!(
+                event.bar_start.to_float(),
+                BeatTime::from_float(number(3)).to_float(),
+                "{case}: bar start"
+            );
+            assert_eq!(f64::from(event.bar_number), number(4), "{case}: bar number");
+        }
     }
 
     // By hand from MIDI 1.0: a bend goes to a plugin as En ll mm on MIDI channel 1, the 14-bit

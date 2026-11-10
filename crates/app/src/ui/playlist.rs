@@ -15,7 +15,7 @@ use dawsome_engine::project::{
     Automation, AutomationId, ChannelId, Clip, ClipId, ClipItem, Curve, LoopRange, Project,
     StretchMode, TrackId, STRETCH_PITCH_RANGE,
 };
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::{self, MeterMap, MeterUnit, SignatureChange, Ticks, TimeSignature};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::canvas::{self, Cache, Event, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::{button, column, container, pin, row, space, stack, text, text_input, Id};
@@ -29,14 +29,13 @@ use crate::ui::arranger::{Arranger, PlaylistMessage, Preview, CURVE_MENU};
 use crate::ui::clip_gesture::ClipSnap;
 use crate::ui::clips::{self, FileLook, FileLooks};
 use crate::ui::fonts::size;
-use crate::ui::grid_rules::{
-    self, device_line, first_at_or_after, NUMBER_BAND_HEIGHT, STRONG_COMPANION_ALPHA,
-};
+use crate::ui::grid_rules::{self, device_line, NUMBER_BAND_HEIGHT, STRONG_COMPANION_ALPHA};
 use crate::ui::hint::{
     hover_area, hover_change, link_tip, with_tip, ClipControl, ClipRow, Hover, MenuRow,
     PlaylistTool, Pointer, TrackRow,
 };
 use crate::ui::menu;
+use crate::ui::palette;
 use crate::ui::panels::{Panel, TITLE_GAP};
 use crate::ui::playlist_layout::{
     self, ClipPart, Grid, HeaderHit, Lanes, ARM_CENTER_X, ARM_RADIUS, AUTOMATION_LINE,
@@ -132,6 +131,9 @@ impl<'a> Playlist<'a> {
         };
         let ruler = canvas::Canvas::new(Ruler {
             grid: self.arranger.grid,
+            meter: &self.arranger.meter,
+            changes: &self.project.signature_changes,
+            moving: self.arranger.moving_change(),
             loop_shown,
             marker: self.marker,
             scale_factor: self.scale_factor,
@@ -380,7 +382,27 @@ pub fn clip_rows(project: &Project, clip: ClipId) -> Vec<(ClipRow, String, bool)
     if rows.is_empty() {
         rows.push((ClipRow::Unlink, "Unlink (make unique)".to_owned(), false));
     }
+    if signature_differs(project, &project.meter_map(), clip).is_some() {
+        rows.push((
+            ClipRow::UseSignature,
+            "Use the time signature here".to_owned(),
+            true,
+        ));
+    }
     rows
+}
+
+/// The signature `clip`'s pattern counts in, when it is not the song's meter at the clip's
+/// start ("Verse · 3/4" in its title, "Use the time signature here" in its menu); `None` for
+/// one that matches, and for a clip that plays no pattern.
+pub fn signature_differs(
+    project: &Project,
+    meter: &MeterMap,
+    clip: ClipId,
+) -> Option<TimeSignature> {
+    let clip = project.playlist.clips.get(&clip)?;
+    let own = project.pattern_signature(clip.pattern()?);
+    (own != meter.signature_at(clip.start)).then_some(own)
 }
 
 /// The header's link control for the selected clips, shown as `link`: a chain, with a red X over
@@ -550,9 +572,14 @@ fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
     strip.push(close).into()
 }
 
-/// The bar-number band over the loop strip.
+/// The bar-number band over the loop strip, the song's changes of signature flagged in it.
 struct Ruler<'a> {
     grid: Grid,
+    meter: &'a MeterMap,
+    /// The song's changes, each flagged at its bar line with its signature.
+    changes: &'a [SignatureChange],
+    /// A flag held in a drag, and the tick it would land on.
+    moving: Option<(Ticks, Ticks)>,
     loop_shown: Option<LoopRange>,
     marker: Option<Ticks>,
     scale_factor: f32,
@@ -581,9 +608,81 @@ impl Ruler<'_> {
                 );
             }
         }
-        let bars: Vec<(i64, f32)> = playlist_layout::visible_bars(&self.grid, size.width).collect();
-        grid_rules::draw_bar_numbers(frame, &bars, self.grid.px_per_bar(), self.scale_factor);
+        // A bar a change starts shows its flag where its number would be: text drawn under a
+        // flag shows through it in the software renderer.
+        let flagged: BTreeSet<i64> = self
+            .changes
+            .iter()
+            .map(|change| self.meter.bar_at(change.at).bar + 1)
+            .collect();
+        let bars: Vec<(i64, f32)> =
+            playlist_layout::visible_bars(&self.grid, self.meter, size.width).collect();
+        // Numbered as often as the narrowest bar in view has room for: a change to a shorter
+        // bar must not run its numbers into each other. (A bar as long as the first meter's
+        // keeps the zoom's own pixels per bar, exactly.)
+        let (from, to) = (self.grid.scroll, self.grid.tick_at(size.width));
+        let segments = self.meter.segments();
+        let narrowest = segments
+            .iter()
+            .enumerate()
+            .filter(|&(index, segment)| {
+                let ends = segments
+                    .get(index + 1)
+                    .map_or(Ticks(i64::MAX), |next| next.start);
+                segment.start <= to && ends > from
+            })
+            .map(|(_, segment)| segment.signature.bar_ticks(self.meter.ppq()))
+            .filter(|&bar| bar < self.grid.bar)
+            .map(|bar| self.grid.px_of(bar))
+            .fold(self.grid.px_per_bar(), f32::min);
+        let shown: Vec<(i64, f32)> = bars
+            .into_iter()
+            .filter(|(number, _)| !flagged.contains(number))
+            .collect();
+        grid_rules::draw_bar_numbers(frame, &shown, narrowest, self.scale_factor);
     }
+
+    /// The changes' flags, over the numbers: drawn every frame (not cached), so a flag held in
+    /// a drag follows the pointer.
+    fn draw_flags(&self, frame: &mut Frame) {
+        let width = frame.width();
+        for change in self.changes {
+            let at = match self.moving {
+                Some((from, to)) if from == change.at => to,
+                _ => change.at,
+            };
+            draw_flag(frame, &self.grid, at, change.signature, width);
+        }
+    }
+}
+
+/// A change of signature's flag in the ruler's number band ([`playlist_layout::flag_rect`]):
+/// the readouts' glass with the signature in their digits' colour, its pole down the bar line
+/// ([`playlist_layout::FLAG_POLE`] wide) in the accent's dimmer tone ([`palette::slider_fill`]);
+/// none for a bar line off the timeline. Why the glass and not the accent's tone under the
+/// digits: text on that tone is under WCAG's 4.5:1 in every theme (3.0 to 4.1), the readouts'
+/// pair is held above it.
+fn draw_flag(frame: &mut Frame, grid: &Grid, at: Ticks, signature: TimeSignature, width: f32) {
+    let Some(rect) = playlist_layout::flag_rect(grid, at, signature, width) else {
+        return;
+    };
+    frame.fill_rectangle(rect.position(), rect.size(), style::palette().lcd);
+    frame.fill_rectangle(
+        rect.position(),
+        Size::new(playlist_layout::FLAG_POLE, rect.height),
+        palette::slider_fill(),
+    );
+    frame.fill_text(canvas::Text {
+        content: signature.to_string(),
+        position: Point::new(
+            rect.x + playlist_layout::FLAG_POLE + playlist_layout::FLAG_PAD,
+            NUMBER_BAND_HEIGHT / 2.0,
+        ),
+        color: style::palette().lcd_text,
+        size: size::DENSE.into(),
+        align_y: Vertical::Center,
+        ..canvas::Text::default()
+    });
 }
 
 /// Where a clip is drawn: its ID, the top of its row, whether it is selected and its track
@@ -770,6 +869,7 @@ impl canvas::Program<Message> for Ruler<'_> {
             .cache
             .draw(renderer, bounds.size(), |frame| self.draw_body(frame));
         let mut overlay = Frame::new(renderer, bounds.size());
+        self.draw_flags(&mut overlay);
         if let Some(tick) = self.marker {
             let x = self.grid.x_of(tick);
             if (TRACK_HEADER_WIDTH..bounds.width).contains(&x) {
@@ -1015,9 +1115,10 @@ impl Tracks<'_> {
     fn draw_shading(&self, frame: &mut Frame, tops: &[f32], width: f32) {
         let grid = self.grid();
         let on_line = |x: f32| device_line(x, self.scale_factor).0;
-        let spans: Vec<(f32, f32)> = playlist_layout::shaded_spans(grid, width)
-            .map(|(left, right)| (on_line(left), on_line(right)))
-            .collect();
+        let spans: Vec<(f32, f32)> =
+            playlist_layout::shaded_spans(grid, &self.arranger.meter, width)
+                .map(|(left, right)| (on_line(left), on_line(right)))
+                .collect();
         if spans.is_empty() || tops.is_empty() {
             return;
         }
@@ -1031,42 +1132,44 @@ impl Tracks<'_> {
         frame.fill(&shading, style::palette().lane_alt);
     }
 
-    /// The lines through every lane, 1 px on whole device pixels: the beat lines at the
-    /// strength the zoom gives them ([`grid_rules::beat_alpha`]; none while it is 0), then
-    /// a line at every bar, the one starting every four bars ([`grid_rules::strong`]) in
-    /// the brighter `bar_line` ([`crate::ui::palette::Palette::bar_line`]) with a fainter one right of it.
+    /// The lines through every lane, 1 px on whole device pixels, in the song's meter (each
+    /// change's beats and bars): the beat lines at the strength the zoom gives a beat of their
+    /// meter ([`grid_rules::line_alpha`] of its width; none while it is 0), then a line at every
+    /// bar, the one starting every four bars by number ([`grid_rules::strong`]) in the brighter
+    /// `bar_line` ([`crate::ui::palette::Palette::bar_line`]) with a fainter one right of it.
     fn draw_lines(&self, frame: &mut Frame, size: Size) {
         let grid = self.grid();
+        let meter = &self.arranger.meter;
         let bottom = self.lanes_bottom(size.height);
-        let (beat, bar) = (grid.beat().0, grid.bar.0.max(1));
-        let last = grid.tick_at(size.width).0;
-        let snapped = |tick: i64| device_line(grid.x_of(Ticks(tick)), self.scale_factor);
+        let last = grid.tick_at(size.width);
+        let snapped = |tick: Ticks| device_line(grid.x_of(tick), self.scale_factor);
         let mut fill = |left: f32, width: f32, color: Color| {
             frame.fill_rectangle(Point::new(left, 0.0), Size::new(width, bottom), color);
         };
-        let alpha = grid_rules::beat_alpha(grid.px_per_bar());
-        if alpha > 0.0 {
-            let color = Color {
-                a: alpha,
-                ..style::palette().lane_beat_line
-            };
-            let mut tick = first_at_or_after(grid.scroll.0, beat);
-            while tick <= last {
-                if tick % bar != 0 {
-                    let (left, width) = snapped(tick);
-                    fill(left, width, color);
-                }
-                tick += beat;
+        let mut tick = meter.snap_down(grid.scroll, MeterUnit::Beat);
+        if tick < grid.scroll {
+            tick = meter.snap_next(tick, MeterUnit::Beat);
+        }
+        while tick <= last {
+            let beat = meter.signature_at(tick).beat_ticks(meter.ppq());
+            let alpha = grid_rules::line_alpha(grid.px_of(beat));
+            if alpha > 0.0 && meter.bar_at(tick).start != tick {
+                let (left, width) = snapped(tick);
+                let color = Color {
+                    a: alpha,
+                    ..style::palette().lane_beat_line
+                };
+                fill(left, width, color);
             }
+            tick = meter.snap_next(tick, MeterUnit::Beat);
         }
         let companion = Color {
             a: STRONG_COMPANION_ALPHA,
             ..style::palette().bar_line
         };
-        let mut tick = first_at_or_after(grid.scroll.0, bar);
-        while tick <= last {
-            let (left, width) = snapped(tick);
-            if grid_rules::strong(tick / bar) {
+        for (number, x) in playlist_layout::visible_bars(grid, meter, size.width) {
+            let (left, width) = device_line(x, self.scale_factor);
+            if grid_rules::strong(number - 1) {
                 fill(left, width, style::palette().bar_line);
                 // On the device pixels right after the line's: snapped again, the sum could
                 // floor back onto the line's last pixel.
@@ -1074,7 +1177,6 @@ impl Tracks<'_> {
             } else {
                 fill(left, width, style::palette().lane_bar_line);
             }
-            tick += bar;
         }
     }
 
@@ -1105,13 +1207,16 @@ impl Tracks<'_> {
             Size::new(width, lane - TITLE_HEIGHT),
         );
         let (title_color, body_color, name) = match clip.item {
+            // The pattern's signature after its name when the song's meter differs there.
             ClipItem::Pattern { pattern } => (
                 style::CLIP_TITLE,
                 style::CLIP_BODY,
-                self.project
-                    .patterns
-                    .get(&pattern)
-                    .map(|pattern| pattern.name.clone()),
+                self.project.patterns.get(&pattern).map(|shown| {
+                    match signature_differs(self.project, &self.arranger.meter, id) {
+                        Some(own) => format!("{} \u{b7} {own}", shown.name),
+                        None => shown.name.clone(),
+                    }
+                }),
             ),
             ClipItem::Audio {
                 channel, stretch, ..
@@ -1399,7 +1504,10 @@ impl Tracks<'_> {
         span: (f32, f32),
     ) {
         let grid = self.grid();
-        let length = time::bars_to_ticks(pattern.length_bars, self.project.ppq)
+        // The pattern's own length: its signature's bars, wherever the clip lies.
+        let length = clip
+            .pattern()
+            .map_or(Ticks(1), |id| self.project.pattern_ticks(id))
             .0
             .max(1);
         let notes: Vec<_> = pattern

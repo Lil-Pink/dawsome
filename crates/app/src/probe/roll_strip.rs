@@ -21,8 +21,8 @@ use crate::ui::layout::{self, TOOLBAR_HEIGHT};
 use crate::ui::note_gesture::Snap;
 use crate::ui::panels::TITLE_GAP;
 use crate::ui::piano_layout::{
-    self, View, PLAYER_GAP, PLAYER_SIDE, PLAY_BUTTON, RULER_HEIGHT, STRIP_GROUP_GAP, STRIP_HEIGHT,
-    STRIP_PADDING, STRIP_SPACING,
+    self, View, MENU_ARROW, MENU_ARROW_GAP, PLAYER_GAP, PLAYER_SIDE, PLAY_BUTTON, RULER_HEIGHT,
+    STRIP_GROUP_GAP, STRIP_HEIGHT, STRIP_PADDING, STRIP_SPACING,
 };
 use crate::ui::piano_roll::{scale_width, StripFold};
 use crate::ui::pop_out;
@@ -179,9 +179,9 @@ fn parent(path: &str) -> &str {
 // window, the channel "lead", no velocity drag, no take; once with no scale, once with Minor
 // pentatonic chosen (`--roll-scale minor-pentatonic`; its root's chooser shows, at C). Laid out
 // by the strip's constants and folded by its law (crate::ui::piano_roll::StripFold, its table
-// derived by hand in `the_strip_folds_by_its_width`): with no scale it needs 733.22 px unfolded,
-// 656.90 with the Len readout folded, so the Len readout goes (into the snap picker's hint) and
-// nothing else; with the scale and its root 789.77 and 713.45, 646.70 with Preview and Follow
+// derived by hand in `the_strip_folds_by_its_width`): with no scale it needs 733.93 px unfolded,
+// 657.61 with the Len readout folded, so the Len readout goes (into the snap picker's hint) and
+// nothing else; with the scale and its root 790.48 and 714.16, 647.41 with Preview and Follow
 // as 24 px glyphs too, so those fold as well, and the Scale chooser keeps its 62 px.
 // From the roll's left edge at x 300: the name from the 12 px margin, "lead" 27.99 (to 339.99),
 // then, the title gap (48) on, the groups 20 px apart, two of the 10 px spacing that parts the
@@ -190,15 +190,18 @@ fn parent(path: &str) -> &str {
 // padding (6 a side and 6 before the arrow): 60.32, at 387.99..448.31. With no scale:
 // Preview (45.64 + 16) at 468.31..529.95 and Follow (37.11 + 16) a spacing on, 539.95..593.06;
 // the Scale group at 613.06, its chooser 62 px, Fold (24.53 + 16) a spacing after it, at
-// 685.06..725.59; Notes ("Notes ▾" + 16, 60.78 with this system's ▾) at 745.59..806.37; the
-// roll's player at 826.37..910.90, 84.52 wide: 5 px of plain room either side round Play, 26,
-// and Loop, 28.52 + 16, 4 px apart: Play at 831.37..857.37, Loop at 861.37..905.90, both 20
-// tall at window y 68..88, the strip's middle (64 + 4). With the scale: Preview and Follow 24 px
-// glyph buttons at 468.31..492.31 and 502.31..526.31; the Scale group at 546.31, the chooser 62
-// px, the root's chooser ("G#", the widest root, 16.55 + 30) a spacing on at 618.31..664.86 and
-// Fold at 674.86..715.39; Notes at 735.39..796.17; the player at 816.17..900.70, Loop to
-// 895.70. Either way the pop-out grip's 24 px target, docked, is the strip's last box, x 1000 −
-// 12 − 24 = 964..988, at least a spacing right of the player's room. (Pins moved: a box drew
+// 685.06..725.59; Notes ("Notes" 33.49, the drawn arrow's 8 px square 4 after it, + 16: 61.49)
+// at 745.59..807.09; the roll's player at 827.09..911.61, 84.52 wide: 5 px of plain room either
+// side round Play, 26, and Loop, 28.52 + 16, 4 px apart: Play at 832.09..858.09, Loop at
+// 862.09..906.61, both 20 tall at window y 68..88, the strip's middle (64 + 4). With the scale:
+// Preview and Follow 24 px glyph buttons at 468.31..492.31 and 502.31..526.31; the Scale group
+// at 546.31, the chooser 62 px, the root's chooser ("G#", the widest root, 16.55 + 30) a spacing
+// on at 618.31..664.86 and Fold at 674.86..715.39; Notes at 735.39..796.89; the player at
+// 816.89..901.41, Loop to 896.41. Either way the pop-out grip's 24 px target, docked, is the
+// strip's last box, x 1000 − 12 − 24 = 964..988, at least a spacing right of the player's room.
+// (Pins moved: Notes's arrow was a "▾" in its label, which Inter has not, drawn by the system's
+// face, 7.911 px on this Linux, 0.71 px narrower than the drawn one, so every pin from Notes on
+// stood that much left (Loop to 905.90 and 895.70); a box drew
 // round Play and Loop in that room (its edge and inset the 5 px) and went the same day, nothing
 // moving; before it Play and Loop stood a spacing apart, Loop to 906.90 and 896.70; the probe
 // read the roll alone at
@@ -212,21 +215,22 @@ fn parent(path: &str) -> &str {
 //
 // The roll popped out at its own window's least width, 608 px (--pop-out piano-roll, its place
 // kept 608 wide), its strip from the window's top and left: in its own window it has no grip,
-// so it needs 556.14 with no scale, the length and Preview and Follow folded (622.90 > 608), and
-// 598.70 with the scale, the Scale chooser folded too (612.70 > 608). From x 0: the name to
+// so it needs 556.86 with no scale, the length and Preview and Follow folded (623.61 > 608), and
+// 599.41 with the scale, the Scale chooser folded too (613.41 > 608). From x 0: the name to
 // 39.99, the snap picker 87.99..148.31, the glyphs 168.31..192.31 and 202.31..226.31, the Scale
-// group at 246.31. With no scale the chooser 62 px, Fold 318.31..358.84, Notes 378.84..439.62,
-// the player 459.62..544.14 (Loop to 539.14); with the scale the chooser folded to 48 px, the
-// root's 304.31..350.86, Fold 360.86..401.39, Notes 421.39..482.17, the player 502.17..586.70
-// (Loop to 581.70), 9.30 px short of the right margin (608 − 12 = 596). Then with the channel
+// group at 246.31. With no scale the chooser 62 px, Fold 318.31..358.84, Notes 378.84..440.33,
+// the player 460.33..544.86 (Loop to 539.86); with the scale the chooser folded to 48 px, the
+// root's 304.31..350.86, Fold 360.86..401.39, Notes 421.39..482.89, the player 502.89..587.41
+// (Loop to 582.41), 8.59 px short of the right margin (608 − 12 = 596). Then with the channel
 // named "Bass 808 low" (a
-// copy of p3_roll renamed, the stage's own): whole it needs 659.78, so the name is cut to its
-// least, "Bas…" (36.51; "Bass…", 43.90, is wider than the 37.29 the controls leave): the snap
+// copy of p3_roll renamed, the stage's own): whole it needs 660.50, so the name is cut to its
+// least, "Bas…" (36.51; "Bass…", 43.90, is wider than the 36.58 the controls leave): the snap
 // picker 96.51..156.83 (12 + 36.51 + 48 on), every control 36.51 − 27.99 = 8.52 px right of
-// where it stands beside "lead", the player 510.69..595.22 (Loop to 590.22), 0.78 px short of
-// the right margin. No 24 px box right of the player, and Notes's words whole. (Pins moved: the
+// where it stands beside "lead", the player 511.41..595.93 (Loop to 590.93), 0.07 px short of
+// the right margin. No 24 px box right of the player, and Notes's word whole. (Pins moved: the
 // window's least width was 600, until a cut name's least showed it could not hold "Bas…", then
-// 604, until the player's box took 4 px more.)
+// 604, until the player's box took 4 px more; the pins here stood 0.71 px left, by this
+// system's "▾", until Notes's arrow was drawn.)
 struct Case {
     /// The channel's name as the strip shows it.
     name: &'static str,
@@ -238,7 +242,7 @@ struct Case {
     scale: bool,
     /// How far the strip folds, by the hand table above.
     fold: StripFold,
-    /// Where Loop ends, by hand, with this system's "▾" at 7.911 px.
+    /// Where Loop ends, by hand.
     end: f32,
     /// In the stack: the pop-out grip ends the strip.
     docked: bool,
@@ -265,7 +269,9 @@ fn the_strip_folds(case: Case) {
     let (loop_path, _) = dump.text("Loop");
     let play = dump.boxed(&format!("{}.0", parent(parent(&loop_path))));
     let (fold, scale_group) = dump.button("Fold");
-    let (notes, _) = dump.button("Notes");
+    // Notes's word and its drawn arrow stand in a row, inside its button.
+    let (notes_path, notes_words) = dump.text("Notes");
+    let notes = dump.boxed(parent(parent(&notes_path)));
     let (fold_path, _) = dump.text("Fold");
     // The groups' row holds the Scale group, which holds Fold's button.
     let groups = parent(parent(parent(&fold_path)));
@@ -357,11 +363,11 @@ fn the_strip_folds(case: Case) {
         fold.right() + STRIP_GROUP_GAP,
         "Notes a group's gap after Fold",
     );
-    let (_, notes_words) = dump.text("Notes");
+    at(notes_words.width, label("Notes"), "Notes's word whole");
     at(
-        notes_words.width,
-        label("Notes \u{25be}"),
-        "Notes's words whole",
+        notes.width,
+        label("Notes") + MENU_ARROW_GAP + MENU_ARROW + 16.0,
+        "Notes's button: its word, the drawn arrow a gap after it, the padding",
     );
     at(
         player.left,
@@ -394,9 +400,7 @@ fn the_strip_folds(case: Case) {
         top + (STRIP_HEIGHT - PLAY_BUTTON.height) / 2.0,
         "the pair in the strip's middle",
     );
-    // Notes holds "▾", which the system's face draws: the ends are pinned with this system's.
-    let drift = label("Notes \u{25be}") - (36.867_188 + 7.911);
-    at(looping.right() - drift, end, "Loop's end");
+    at(looping.right(), end, "Loop's end");
     let button = pop_out::SIZE;
     let strip = dump.strip();
     let grip = dump
@@ -434,7 +438,7 @@ fn p3_the_rolls_strip_at_700_folds_its_length() {
         top: TOOLBAR_HEIGHT,
         scale: false,
         fold: StripFold::Length,
-        end: 905.90,
+        end: 906.61,
         docked: true,
     });
 }
@@ -448,7 +452,7 @@ fn p3_the_rolls_strip_at_700_with_a_scale_folds_preview_and_follow_too() {
         top: TOOLBAR_HEIGHT,
         scale: true,
         fold: StripFold::Glyphs,
-        end: 895.70,
+        end: 896.41,
         docked: true,
     });
 }
@@ -462,7 +466,7 @@ fn p3_the_rolls_own_window_at_its_least_folds_its_length_and_switches() {
         top: 0.0,
         scale: false,
         fold: StripFold::Glyphs,
-        end: 539.14,
+        end: 539.86,
         docked: false,
     });
 }
@@ -476,7 +480,7 @@ fn p3_the_rolls_own_window_at_its_least_with_a_scale_shows_every_control() {
         top: 0.0,
         scale: true,
         fold: StripFold::Scale,
-        end: 581.70,
+        end: 582.41,
         docked: false,
     });
 }
@@ -490,7 +494,7 @@ fn p3_the_rolls_own_window_at_its_least_cuts_a_long_name_to_fit() {
         top: 0.0,
         scale: true,
         fold: StripFold::Name,
-        end: 590.22,
+        end: 590.93,
         docked: false,
     });
 }
@@ -541,6 +545,7 @@ fn rp_the_roll_player_shows_its_playhead_in_the_roll_and_the_rack_at_one_tick() 
         scroll: Ticks(0),
         zoom: piano_layout::ZOOM.default,
         step: Ticks(24),
+        signature: dawsome_engine::time::TimeSignature::COMMON,
         rows: piano_layout::Rows::ALL,
     };
     // The ticks whose line starts in the pixel column the line was found in.
@@ -549,7 +554,7 @@ fn rp_the_roll_player_shows_its_playhead_in_the_roll_and_the_rack_at_one_tick() 
         .collect();
     let marked: Vec<u32> = (0..16)
         .filter(|&step| {
-            let rect = layout::step_rect(0, step);
+            let rect = layout::step_rect(0, step, 4);
             let edge = Point::new(rect.center_x(), rect.y + layout::PLAYHEAD_EDGE / 2.0);
             accent(shot.pixel(layout::rack_in_window(edge)))
         })

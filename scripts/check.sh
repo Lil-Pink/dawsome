@@ -96,6 +96,17 @@ scripts/python.sh -I tests/fixtures/gen_p32_expected.py --check tests/fixtures
 # Dawsome Synth: its projects and MIDI messages, its 37 parameters, and the renders its
 # formulas give (the voice pool, oscillator 1's sine, the amp envelope, the pedal and the bend).
 scripts/python.sh -I tests/fixtures/gen_p33_expected.py --check tests/fixtures
+# Time signatures other than 4/4: the beat and the bar each makes, the metronome's and the
+# count-in's clicks, the render lengths, the project file, the edit's growth, the MIDI and
+# DAWproject files, a plugin's bar, the position readout and the step grid, as their generator
+# writes them.
+scripts/python.sh -I tests/fixtures/gen_p34_expected.py --check tests/fixtures
+# Time signatures per pattern and along the song: a pattern's own signature (its renders, MIDI
+# file, edit, step grid, and the metronome, count-in, readout and plugin bar while it plays
+# alone) and the song's meter map (its bars, readouts, snaps, metronome, count-ins, plugin bars,
+# MIDI and DAWproject files, --bars, the stems' end, the change edits and their settle rule), as
+# their generator writes them.
+scripts/python.sh -I tests/fixtures/gen_p35_expected.py --check tests/fixtures
 # The piano roll's player: the sounds, projects and their references (every other channel muted)
 # a channel's render alone must equal byte for byte, the frames worked out by hand, and the
 # lengths of a pass played once and of two passes looped.
@@ -131,15 +142,18 @@ scripts/python.sh -I scripts/help_shots.py check
 # answers' project.xml files follow the published schema (tests/fixtures/dawproject/); xmllint,
 # when installed, validates them too, as a second, independent reader of the schema.
 scripts/python.sh -I -B tests/scripts/dawproject_check.py --self-test
-scripts/python.sh -I -B tests/scripts/dawproject_check.py tests/fixtures/p18_daw_*.project.xml
+scripts/python.sh -I -B tests/scripts/dawproject_check.py tests/fixtures/p18_daw_*.project.xml tests/fixtures/p34_daw_*.project.xml tests/fixtures/p35_meter.project.xml
 if command -v xmllint >/dev/null; then
-    xmllint --noout --schema tests/fixtures/dawproject/Project.xsd tests/fixtures/p18_daw_*.project.xml
+    xmllint --noout --schema tests/fixtures/dawproject/Project.xsd tests/fixtures/p18_daw_*.project.xml tests/fixtures/p34_daw_*.project.xml tests/fixtures/p35_meter.project.xml
 else
     echo "xmllint not installed: second schema validation skipped"
 fi
 # The layout bounds check (scripts/ui-check.sh runs it on the app's dumps at four zooms) finds the
 # overlap and the cut label planted in a dump of its own, each named, and passes the clean one.
 scripts/python.sh -I -B tests/scripts/layout_bounds.py --self-test
+# The check that the toolbar's time signature stands right of the tempo in a layout dump
+# (scripts/ui-check.sh runs it on the zoom's dumps and on F1 in 6/8) finds its planted faults.
+scripts/python.sh -I -B tests/scripts/signature_readout.py --self-test
 # The fetch of the instrument sets lands the kit at its commit, and fetches a kit folder whose .git
 # is no repository again without touching the repository around it (repositories of its own).
 scripts/python.sh -I -B tests/scripts/fetch_kit_test.py

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use dawsome_engine::plan;
 use dawsome_engine::project::Project;
-use dawsome_engine::time;
+use dawsome_engine::time::Ticks;
 use dawsome_media::export::{self, Report, Stems};
 use dawsome_media::{BitDepth, Dither, Encoding, MP3_RATES};
 use iced::Task;
@@ -107,10 +107,10 @@ pub fn mp3_unavailable(rate: u32) -> Option<&'static str> {
 /// Bars an export renders unless changed: the song to its end, or the pattern's length.
 fn default_bars(project: &Project, mode: plan::PlayMode) -> u32 {
     match mode {
+        // The song to its end, rounded up to a bar of its meter.
         plan::PlayMode::Song => {
-            let bar = time::bars_to_ticks(1, project.ppq).0;
-            let end = project.playlist.end().0.max(0);
-            u32::try_from((end + bar - 1) / bar)
+            let end = Ticks(project.playlist.end().0.max(0));
+            u32::try_from(project.meter_map().bars_holding(end))
                 .unwrap_or(u32::MAX)
                 .max(1)
         }

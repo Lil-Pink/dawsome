@@ -17,7 +17,7 @@ use dawsome_engine::project::{
     AutomationTarget, Channel, ChannelId, ChannelKind, InputSource, PatternId, Project, MAX_VOLUME,
     PAN_RANGE,
 };
-use dawsome_engine::time::SWING_RANGE;
+use dawsome_engine::time::{TimeSignature, SWING_RANGE};
 use dawsome_engine::transport::ParamTarget;
 use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, Path, Stroke, Text};
 use iced::{alignment, mouse, window, Point, Rectangle, Renderer, Size, Theme, Vector};
@@ -28,7 +28,7 @@ use crate::ui::fonts::size;
 use crate::ui::hint::{hover_change, Hover, RackPart};
 use crate::ui::layout::{
     self, HeaderHit, RackHit, CONTROL_SIZE, PAN_KNOB_X, RACK_HEADER_HEIGHT, RACK_TITLE_X,
-    STEPS_PER_GROUP, VOLUME_KNOB_X,
+    VOLUME_KNOB_X,
 };
 use crate::ui::mixer::TIP_HEIGHT;
 use crate::ui::mixer_state::{pan_text, percent_text};
@@ -226,7 +226,8 @@ impl ChannelRack<'_> {
     fn hit(&self, bounds: Rectangle, cursor: mouse::Cursor) -> Option<RackHit> {
         let point = cursor.position_in(bounds)?;
         let steps = step_grid::step_count(self.project, self.pattern);
-        layout::hit_test(point, self.rows.len(), steps)
+        let group = layout::steps_per_group(step_grid::signature_of(self.project, self.pattern));
+        layout::hit_test(point, self.rows.len(), steps, group)
     }
 
     /// Whether `cursor` is over "+ Instrument…" under the rows.
@@ -264,19 +265,19 @@ impl ChannelRack<'_> {
                     let color = if grid.is_lit(id, step) {
                         style::channel_color(place)
                     } else {
-                        style::unlit_step(step)
+                        style::unlit_step(step, grid.group())
                     };
-                    let rect = layout::step_rect(row, step);
+                    let rect = layout::step_rect(row, step, grid.group());
                     frame.fill_rectangle(rect.position(), rect.size(), color);
-                    if step > 0 && step % STEPS_PER_GROUP == 0 {
-                        draw_beat_line(frame, row, step);
+                    if step > 0 && step % grid.group() == 0 {
+                        draw_beat_line(frame, row, step, grid.group());
                     }
                 }
                 if is_empty_sampler(channel) {
-                    draw_empty_hint(frame, row, grid.steps());
+                    draw_empty_hint(frame, row, grid.steps(), grid.group());
                 }
                 if let Some(input) = channel.input.as_ref() {
-                    draw_input_badge(frame, row, grid.steps(), input);
+                    draw_input_badge(frame, row, grid.steps(), grid.group(), input);
                 }
             }
         });
@@ -347,8 +348,10 @@ impl ChannelRack<'_> {
             crate::ui::mixer::draw_tip(&mut playhead, rect, &value);
         }
         if let Some(step) = self.playhead {
+            let group =
+                layout::steps_per_group(step_grid::signature_of(self.project, self.pattern));
             for (row, _) in self.rows.channels() {
-                let rect = layout::step_rect(row, step);
+                let rect = layout::step_rect(row, step, group);
                 let x = rect.x - steps;
                 if x < layout::STEPS_X {
                     continue;
@@ -473,10 +476,10 @@ pub const EMPTY_SAMPLER_HINT: [&str; 2] =
 const HINT_LINE: f32 = 13.0;
 pub const HINT_WIDTH: f32 = 260.0;
 
-/// The dim hint right of the steps of `row`, a sampler without a sound, `steps` steps long, each
-/// line cut with an ellipsis to [`HINT_WIDTH`].
-fn draw_empty_hint(frame: &mut Frame, row: usize, steps: u32) {
-    let left = layout::rack_size(row + 1, steps).width;
+/// The dim hint right of the steps of `row`, a sampler without a sound, `steps` steps long in
+/// groups of `group`, each line cut with an ellipsis to [`HINT_WIDTH`].
+fn draw_empty_hint(frame: &mut Frame, row: usize, steps: u32, group: u32) {
+    let left = layout::rack_size(row + 1, steps, group).width;
     let middle = layout::name_button_rect(row).center_y();
     for (line, offset) in EMPTY_SAMPLER_HINT.iter().zip([-0.5, 0.5]) {
         let Some(words) = fit_width(line, HINT_WIDTH - 8.0, size::LABEL) else {
@@ -497,10 +500,11 @@ fn draw_empty_hint(frame: &mut Frame, row: usize, steps: u32) {
 const BADGE: Size = Size::new(20.0, 13.0);
 const BADGE_GAP: f32 = 6.0;
 
-/// An input channel's badge right of its steps, where an empty sampler says what to do: "IN"
-/// on the accent, then its device and channels, dim, cut with an ellipsis to [`HINT_WIDTH`].
-fn draw_input_badge(frame: &mut Frame, row: usize, steps: u32, input: &InputSource) {
-    let left = layout::rack_size(row + 1, steps).width;
+/// An input channel's badge right of its steps (`steps` in groups of `group`), where an empty
+/// sampler says what to do: "IN" on the accent, then its device and channels, dim, cut with an
+/// ellipsis to [`HINT_WIDTH`].
+fn draw_input_badge(frame: &mut Frame, row: usize, steps: u32, group: u32, input: &InputSource) {
+    let left = layout::rack_size(row + 1, steps, group).width;
     let middle = layout::name_button_rect(row).center_y();
     let badge = Rectangle::new(Point::new(left, middle - BADGE.height / 2.0), BADGE);
     frame.fill_rectangle(badge.position(), badge.size(), style::accent());
@@ -551,6 +555,9 @@ pub struct RackHeader {
     /// The selected pattern's swing, in tenths of a per cent; `None` without a pattern, when
     /// the knob and its readout are dim and take nothing.
     pub swing: Option<u16>,
+    /// The selected pattern's own time signature, shown right of "+" (a press opens the time
+    /// signature menu); `None` while it follows the project's, when nothing shows there.
+    pub signature: Option<TimeSignature>,
 }
 
 /// What the header's cursor was over last, and the last press on its swing, to tell a double
@@ -577,7 +584,12 @@ impl RackHeader {
     /// The control under `cursor`: the swing only while there is a pattern to swing.
     fn hit(&self, bounds: Rectangle, cursor: mouse::Cursor) -> Option<HeaderHit> {
         let hit = layout::header_hit_test(cursor.position_in(bounds)?)?;
-        (hit != HeaderHit::Swing || self.swing.is_some()).then_some(hit)
+        let shown = match hit {
+            HeaderHit::Swing => self.swing.is_some(),
+            HeaderHit::Signature => self.signature.is_some(),
+            HeaderHit::BarsDown | HeaderHit::BarsUp => true,
+        };
+        shown.then_some(hit)
     }
 
     /// The bars "−" or "+" adds now, if it can change the count.
@@ -585,7 +597,7 @@ impl RackHeader {
         match hit {
             HeaderHit::BarsDown => self.shorter.then_some(-1),
             HeaderHit::BarsUp => self.longer.then_some(1),
-            HeaderHit::Swing => None,
+            HeaderHit::Swing | HeaderHit::Signature => None,
         }
     }
 
@@ -594,6 +606,9 @@ impl RackHeader {
     fn message(&self, hit: HeaderHit) -> Option<Message> {
         match hit {
             HeaderHit::Swing => self.swing.map(|_| Message::SwingPressed),
+            HeaderHit::Signature => self
+                .signature
+                .map(|_| Message::Signature(crate::app::SignatureMessage::ForPattern)),
             nudge => self
                 .nudge(nudge)
                 .map(|by| Message::Pattern(PatternMessage::Bars(by))),
@@ -705,6 +720,16 @@ impl canvas::Program<Message> for RackHeader {
                 &mut frame,
                 &bars.to_string(),
                 count.center(),
+                style::palette().lcd_text,
+            );
+        }
+        if let Some(signature) = self.signature {
+            let shown = layout::signature_rect();
+            frame.fill_rectangle(shown.position(), shown.size(), style::palette().lcd);
+            centered_text(
+                &mut frame,
+                &signature.to_string(),
+                shown.center(),
                 style::palette().lcd_text,
             );
         }
@@ -960,14 +985,15 @@ pub(crate) fn draw_mute_light(
     }
 }
 
-/// The soft line between two beat groups of `row`'s steps, before step `step` (the first of a
-/// group): 2 px down the middle of the gap, as tall as a step, in the palette's soft line. Why:
+/// The soft line between two beat groups of `row`'s steps (groups of `group`), before step
+/// `step` (the first of a group): 2 px down the middle of the gap, as tall as a step, in the
+/// palette's soft line. Why:
 /// the unlit steps' two tones are a shade down so every channel's lit step stands 3:1 off both,
 /// which leaves the tones 1.16:1 apart; the line keeps the beat groups apart (with the
 /// soft line, not a lighter tone).
-fn draw_beat_line(frame: &mut Frame, row: usize, step: u32) {
-    let before = layout::step_rect(row, step - 1);
-    let after = layout::step_rect(row, step);
+fn draw_beat_line(frame: &mut Frame, row: usize, step: u32, group: u32) {
+    let before = layout::step_rect(row, step - 1, group);
+    let after = layout::step_rect(row, step, group);
     let middle = (before.x + before.width + after.x) / 2.0;
     frame.fill_rectangle(
         Point::new(middle - BEAT_LINE / 2.0, after.y),
@@ -1283,7 +1309,7 @@ mod tests {
             drop_sampler: drag.flatten(),
             rows: RackRows::of(project, false),
         };
-        let size = layout::rack_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16, 4);
         let bounds = Rectangle::new(Point::ORIGIN, size);
         let action = rack.update(state, &event, bounds, mouse::Cursor::Available(at))?;
         let (message, _, status) = action.into_inner();
@@ -1349,7 +1375,7 @@ mod tests {
         };
         let pressed = |open: bool, at: Point, button| {
             let rack = rack(open);
-            let size = layout::rack_size(rack.rows.len(), 16);
+            let size = layout::rack_size(rack.rows.len(), 16, 4);
             let bounds = Rectangle::new(Point::ORIGIN, size);
             let action = rack.update(
                 &mut RackState::default(),
@@ -1365,7 +1391,7 @@ mod tests {
             pressed(false, header, mouse::Button::Left),
             Some(Message::ToggleTakes)
         ));
-        let along = layout::step_rect(1, 3).center();
+        let along = layout::step_rect(1, 3, 4).center();
         assert!(matches!(
             pressed(false, along, mouse::Button::Left),
             Some(Message::ToggleTakes)
@@ -1483,7 +1509,7 @@ mod tests {
             let action = rows.update(&mut RackState::default(), &event, bounds, cursor)?;
             action.into_inner().0
         };
-        let step = layout::step_rect(0, 3).center();
+        let step = layout::step_rect(0, 3, 4).center();
         assert_eq!(step.x, 326.0);
         let pressed = event(
             &rows(false),
@@ -1557,7 +1583,7 @@ mod tests {
             shift: false,
         };
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(400.0, 200.0));
-        let over_steps = Point::new(300.0, layout::step_rect(0, 3).center().y);
+        let over_steps = Point::new(300.0, layout::step_rect(0, 3, 4).center().y);
         let swipe = |x, y| {
             let event = canvas::Event::Mouse(mouse::Event::WheelScrolled {
                 delta: mouse::ScrollDelta::Pixels { x, y },
@@ -1621,7 +1647,7 @@ mod tests {
             let event = canvas::Event::Window(window::Event::FileDropped(file.clone()));
             rack_event(&project, &mut RackState::default(), None, event, at)
         };
-        let row_2 = layout::step_rect(1, 3).center();
+        let row_2 = layout::step_rect(1, 3, 4).center();
         let dropped = drop(row_2);
         assert!(
             matches!(
@@ -1631,7 +1657,7 @@ mod tests {
             ),
             "{dropped:?}"
         );
-        assert!(drop(layout::step_rect(0, 3).center()).is_none());
+        assert!(drop(layout::step_rect(0, 3, 4).center()).is_none());
     }
 
     // A MIDI device held from the Library: over p8_ui's sampler row (channel 2) the rack says
@@ -1640,7 +1666,7 @@ mod tests {
     #[test]
     fn a_device_held_over_the_rows_names_the_channel_that_plays_notes() {
         let project = fixture("p8_ui.json");
-        let size = layout::rack_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16, 4);
         let moved = |heard, row| {
             let target = DeviceDrop {
                 project: &project,
@@ -1672,7 +1698,7 @@ mod tests {
     #[test]
     fn a_sound_held_over_a_header_names_its_channel() {
         let project = fixture("p8_ui.json");
-        let size = layout::rack_size(project.channels.len(), 16);
+        let size = layout::rack_size(project.channels.len(), 16, 4);
         let moved = |heard, at: Point| {
             let target = SoundDrop {
                 project: &project,
@@ -1833,6 +1859,7 @@ mod tests {
             shorter: false,
             longer: true,
             swing,
+            signature: None,
         };
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(1000.0, RACK_HEADER_HEIGHT));
         let action = header.update(state, &event, bounds, mouse::Cursor::Available(at))?;

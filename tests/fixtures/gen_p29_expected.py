@@ -55,14 +55,19 @@ The rules:
             plugin's: no set_scale. These tests open every editor at 1.5 (a 4K screen at 150 %).
             The VST3 editor logs "setContentScaleFactor 1.5" and takes it (kResultOk) without
             resizing; the CLAP interface logs "set_scale 1.5" and refuses it (it takes the window
-            system's scale), which the host lets be. Never a key, wheel or focus call.
+            system's scale), which the host lets be. Never a wheel or focus call; a key call
+            only for a key that comes to our window (see "keys").
   close     the window's close button (WM_DELETE_WINDOW), releasing the plugin, or the host
             going: the editor is removed, its frame taken away (setFrame null) and let go ("view
             freed"), our window closed; the plugin's parts then terminate, the controller first,
             as the host orders them, unless its audio half is still alive (it then keeps them).
-  pins      every plugin window (CLAP's too) is made black with STRUCTURE_NOTIFY (1 << 17)
-            alone besides; a VST3 one adds SUBSTRUCTURE_NOTIFY (1 << 19) and FOCUS_CHANGE
-            (1 << 21); WM_CLASS is "<id>\\0<id>\\0" for the application id the app sets. Every
+  keys      a key that comes to our window (the editor's own takes none) is offered to the
+            editor first: a press to onKeyDown, a release to onKeyUp, no modifier held. The
+            View's editor uses none (kResultFalse), so each goes on to the app as a key.
+  pins      every plugin window (CLAP's too) is made black with STRUCTURE_NOTIFY (1 << 17),
+            KEY_PRESS (1 << 0), KEY_RELEASE (1 << 1) and FOCUS_CHANGE (1 << 21) besides (the
+            keys that reach it play the app's typing keyboard; its focus leaving ends their
+            notes); a VST3 one adds SUBSTRUCTURE_NOTIFY (1 << 19); WM_CLASS is "<id>\\0<id>\\0" for the application id the app sets. Every
             resize of a plugin window, both formats', is one ConfigureWindow request (opcode 12,
             5 words: the window, value-mask width | height (4 | 8), the two sides held to
             1..32767), little-endian as this machine sends it.
@@ -320,6 +325,7 @@ FOCUS_CURRENT = 0
 XEMBED_MAPPED = 1
 NOTIFY_INFERIOR, NOTIFY_NONLINEAR, NOTIFY_POINTER = 2, 3, 5
 STRUCTURE_NOTIFY, SUBSTRUCTURE_NOTIFY, FOCUS_CHANGE, PROPERTY_CHANGE = 1 << 17, 1 << 19, 1 << 21, 1 << 22
+KEY_PRESS, KEY_RELEASE = 1 << 0, 1 << 1
 
 
 def xembed(opcode, detail=0, data1=0, data2=0):
@@ -344,12 +350,13 @@ FOCUS = {
 }
 CLASS = "dawsome-test"
 PINS = {
-    "plugin_window_mask": STRUCTURE_NOTIFY, "embedder_mask": STRUCTURE_NOTIFY | SUBSTRUCTURE_NOTIFY | FOCUS_CHANGE,
+    "plugin_window_mask": STRUCTURE_NOTIFY | KEY_PRESS | KEY_RELEASE | FOCUS_CHANGE,
+    "embedder_mask": STRUCTURE_NOTIFY | KEY_PRESS | KEY_RELEASE | FOCUS_CHANGE | SUBSTRUCTURE_NOTIFY,
     "watched_child_mask": PROPERTY_CHANGE | STRUCTURE_NOTIFY,
     "class": CLASS, "wm_class": list((CLASS + "\0" + CLASS + "\0").encode("ascii")),
 }
 assert (PINS["plugin_window_mask"], PINS["embedder_mask"], PINS["watched_child_mask"]) == (
-    0x20000, 0x2A0000, 0x420000)
+    0x220003, 0x2A0003, 0x420000)
 assert bytes(PINS["wm_class"]) == b"dawsome-test\0dawsome-test\0"
 
 

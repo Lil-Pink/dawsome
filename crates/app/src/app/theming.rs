@@ -273,10 +273,10 @@ mod tests {
     // Settings → Theme, end to end: the Theme tab, then a press on each other theme's key on
     // the page keeps its name and draws every window in it from the next
     // frame, with the same widgets and caches as before (what the toolkit keeps between frames):
-    // the main window's toolbar ground (Graphite 2B2E33, then the theme's panel: Gilt's 1B2D23),
+    // the main window's toolbar ground (Graphite 2B2E33, then the theme's panel: Gilt's 2E201B),
     // the synth window's chassis near its top, the window's ground (25282D, then Gilt's
-    // 192A20), which only its size redraws otherwise, and the Help window's page, the well's
-    // ground (1F2125, then Gilt's 15241C). Graphite again brings Graphite back and keeps
+    // 2B1E18), which only its size redraws otherwise, and the Help window's page, the well's
+    // ground (1F2125, then Gilt's 251812). Graphite again brings Graphite back and keeps
     // nothing.
     #[test]
     fn a_theme_chosen_in_settings_repaints_every_window() {
@@ -318,7 +318,10 @@ mod tests {
             let key = theme_page::theme_key(theme).center();
             let _ = app.update(Message::Settings(SettingsMessage::Pressed(key)));
         };
-        for theme in ThemeId::ALL.into_iter().skip(1) {
+        for theme in ThemeId::ALL
+            .into_iter()
+            .filter(|&theme| theme != ThemeId::Graphite)
+        {
             press(&mut app, theme);
             assert_eq!(app.settings.theme(), theme, "kept");
             let set = theme.palette();

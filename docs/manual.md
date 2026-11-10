@@ -1,6 +1,6 @@
 # Dawsome
 
-The reference for Dawsome 0.1.3: every panel, gesture and setting. The README is the short introduction.
+The reference for Dawsome 0.1.4: every panel, gesture and setting. The README is the short introduction.
 
 Dawsome is a pattern-based digital audio workstation for Linux and Windows. Program beats in the
 channel rack, write melodies in the piano roll, arrange patterns, audio and automation in the
@@ -12,14 +12,17 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
 
 ## Features
 
-- **Channel rack**: sampler channels with a step grid (16 steps a bar), volume and pan, patterns
-  of 1 to 32 bars, each with its own swing (see **Swing**); plugin instruments (CLAP or VST3) as channels. A channel that plays notes
+- **Channel rack**: sampler channels with a step grid (a step is a 16th note, so a bar holds 16
+  steps in 4/4, 12 in 3/4 and 6/8; see **Time signature**), volume and pan, patterns of 1 bar
+  up to the most the rack's 512 steps hold (32 bars of 4/4, 42 of 3/4), each with its own swing
+  (see **Swing**); plugin instruments (CLAP or VST3) as channels. A channel that plays notes
   starts at −5 dB, so a few notes together stay clear of the master; audio
   and input channels start at 0 dB. The unlit steps alternate two dark tones by beat, with a
   soft line between the beat groups; a muted channel's light (left of its name) is a ring, a
   heard one's a green dot, as a track's and a mixer strip's are. Its header reads, left to right,
   "Channel Rack", the pattern's **Swing** (its knob and readout) and its **Bars** (− the count
-  +); **+ Instrument…** stands under the last channel row, in line with the channels' names,
+  +). The steps stand in groups a beat wide: four for a quarter-note beat (3/4, 4/4), two for
+  an eighth (6/8, 7/8), one for a sixteenth (then with no gap between them); **+ Instrument…** stands under the last channel row, in line with the channels' names,
   as words alone, as **+ Track** stands under the tracks.
 - **Piano roll**: draw, move, resize and delete notes, a velocity lane, selections, duplicate,
   snap and zoom, the other channels' notes shown faintly; a sample plays at the pitch of its key.
@@ -105,8 +108,8 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   selected, a chain right of the header's Fit unlinks every selected clip (each its own copy,
   "Pattern 1 (copy)", "(copy 2)"…) and, crossed once they play copies, links them back, one
   undo step a click; a clip's menu (Ctrl+right-click) does the same for that clip.
-  - **Reading the grid**: a bar is four beats, and a new pattern is one bar long, so its clip
-    fills one bar. The lanes' lines mark the bars and, between them, the beats; every fourth bar
+  - **Reading the grid**: a bar is the time signature's beats (four quarters in 4/4, three in
+    3/4, six eighths in 6/8), and a new pattern is one bar long, so its clip fills one bar. The lanes' lines mark the bars and, between them, the beats; every fourth bar
     (1, 5, 9, …) starts with a brighter double line and has its number written brighter in the
     ruler, so a song reads in phrases of four bars. Every other bar is shaded a little lighter
     (every other four bars when zoomed far out), so the bars read as blocks even where their
@@ -242,9 +245,10 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
 - **Library**: one panel down the left with one search over its sections: Instruments (the
   starter kit's drums, the instrument sets, your own SFZ sets and your plugin instruments by
   maker, a VST3 one marked so), Samples (your sample folders and the shipped one-shots and
-  loops, with preview) and MIDI devices (what is plugged in). Drag a sound or an instrument onto
-  the rack or a playlist track, and a MIDI keyboard onto a rack channel to play that channel
-  whatever is selected.
+  loops, with preview) and MIDI devices (what is plugged in). A click plays the sound at the
+  level a new channel plays it (a step of it on a channel just added). Drag a sound or an
+  instrument onto the rack or a playlist track, and a MIDI keyboard onto a rack channel to play
+  that channel whatever is selected.
 - **Instrument sets**: multisampled instruments read from SFZ files (key and velocity zones,
   loops, release, round robin), played from the piano roll, a MIDI keyboard or the computer
   keyboard like any instrument.
@@ -264,7 +268,8 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   pan and mixer insert like any channel, playing or stopped (Library → Instruments → External
   input).
 - **Recording**: one Record button and a switch beside it saying what a take records, Notes or
-  Audio, after a one-bar count-in (a key struck there and held into bar 1 starts on bar 1). Notes
+  Audio, after a one-bar count-in, a click on each of the bar's beats (a key struck there and
+  held into bar 1 starts on bar 1). Notes
   go into the piano roll the moment each ends, which scrolls up or down to show each key struck
   on the channel it shows: in pattern mode over the pattern as it loops, each
   pass adding (delete first to replace; a take with notes selected gets a new pattern, a blank
@@ -464,18 +469,20 @@ presets, then yours.
   settings that differ from their defaults, so a preset keeps sounding the same after a later
   version adds settings.
 
-**Files**: a project with a synth channel is written as format version 9. Versions before 0.1.3
-refuse to open it, by its version, rather than open it without the synth's sound. In a
+**Files**: a project with a synth channel is written as format version 9. Versions without the
+synth refuse to open it, by its version, rather than open it without the synth's sound. In a
 DAWproject export the synth is an instrument track with its notes and no device (the other
 program plays them with an instrument of its own).
 
 ## What is included
 
-- **Instrument sets**: an upright piano, an electric piano, a bass guitar, electric and synth
-  basses, acoustic and electric guitars, a drawbar organ, a choir pad and a sweep pad, strings, a
-  marimba, and acoustic and electronic drum kits, from the dawsome-kit repository (about 142 MB,
-  at the commit `locks/kit.lock` pins); and seven electronic instruments made for Dawsome: two 808
-  basses, a synth bass, a lead, a pluck and two pads.
+- **Instrument sets**: two upright pianos (Upright Piano, and Upright Knight, re-voiced from
+  VCSL's Knight recordings), four electric pianos (Electric Piano, and Dreamy EP, Turismo EP and
+  Reed Piano, made for Dawsome by physical models, from no recording), a bass guitar, electric
+  and synth basses, acoustic and electric guitars, a drawbar organ, a choir pad and a sweep pad,
+  strings, a marimba, and acoustic and electronic drum kits, from the dawsome-kit repository
+  (about 347 MB, at the commit `locks/kit.lock` pins); and seven electronic instruments made for
+  Dawsome: two 808 basses, a synth bass, a lead, a pluck and two pads.
 - **Starter kit**: twelve drums made for Dawsome (808 and 909 kicks, snare, clap, closed and
   open hi-hats, three toms, rim, cowbell, crash), built into the app.
 - **One-shots and loops**: a folder of sounds the Samples section lists.
@@ -552,7 +559,45 @@ programs are given shows the windows a little softer.
 - **The toolbar's right end** holds the six panel buttons, then File, Edit and Help; what goes
   wrong (a missing sound, audio off) is said between the computer keyboard's switch and the
   panel buttons. The tempo reads one decimal, more only when set (120.0, 120.5, 120.125; type
-  up to three), and it and the position stand centred in their boxes.
+  up to three), and it, the time signature and the position stand centred in their boxes.
+- **Time signature**: the box right of the tempo, "4/4" to start: beats a bar over the beat's
+  note. Drag it up or down, or scroll over it, for one beat more or less (1 to 24); hold Shift
+  for the beat's note instead (4, 8 or 16: a quarter, an eighth or a sixteenth); click it to
+  type one ("3/4", "6/8", "7/8", "12/8", "15/16"; Enter sets it, Esc leaves it). The tempo
+  stays in quarter notes a minute whatever the signature, so 6/8 at 100 BPM clicks 200 eighths
+  a minute, and a step stays a 16th. The signature sets where the bars and beats fall: the rack's
+  steps and groups, the playlist's and the piano roll's grids and their Beat and Bar snaps, a
+  pattern's length, the position (bar : step : tick with the bar's own steps), the metronome
+  (a click every beat, a bar's first louder), the count-in (one bar), and what the exports and
+  plugins are told. Changed, it changes no note and no clip: a pattern grows to the whole bars
+  that hold every note it played, never shorter, and a clip keeps its length (one of a pattern
+  now shorter plays it more times). It is one undo step, and the change is heard at once while
+  playing. The box sets the signature the song starts in; while the song plays past a change
+  (below), it shows the one there.
+  - **A pattern's own**: right-click the pattern's name and choose Time signature… for its
+    list: "Project's (4/4)" (it follows the project's), 3/4, 6/8, 5/4, 7/8, 12/8, 2/4, or
+    Other… to type one. The pattern's steps, its piano roll's beats and its length are then its
+    own, wherever its clips lie, and every clip of it follows (Unlink a clip first for a copy in
+    another meter); it grows to the bars that hold its notes, never shorter. While it has its
+    own, the rack's header shows it right of Bars ("3/4"; click it for the list). Played alone in
+    pattern mode, its bars count the position, the metronome and the count-in; in the song the
+    song's bars do. A clip whose pattern counts in another signature than the song where the
+    clip starts says so after its name ("Verse · 3/4"), and its menu (Ctrl+right-click) offers
+    Use the time signature here, which gives the pattern the song's signature there.
+  - **Changes along the song**: right-click the ruler's numbers at a bar and choose a signature:
+    from that bar on the song counts in it, and a flag with the signature stands in the ruler
+    where the bar's number was. Right-click a flag to change it or remove it; drag it along the
+    bars to move it (it lands on the bar line at or before the pointer). Bars after a change
+    keep their numbers counting on; the playlist's lines, its Bar and Beat snaps, the position,
+    the metronome, Record's count-in (one bar of the signature where it starts), the exports and
+    the plugins all follow each change. A change sits on a bar line of the signature before it:
+    when an earlier one moves, the changes after it settle onto their new bar lines (down to the
+    one at or before them, or up when that would be the earlier change itself), and one undo
+    puts every one back. At bar 1 the menu sets the signature the song starts in.
+
+  A project with a signature other than 4/4, a pattern with its own or a change along the song
+  is written as format version 10, which versions before 0.1.4 refuse to open rather than play
+  in 4/4; a 4/4 project's file is as before.
 - **Help** (at the right end of the toolbar, or F1) opens a guide for someone new to making music:
   what each part of the window is for and how to use it, a section a page, with pictures of the
   app.
@@ -630,10 +675,10 @@ programs are given shows the windows a little softer.
 - **Theme** (Settings → Theme) sets the colours of every window as one set, one of five, their
   keys in one row, each with a swatch of its set (its panel and its accent, two small squares,
   edged in the theme's light edge colour so a dark swatch shows on a dark page) before its name:
-  **Graphite**, the look Dawsome had first; **Slate**, the default, darker and cooler, its text
-  brighter; **Gilt**, metallic gold on deep green (the accent, the lit edges, the knob rings and
-  the fader caps in gold; an audio clip's body a shade lighter than elsewhere, so it reads apart
-  from the green lanes); **Garnet**, rose gold on deep plum; **Fjord**, ice blue on deep navy. A theme changes the panels, the text, the lines, the piano keys and the
+  **Slate**, the default, darker and cooler than Graphite, its text brighter; **Graphite**, the
+  look Dawsome had first; **Gilt**, gold leaf on deep chocolate (the accent, the lit edges, the
+  knob rings and the fader caps in gold; an audio clip's body a shade lighter than elsewhere, so
+  it reads apart from the brown lanes); **Garnet**, rose gold on deep plum; **Fjord**, ice blue on deep navy. A theme changes the panels, the text, the lines, the piano keys and the
   accent. Every theme writes labels of live information ("Bars", "Snap", group names, hints) in
   a grey that reads at 4.5:1 or more on its panels, and what cannot be used now (a button with
   nothing to do, an unplugged device) in a dimmer one; the channel colours, the clips,
@@ -721,7 +766,9 @@ dawsome export-dawproject song.json song.dawproject   # for Bitwig Studio, Studi
 engine path the app plays it through, so the file holds exactly what you hear. `--pattern NAME`
 renders that pattern instead of the first; `--channel NAME` plays only that channel's notes of
 it, as the piano roll's Play does (its sound through the mixer as ever), and `--once` plays it a
-single time, so the file is one pass long.
+single time, so the file is one pass long. `--bars` counts bars of the meter that plays: the
+song's, across its changes, with `--song`, a pattern's own otherwise (a 3/4 bar is 288 ticks, a
+4/4 one 384).
 `dawsome-app --help` lists the app's own options, among them those for scripted runs
 (screenshots, `--window-size`): `--window-position <x>,<y>` opens the main window with its
 top-left corner there, in the desktop's logical pixels (on another monitor, say), on X11 and
@@ -734,7 +781,8 @@ No music program opens another's own project files, so File has three exports th
 programs read, each followed by a report (shown, and written beside the export as
 `<file>.report.txt`) of what did not carry over:
 
-- **Export song as MIDI…**: one MIDI file (type 1) every program opens: the tempo, and a track
+- **Export song as MIDI…**: one MIDI file (type 1) every program opens: the tempo, the time
+  signature and each change of it along the song, and a track
   per rack channel named after it holding its notes as the playlist plays them (repeats, clip
   offsets, notes cut at a clip's end). A MIDI file holds notes only: the sounds, the mixer,
   automation and audio clips stay behind (an audio channel's track is empty).
@@ -745,7 +793,7 @@ programs read, each followed by a report (shown, and written beside the export a
   more.
 - **Export DAWproject…**: a `.dawproject` file, the open format Bitwig Studio (5.0.9 and later),
   Studio One (6.5 and later) and Cubase (14 and later) open: a track per rack channel with its
-  volume, pan and mute, the pattern clips as note clips, the audio clips with their files packed
+  volume, pan and mute, the tempo, the time signature and its changes along the song, the pattern clips as note clips, the audio clips with their files packed
   inside, muted clips kept switched off, and a CLAP instrument (Surge XT) as that plugin with its
   saved settings. Samplers and instrument sets have no counterpart in the format (their tracks
   come without an instrument; the report names each sound file), and the mixer's inserts and
@@ -786,7 +834,10 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
   get (under X11 one scale for every screen, about 1.7 for a 4K screen set to 170 %), so a plugin
   that takes it is drawn as large as the rest of the desktop; one that does not keeps its own
   scale. Dawsome's zoom (Settings → Zoom) does not apply to plugin windows: they are the plugin's
-  own drawing, not Dawsome's. A plugin without a window opens its parameter window. A
+  own drawing, not Dawsome's. The typing keyboard keeps playing while a plugin's window has the
+  keys: each key plays the note it plays in Dawsome's own windows and still reaches the plugin,
+  and the plugin keeps its shortcuts (chords with Ctrl, Alt or the Windows key, the Super key on
+  Linux) and Esc. A plugin without a window opens its parameter window. A
   plugin installed as both CLAP and VST3 is listed once, as CLAP (a project naming its VST3 build
   still plays it). VST3 on Windows, its windows included, is built but not yet tried on a Windows
   machine. No LV2 or LADSPA. Plugin latency is shown, not compensated: a VST3 plugin's parameter
@@ -802,7 +853,8 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
   pointer, and when it saw none, at the song position on a free track. Under XWayland a drop from
   another X11 program has been checked; one from a Wayland program, which the desktop passes on
   to X11, not yet.
-- One tempo per project, and four beats to the bar.
+- One tempo per project. A MIDI file's own time signature (and its changes) is not applied when
+  it is imported.
 - The sample editor's edits belong to a channel's sound: every clip of the channel plays them,
   and one clip cannot be edited alone yet. It has no markers, slicing or loop points, no copy and
   paste of audio, and no pitch or time change of a part (planned for later). A project holding

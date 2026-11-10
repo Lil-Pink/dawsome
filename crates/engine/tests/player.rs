@@ -48,7 +48,7 @@ fn playing(project: &Project, frames: &[f32]) -> (RealtimeLink, Player) {
 }
 
 fn frames_in_bars(project: &Project, bars: u32) -> usize {
-    let ticks = time::bars_to_ticks(bars, project.ppq);
+    let ticks = project.meter_map().bar_start(i64::from(bars));
     let samples = time::tick_to_sample(ticks, project.sample_rate, project.tempo, project.ppq)
         .expect("bar start fits in u64");
     usize::try_from(samples).expect("render fits in memory")

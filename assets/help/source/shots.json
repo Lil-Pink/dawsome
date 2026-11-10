@@ -47,9 +47,9 @@
  },
  "pictures": [
   {"file": "screen.png", "shot": "main", "crop": [0, 0, 1280, 760], "width": 680},
-  {"file": "toolbar.png", "shot": "main", "crop": [0, 0, 560, 64]},
+  {"file": "toolbar.png", "shot": "main", "crop": [0, 0, 585, 64]},
   {"file": "record.png", "shot": "main", "crop": [0, 0, 340, 64], "rings": [[84, 5, 186, 59]]},
-  {"file": "pattern-box.png", "shot": "main", "crop": [241, 0, 691, 64], "rings": [[355, 5, 550, 59]]},
+  {"file": "pattern-box.png", "shot": "main", "crop": [272, 0, 722, 64], "rings": [[386, 5, 581, 59]]},
   {"file": "help-button.png", "shot": "main", "crop": [820, 0, 1280, 64], "rings": [[1222, 5, 1276, 59]]},
   {"file": "rack.png", "shot": "main", "crop": [300, 64, 1022, 346], "width": 680},
   {"file": "dividers.png", "shot": "main", "crop": [300, 228, 980, 448], "rings": [[764, 340, 816, 362]], "arrows": [[884, 306, 822, 340]]},

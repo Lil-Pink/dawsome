@@ -43,6 +43,7 @@ mod roll_edits;
 mod roll_player;
 mod sample_editor;
 mod settings_window;
+mod signatures;
 mod theming;
 mod typing;
 #[cfg(test)]
@@ -64,7 +65,9 @@ use dawsome_engine::project::{
 };
 #[cfg(test)]
 use dawsome_engine::realtime::Player;
-use dawsome_engine::time::{MilliBpm, Ticks};
+use dawsome_engine::time::{
+    MeterMap, MilliBpm, Ticks, TimeSignature, SIGNATURE_BEATS, SIGNATURE_UNITS,
+};
 use dawsome_engine::transport::Control;
 use dawsome_host_clap::scan::Scanned;
 #[cfg(test)]
@@ -122,6 +125,7 @@ pub use landing::{at_start as landing_at_start, Landing};
 pub use patterns::{PatternMessage, RENAME_INPUT as PATTERN_RENAME_INPUT, SWING_STEP};
 use plugins::PluginDrag;
 pub use recording::{RecordMessage, TakeKind};
+pub use signatures::{SignatureMessage, SIGNATURE_MENU_INPUT};
 
 /// How often the playhead is read from the audio thread while the transport runs.
 const PLAYHEAD_PERIOD: Duration = Duration::from_millis(33);
@@ -159,6 +163,45 @@ const KNOB_DRAG_PIXELS: f32 = 200.0;
 /// Pixels of vertical drag per tempo step.
 const TEMPO_DRAG_PIXELS: f32 = 2.0;
 
+/// Pixels of vertical drag per step of the time signature: a beat, or with Shift the next note.
+const SIGNATURE_DRAG_PIXELS: f32 = 8.0;
+
+/// `now` moved `steps` steps: its beats (1 to 24), or with `note` its beat's note through 4, 8
+/// and 16, held at the ends.
+fn stepped_signature(now: TimeSignature, steps: i64, note: bool) -> TimeSignature {
+    let (beats, unit) = if note {
+        let at = SIGNATURE_UNITS
+            .iter()
+            .position(|&unit| unit == now.unit())
+            .unwrap_or(0) as i64;
+        let last = SIGNATURE_UNITS.len() as i64 - 1;
+        let at = usize::try_from(at.saturating_add(steps).clamp(0, last)).unwrap_or(0);
+        (now.beats(), SIGNATURE_UNITS[at])
+    } else {
+        let (low, high) = (*SIGNATURE_BEATS.start(), *SIGNATURE_BEATS.end());
+        let beats = i64::from(now.beats())
+            .saturating_add(steps)
+            .clamp(i64::from(low), i64::from(high));
+        (u8::try_from(beats).unwrap_or(high), now.unit())
+    };
+    TimeSignature::new(beats, unit).unwrap_or(now)
+}
+
+/// A time signature as one number a drag compares and starts from: beats · 100 + the note.
+fn signature_value(signature: TimeSignature) -> f32 {
+    f32::from(signature.beats()) * 100.0 + f32::from(signature.unit())
+}
+
+/// The time signature [`signature_value`] made `value` (a drag's start), if it is one.
+fn signature_of(value: f32) -> Option<TimeSignature> {
+    // A drag's values are whole numbers below 2500, which an f32 holds exactly.
+    let whole = value as u32;
+    TimeSignature::new(
+        u8::try_from(whole / 100).ok()?,
+        u8::try_from(whole % 100).ok()?,
+    )
+}
+
 /// Pixels of vertical drag per swing step ([`SWING_STEP`], or a tenth of it with Shift).
 const SWING_DRAG_PIXELS: f32 = 4.0;
 
@@ -173,6 +216,9 @@ const MELODY_STEP: &str = "A chord starts on that step: change it in the piano r
 
 /// The id the tempo's box is focused by.
 pub const TEMPO_INPUT: &str = "tempo";
+
+/// The id the time signature's box is focused by.
+pub const SIGNATURE_INPUT: &str = "time-signature";
 
 /// Pixels a press on the tempo may move and still be a click, which types the tempo.
 const CLICK_TRAVEL: f32 = 3.0;
@@ -219,6 +265,12 @@ pub enum Message {
     /// The tempo's box, opened by a click on the tempo: its text, and Enter.
     TempoEdited(String),
     TempoSubmitted,
+    /// A press on the time signature: a drag of its beats (its note with Shift), or a click.
+    SignaturePressed,
+    SignatureScrolled(mouse::ScrollDelta),
+    /// The time signature's box, opened by a click on it: its text, and Enter.
+    SignatureEdited(String),
+    SignatureSubmitted,
     /// The cursor moved to this window x (or y, on the mixer's fader) while a drag is held.
     DragMoved(f32),
     DragEnded,
@@ -227,6 +279,8 @@ pub enum Message {
     /// The pattern controls: the toolbar's next arrow and the name's menu, and the rack
     /// header's bar count.
     Pattern(PatternMessage),
+    /// The time signature menu: a pattern's own, a change along the song's.
+    Signature(SignatureMessage),
     ModeSelected(PlayMode),
     /// L: switch between pattern and song mode.
     ToggleMode,
@@ -500,6 +554,8 @@ enum DragTarget {
         knob: Knob,
     },
     Tempo,
+    /// The time signature beside the tempo: its beats, or with Shift the beat's note.
+    Signature,
     /// The rack header's swing knob, for `pattern`.
     Swing {
         pattern: PatternId,
@@ -520,6 +576,8 @@ impl DragTarget {
             | DragTarget::Tempo
             | DragTarget::Swing { .. }
             | DragTarget::Plugin(_) => true,
+            // Up for more beats, as the menus' wheel and the rack's Bars count up.
+            DragTarget::Signature => false,
         }
     }
 }
@@ -555,6 +613,8 @@ pub struct App {
     pattern: Option<PatternId>,
     /// The pattern name's menu and rename.
     patterns: patterns::PatternUi,
+    /// The time signature menu, while it is open.
+    signature_menu: Option<signatures::SignatureMenu>,
     selected_channel: Option<ChannelId>,
     mode: PlayMode,
     /// Play was asked for and Stop was not; the playhead timer runs while this or `playing`.
@@ -652,6 +712,10 @@ pub struct App {
     /// The main window as the window system names it (its X11 id, its Win32 handle), once the
     /// toolkit has said; none in a test's app and for a Wayland window.
     main_native: Option<dawsome_host_common::window::WindowId>,
+    /// The id the keys a plugin window passes on are typed in ([`App::plugin_key`]): one of its
+    /// own, no window of the toolkit's, so no window's own keys (the Keys page's, the sample
+    /// editor's) take them.
+    plugin_keys: window::Id,
     /// The instrument window's own window while it is open or opening: [`App::update`] opens
     /// and closes it to match `instrument`.
     instrument_window: Option<window::Id>,
@@ -710,6 +774,8 @@ pub struct App {
     edit_menu: bool,
     /// The tempo's box while it is open: the text typed so far.
     tempo_edit: Option<String>,
+    /// The time signature's box while it is open: the text typed so far.
+    signature_edit: Option<String>,
     /// Whether the metronome clicks while the transport plays (the player's own switch,
     /// sent again to each new document's player).
     metronome: bool,
@@ -912,6 +978,7 @@ impl App {
         let mut app = Self {
             pattern: project.patterns.keys().next().copied(),
             patterns: patterns::PatternUi::default(),
+            signature_menu: None,
             selected_channel: project.channels.keys().next().copied(),
             roll: Roll::new(step, piano_layout::grid_size_alone(window_size))
                 .with_zoom(settings.roll_zoom()),
@@ -966,6 +1033,7 @@ impl App {
             main_window: None,
             main_position: None,
             main_native: None,
+            plugin_keys: window::Id::unique(),
             instrument_window: None,
             focused_window: None,
             windows_above: false,
@@ -991,6 +1059,7 @@ impl App {
             focus: first_focus(panels),
             edit_menu: false,
             tempo_edit: None,
+            signature_edit: None,
             metronome: false,
             latency: None,
             listed_outputs: Ok(Vec::new()),
@@ -1448,7 +1517,7 @@ impl App {
                 self.edit_menu = false;
                 return Task::none();
             }
-            if self.tempo_edit.take().is_some() {
+            if self.tempo_edit.take().is_some() || self.signature_edit.take().is_some() {
                 return Task::none();
             }
             // The picker over everything, then the parameter window, then the instrument
@@ -1495,6 +1564,13 @@ impl App {
         );
         if !typing_tempo && closes_menus(&message) {
             self.tempo_edit = None;
+        }
+        let typing_signature = matches!(
+            message,
+            Message::SignatureEdited(_) | Message::SignatureSubmitted | Message::DragEnded
+        );
+        if !typing_signature && closes_menus(&message) {
+            self.signature_edit = None;
         }
         let renaming_channel = matches!(
             message,
@@ -1608,19 +1684,58 @@ impl App {
                     self.commit(Edit::SetTempo { mbpm });
                 }
             }
+            Message::SignaturePressed => self.start_drag(DragTarget::Signature),
+            Message::SignatureScrolled(delta) => {
+                // Up adds a beat (Shift: the next note, 4 to 8 to 16) per scroll event,
+                // whatever its size.
+                let rise = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => y,
+                };
+                if rise != 0.0 {
+                    let steps = if rise > 0.0 { 1 } else { -1 };
+                    let now = self.session.project().time_signature;
+                    let signature = stepped_signature(now, steps, self.modifiers.shift());
+                    if signature != now {
+                        self.commit(Edit::SetTimeSignature { signature });
+                    }
+                }
+            }
             Message::DragMoved(along) => self.drag_to(along),
             Message::DragEnded => {
-                // A press on the tempo let go of where it was types it instead.
-                let click = self.drag.as_ref().is_some_and(|drag| {
-                    drag.target == DragTarget::Tempo
-                        && drag.travel < CLICK_TRAVEL
-                        && self.drag_value(drag.target) == Some(drag.start)
+                // A press on the tempo (or the time signature) let go of where it was types it
+                // instead.
+                let clicked = self.drag.as_ref().and_then(|drag| {
+                    let click = drag.travel < CLICK_TRAVEL
+                        && self.drag_value(drag.target) == Some(drag.start);
+                    click.then_some(drag.target)
                 });
                 self.finish_drag();
-                if click {
+                if clicked == Some(DragTarget::Tempo) {
                     self.tempo_edit = Some(toolbar::format_tempo(self.session.project().tempo));
                     let input = Id::new(TEMPO_INPUT);
                     return operation::focus(input.clone()).chain(operation::select_all(input));
+                }
+                if clicked == Some(DragTarget::Signature) {
+                    self.signature_edit = Some(self.session.project().time_signature.to_string());
+                    let input = Id::new(SIGNATURE_INPUT);
+                    return operation::focus(input.clone()).chain(operation::select_all(input));
+                }
+            }
+            Message::SignatureEdited(typed) => {
+                if let Some(edit) = &mut self.signature_edit {
+                    *edit = typed;
+                }
+            }
+            Message::SignatureSubmitted => {
+                let typed = self.signature_edit.clone().unwrap_or_default();
+                match typed.parse::<TimeSignature>() {
+                    Ok(signature) => {
+                        self.signature_edit = None;
+                        if signature != self.session.project().time_signature {
+                            self.commit(Edit::SetTimeSignature { signature });
+                        }
+                    }
+                    Err(reason) => self.notice = Some(reason.to_string()),
                 }
             }
             Message::TempoEdited(typed) => {
@@ -1649,6 +1764,7 @@ impl App {
                 self.select_pattern(pattern);
             }
             Message::Pattern(message) => return self.pattern_message(message),
+            Message::Signature(message) => return self.signature_message(message),
             Message::ModeSelected(mode) => self.select_mode(mode),
             Message::ToggleMode => self.select_mode(match self.mode {
                 PlayMode::Pattern => PlayMode::Song,
@@ -1757,7 +1873,9 @@ impl App {
                 }
             }
             Message::ClearSelection => {
-                if self.patterns.escape() {
+                if self.signature_menu.take().is_some() {
+                    // The time signature menu took the key.
+                } else if self.patterns.escape() {
                     // The pattern name's menu or rename took the key.
                 } else if self.cancel_learning() {
                     // A control waiting for its controller took the key.
@@ -1799,7 +1917,14 @@ impl App {
                 size,
                 monitor,
             } => return Self::fit_pop_out(window, size, monitor),
-            Message::MainNative(native) => self.main_native = native,
+            Message::MainNative(native) => {
+                self.main_native = native;
+                // Here, on the window's own thread, as its handle arrives.
+                #[cfg(windows)]
+                if let Some(window) = native {
+                    crate::focus_guard::wrap(window);
+                }
+            }
             Message::Headless(message) => {
                 if let headless::Message::Captured(shot) = &message {
                     if let Err(problem) = self.dump_layout(shot) {
@@ -1920,13 +2045,7 @@ impl App {
                 code,
                 pressed,
                 repeat,
-            } => {
-                self.live_wake = Some(Instant::now());
-                self.typed(code, pressed, repeat);
-                // What the player posted so far is read now, not only on the timer, so its
-                // ring never fills while the roll is closed.
-                self.read_player_events();
-            }
+            } => self.typing_key(code, pressed, repeat),
             // Only the typing keyboard holds notes the window must end: a MIDI device's notes
             // end with their own messages wherever the keyboard is.
             Message::MidiActivity => {
@@ -1989,14 +2108,39 @@ impl App {
         Task::none()
     }
 
+    /// The meter the player counts bars of now: a pattern's own signature while it plays alone
+    /// (pattern mode, the roll's player), else the song's map. The plan is built with the same.
+    pub(crate) fn played_meter(&self) -> MeterMap {
+        let project = self.session.project();
+        match self.plan_mode() {
+            dawsome_engine::plan::PlayMode::Pattern(pattern)
+            | dawsome_engine::plan::PlayMode::Channel { pattern, .. } => {
+                MeterMap::single(project.pattern_signature(pattern), project.ppq)
+            }
+            dawsome_engine::plan::PlayMode::Song | dawsome_engine::plan::PlayMode::Nothing => {
+                project.meter_map()
+            }
+        }
+    }
+
     /// The toolbar as it shows now.
     fn toolbar(&self) -> Toolbar<'_> {
         let project = self.session.project();
         let (previous_pattern, _) = self.neighboring_patterns();
+        let meter = self.played_meter();
+        let position = self.playhead.unwrap_or(Ticks(0));
+        // The signature at the song position while the song plays (past a change, that
+        // change's); the project's own otherwise: what a press on it sets.
+        let time_signature = match self.plan_mode() {
+            dawsome_engine::plan::PlayMode::Song => meter.signature_at(position),
+            _ => project.time_signature,
+        };
         Toolbar {
             width: self.window_size.width,
             playing: self.playing,
             tempo: project.tempo,
+            time_signature,
+            meter,
             pattern_name: self
                 .pattern
                 .and_then(|id| project.patterns.get(&id))
@@ -2010,8 +2154,7 @@ impl App {
             // Neither side lit while the roll's player has the transport.
             mode: (!self.roll_plays).then_some(self.mode),
             loop_on: project.playlist.loop_range.map(|range| range.on),
-            position: self.playhead.unwrap_or(Ticks(0)),
-            ppq: project.ppq,
+            position,
             error: self.error.as_deref(),
             audio_problem: self.audio_problem.as_deref(),
             retry_audio: self.retries_audio(),
@@ -2025,6 +2168,7 @@ impl App {
             edit_menu_open: self.edit_menu,
             help_open: self.help.open,
             tempo_edit: self.tempo_edit.as_deref(),
+            signature_edit: self.signature_edit.as_deref(),
             metronome: self.metronome,
             record: RecordLook {
                 armed: self.recording.armed,
@@ -2130,6 +2274,9 @@ impl App {
                 can_delete: self.offers_delete(),
             }));
         }
+        if let Some(menu) = self.signature_menu_view() {
+            layers.push(dialog::signature_menu(menu));
+        }
         if let Some(kind) = self.recording.menu {
             let input = self
                 .recording_input_channel()
@@ -2190,9 +2337,11 @@ impl App {
         }
     }
 
-    /// The first-run note's words: which keys of the layout play, how to switch the keyboard
-    /// off or change its keys, and the first shortcut it takes; Record's: arm, press Space,
-    /// play, and where the notes land.
+    /// The first-run note's words: which keys of the layout play, and how to switch the keyboard
+    /// off or change its keys; Record's: arm, press Space, play, and where the notes land. Not
+    /// the first shortcut the keyboard takes ("L plays D6 now; ..."): to someone who never used
+    /// the program, "now" about a key says nothing. The toolbar switch's hint says it, where it
+    /// tells of a change just made.
     fn callout_lines(&self) -> Vec<String> {
         use crate::keys::Action;
         if self.callout_note == CalloutNote::Record {
@@ -2203,17 +2352,13 @@ impl App {
                 format!("{play} stops the take: one undo step. A second pass adds to the first."),
             ];
         }
-        let mut lines = vec![
+        vec![
             self.typing.first_run_words(),
             format!(
                 "Turn it off here ({}), or change keys in Settings \u{2192} Keys.",
                 self.keys.first(crate::keys::Action::Keyboard)
             ),
-        ];
-        if let Some(taken) = self.typing.taken_example(&self.keys) {
-            lines.push(format!("{taken}."));
-        }
-        lines
+        ]
     }
 
     /// Where the toolbar's keyboard switch lies in the window.
@@ -2524,7 +2669,8 @@ impl App {
     fn rack_size(&self) -> Size {
         let project = self.session.project();
         let steps = step_grid::step_count(project, self.pattern);
-        let size = layout::rack_size(self.rack_rows().len(), steps);
+        let group = layout::steps_per_group(step_grid::signature_of(project, self.pattern));
+        let size = layout::rack_size(self.rack_rows().len(), steps, group);
         // A sampler without a sound says so right of its steps.
         let hint = project
             .channels
@@ -2945,6 +3091,40 @@ impl App {
         }
     }
 
+    /// Gives the opened project the time signature `signature`, as the toolbar's box does:
+    /// `--time-signature`, for a screenshot or a check of a meter other than 4/4.
+    pub fn set_time_signature_at_start(&mut self, signature: TimeSignature) {
+        if signature != self.session.project().time_signature {
+            self.commit(Edit::SetTimeSignature { signature });
+        }
+    }
+
+    /// Gives pattern `pattern` of the opened project its own time signature, as its name's menu
+    /// does: `--pattern-time-signature`, for screenshots and checks.
+    pub fn set_pattern_time_signature_at_start(
+        &mut self,
+        pattern: PatternId,
+        signature: TimeSignature,
+    ) {
+        let project = self.session.project();
+        let has = project
+            .patterns
+            .get(&pattern)
+            .map(|shown| shown.time_signature);
+        if has.is_some_and(|has| has != Some(signature)) {
+            self.commit(Edit::SetPatternTimeSignature {
+                pattern,
+                signature: Some(signature),
+            });
+        }
+    }
+
+    /// Adds a change of the opened song's time signature at the bar line at or before `at`, as
+    /// the ruler's menu does: `--signature-change`, for screenshots and checks.
+    pub fn set_signature_change_at_start(&mut self, at: Ticks, signature: TimeSignature) {
+        self.commit(Edit::SetSignatureChange { at, signature });
+    }
+
     /// Scrolls each view that scrolls along time to its bar's end, as a drag of its thumb there
     /// would: `--scroll end`, for a screenshot of the views scrolled.
     pub fn scroll_to_end(&mut self) {
@@ -3146,6 +3326,12 @@ impl App {
         } else {
             anchor - along
         };
+        if target == DragTarget::Signature {
+            let steps = (rise / SIGNATURE_DRAG_PIXELS).round() as i64;
+            let shift = self.modifiers.shift();
+            self.drag_signature(start, steps, shift);
+            return;
+        }
         let project = self.session.project();
         let (value, edit, live) = match target {
             DragTarget::Knob { channel, knob } => {
@@ -3188,6 +3374,8 @@ impl App {
                 };
                 (value, edit, Some(control.target()))
             }
+            // Handled above, before the match: its drag goes back to the start each move.
+            DragTarget::Signature => return,
             DragTarget::Plugin(plugin) => {
                 let fine = if self.modifiers.shift() {
                     FINE_DRAG
@@ -3212,6 +3400,40 @@ impl App {
         };
         if let (Ok(inverse), Some(drag)) = (&result, &mut self.drag) {
             drag.undo.get_or_insert_with(|| inverse.clone());
+        }
+        self.after_edit(result.map(drop));
+    }
+
+    /// The time signature's drag at `steps` from the signature it started at (`start`, a
+    /// [`signature_value`]): the document goes back to where the drag began, then takes the
+    /// signature those steps give, so the one inverse kept is that of a single edit from the
+    /// start, and its undo step gives back every pattern length a step on the way grew. Why not
+    /// the first move's inverse, as other drags keep: each signature grows patterns by its own
+    /// bar, and that inverse would not shorten what later steps grew.
+    fn drag_signature(&mut self, start: f32, steps: i64, note: bool) {
+        let Some(from) = signature_of(start) else {
+            return;
+        };
+        let wanted = stepped_signature(from, steps, note);
+        if self.session.project().time_signature == wanted {
+            return;
+        }
+        let back = self.drag.as_mut().and_then(|drag| drag.undo.take());
+        if let Some(back) = back {
+            if let Err(error) = self.session.apply_live(back) {
+                self.after_edit(Err(error));
+                return;
+            }
+        }
+        let result = if wanted == from {
+            Ok(None)
+        } else {
+            self.session
+                .apply_live(Edit::SetTimeSignature { signature: wanted })
+                .map(Some)
+        };
+        if let (Ok(inverse), Some(drag)) = (&result, &mut self.drag) {
+            drag.undo = inverse.clone();
         }
         self.after_edit(result.map(drop));
     }
@@ -3258,7 +3480,10 @@ impl App {
         let Some(drag) = &self.drag else {
             return;
         };
-        if !matches!(drag.target, DragTarget::Mixer(_) | DragTarget::Swing { .. }) {
+        if !matches!(
+            drag.target,
+            DragTarget::Mixer(_) | DragTarget::Swing { .. } | DragTarget::Signature
+        ) {
             return;
         }
         let now = self.drag_value(drag.target);
@@ -3279,6 +3504,7 @@ impl App {
                 .map(|shown| knob.value(shown)),
             // Tempos stay below 2^24 milli-BPM, so the f32 is exact.
             DragTarget::Tempo => Some(project.tempo.0 as f32),
+            DragTarget::Signature => Some(signature_value(project.time_signature)),
             DragTarget::Swing { pattern } => project
                 .patterns
                 .get(&pattern)
@@ -3352,6 +3578,9 @@ impl App {
             Some(arranger::Command::OpenInRoll(clip)) => return self.open_clip_in_roll(clip),
             Some(arranger::Command::EditSample(clip)) => self.open_sample_editor_on_clip(clip),
             Some(arranger::Command::Link(link)) => self.clip_link(link),
+            Some(arranger::Command::SignatureMenu { at, place }) => {
+                return self.signature_message(SignatureMessage::ForChange { at, place });
+            }
             None => {}
         }
         Task::none()
@@ -7702,7 +7931,8 @@ mod tests {
 
     // A preview's sound is made ready on a thread of its own, however short the file: the press
     // returns with nothing handed to the player yet (the UI thread decodes nothing), and the
-    // media timer starts it: tone.wav's one frame of 1.0 through the master.
+    // media timer starts it: tone.wav's one frame of 1.0 through the master, at the preview's
+    // level, a new channel's step: 9/16 · 100/128 = 225/512 (pin moved from unity).
     #[test]
     fn p8_a_preview_is_made_ready_off_the_ui_thread() {
         let (mut app, mut player) = p8_live_app();
@@ -7718,7 +7948,7 @@ mod tests {
             let _ = app.update(Message::Media(MediaMessage::Tick));
             player.process(&mut out);
         }
-        assert_eq!(out[0], [1.0; 2]);
+        assert_eq!(out[0], [225.0 / 512.0; 2]);
     }
 
     // A file dropped on the rack becomes its sampler channel at once, its sound loading off the
@@ -8203,6 +8433,77 @@ mod tests {
         let _ = app.update(Message::DragEnded);
         assert_eq!(app.tempo_edit, None, "a drag opens no box");
         assert_ne!(app.session.project().tempo, MilliBpm(87_500), "and drags");
+    }
+
+    // The time signature beside the tempo: a click opens its box with "4/4"; "3/4" and Enter set
+    // it, one undo step named "Time signature", and F1's one-bar pattern (hits on ticks 0, 96,
+    // 192 and 288) grows to the bars of 288 ticks holding its last hit's end, 289: 2; "3/2" is
+    // refused with the ranges and the box stays; Esc closes it. Undo puts back 4/4 and 1 bar.
+    // The wheel adds a beat (5/4), Shift steps the note (5/8). A drag down 8 px a step
+    // from 4/4 to 1/4 (the pattern grown to ceil(289 / 96) = 4 bars on the way) and back up to
+    // 3/4 leaves it at 2 bars as the one edit from the start would, and one undo gives back 4/4
+    // and 1 bar: the drag keeps the inverse of a single edit from where it began.
+    #[test]
+    fn the_time_signature_is_typed_scrolled_and_dragged() {
+        let (mut app, _player) = f1_app();
+        let pattern = app.pattern.expect("a pattern");
+        let bars = |app: &App| app.session.project().patterns[&pattern].length_bars;
+        let sig = |app: &App| app.session.project().time_signature.to_string();
+        let _ = app.update(Message::SignaturePressed);
+        let _ = app.update(Message::DragEnded);
+        assert_eq!(app.signature_edit.as_deref(), Some("4/4"));
+        let _ = app.update(Message::SignatureEdited("3/4".into()));
+        let _ = app.update(Message::SignatureSubmitted);
+        assert_eq!((sig(&app), bars(&app)), ("3/4".to_owned(), 2));
+        assert_eq!(app.signature_edit, None);
+        assert_eq!(app.session.history().undo_name(), Some("Time signature"));
+        let _ = app.update(Message::SignaturePressed);
+        let _ = app.update(Message::DragEnded);
+        let _ = app.update(Message::SignatureEdited("3/2".into()));
+        let _ = app.update(Message::SignatureSubmitted);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("Type a time signature such as 3/4 or 6/8: 1 to 24 beats over 4, 8 or 16")
+        );
+        assert!(
+            app.signature_edit.is_some(),
+            "the box stays to be put right"
+        );
+        let _ = app.update(Message::ClearSelection);
+        assert_eq!(app.signature_edit, None, "Esc closes it");
+        let _ = app.update(Message::Undo);
+        assert_eq!((sig(&app), bars(&app)), ("4/4".to_owned(), 1));
+        let up = mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 };
+        let _ = app.update(Message::SignatureScrolled(up));
+        assert_eq!(sig(&app), "5/4");
+        let _ = app.update(Message::ModifiersChanged(Modifiers::SHIFT));
+        let _ = app.update(Message::SignatureScrolled(up));
+        assert_eq!(sig(&app), "5/8");
+        let _ = app.update(Message::ModifiersChanged(Modifiers::empty()));
+        let _ = app.update(Message::Undo);
+        let _ = app.update(Message::Undo);
+        assert_eq!((sig(&app), bars(&app)), ("4/4".to_owned(), 1));
+        let undo_steps = app.session.history().undo_len();
+        let _ = app.update(Message::SignaturePressed);
+        for (y, beats, length) in [
+            (300.0, "4/4", 1),
+            (308.0, "3/4", 2),
+            (316.0, "2/4", 2),
+            (324.0, "1/4", 4),
+            (308.0, "3/4", 2),
+        ] {
+            let _ = app.update(Message::DragMoved(y));
+            assert_eq!(
+                (sig(&app), bars(&app)),
+                (beats.to_owned(), length),
+                "at y {y}"
+            );
+        }
+        let _ = app.update(Message::DragEnded);
+        assert_eq!(app.signature_edit, None, "a drag opens no box");
+        assert_eq!(app.session.history().undo_len(), undo_steps + 1, "one step");
+        let _ = app.update(Message::Undo);
+        assert_eq!((sig(&app), bars(&app)), ("4/4".to_owned(), 1));
     }
 
     // C1: the toolbar's metronome switches the player's metronome on and off, and a new
@@ -8872,7 +9173,7 @@ mod tests {
         let _ = app.update(Message::Callout(CalloutMessage::Due));
         let mut window = widget_events::Window::new(&app);
         let corner = bubble(app.keyboard_switch(), app.window_size.width);
-        let step = layout::rack_in_window(layout::step_rect(0, 14).center());
+        let step = layout::rack_in_window(layout::step_rect(0, 14, 4).center());
         assert!(
             (corner.x + 12.0..corner.x + BUBBLE_WIDTH - 12.0).contains(&step.x)
                 && step.y > corner.y + 12.0,
@@ -8896,18 +9197,28 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("removed");
     }
 
-    // The note's words name the keys as the layout and the bindings have them, and the first
-    // shortcut the keyboard takes; it points at the toolbar's switch.
+    // The note's words name the keys as the layout and the bindings have them (the piano row's,
+    // the switch's Ctrl+T), and stop there: the first shortcut the keyboard takes, "L plays D6
+    // now; Shift+L switches pattern/song", is the toolbar switch's hint alone (someone who never
+    // used the program cannot read "now" about a key). It points at the toolbar's switch.
     #[test]
     fn the_note_says_which_keys_play_and_points_at_the_switch() {
         let (app, _player) = f1_app();
         let switch = app.keyboard_switch();
         assert!(switch.width > 0.0 && switch.y >= 0.0);
         assert!(switch.y + switch.height <= layout::TOOLBAR_HEIGHT);
+        assert_eq!(
+            app.callout_lines(),
+            [
+                "Your computer keyboard plays notes. A S D F\u{2026} white keys, W E T Y U black. Z and X move the octave.",
+                "Turn it off here (Ctrl+T), or change keys in Settings \u{2192} Keys.",
+            ]
+        );
         let taken = app.typing.taken_example(&app.keys);
         assert_eq!(
             taken.as_deref(),
-            Some("L plays D6 now; Shift+L switches pattern/song")
+            Some("L plays D6 now; Shift+L switches pattern/song"),
+            "the switch's hint still says it"
         );
     }
 

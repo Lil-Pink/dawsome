@@ -234,7 +234,7 @@ Run:
   python3 -I gen_p33_expected.py --check DIR  exit 1 unless the files in DIR are what --write
                                               writes
 """
-import cmath, hashlib, importlib.util, math, os, statistics, struct, sys
+import cmath, decimal, hashlib, importlib.util, math, os, statistics, struct, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -939,22 +939,28 @@ def sha256_of(left, right):
 
 
 def amplitude(y, hz, lo, hi):
-    """gen_p5's: projection on sin/cos over [lo, hi), a whole number of periods."""
-    s = sum(y[n] * math.sin(TAU * hz * n / SRF) for n in range(lo, hi))
-    c = sum(y[n] * math.cos(TAU * hz * n / SRF) for n in range(lo, hi))
+    """gen_p5's: projection on sin/cos over [lo, hi), a whole number of periods. The sums are
+    gen_p32's compensated_sum, never sum(): Python 3.11's sum() of floats adds plainly and
+    3.12's compensates, so the sine case's amplitude differed in its 14th digit (3.11 failed
+    --check)."""
+    s = P32.compensated_sum(y[n] * math.sin(TAU * hz * n / SRF) for n in range(lo, hi))
+    c = P32.compensated_sum(y[n] * math.cos(TAU * hz * n / SRF) for n in range(lo, hi))
     return 2.0 * math.hypot(s, c) / (hi - lo)
 
 
 def hann_amplitude(y, hz, lo, hi):
     """The amplitude of the `hz` tone in y[lo:hi) under a periodic Hann window:
-    2 |sum w_n y_n e^(-j w n)| / sum w_n, w_n = 0.5 - 0.5 cos(TAU (n - lo) / (hi - lo))."""
+    2 |sum w_n y_n e^(-j w n)| / sum w_n, w_n = 0.5 - 0.5 cos(TAU (n - lo) / (hi - lo)).
+    |.| is gen_p32's magnitude (math.hypot), never abs() of the complex: that is the C
+    library's hypot, which is not correctly rounded in glibc 2.44, so four tones differed by
+    an ulp or two between this machine and CI's glibc 2.43."""
     width = hi - lo
     total, weight = 0j, 0.0
     for n in range(lo, hi):
         w = 0.5 - 0.5 * math.cos(TAU * (n - lo) / width)
         total += w * y[n] * cmath.exp(complex(0.0, -TAU * hz * n / SRF))
         weight += w
-    return 2.0 * abs(total) / weight
+    return 2.0 * P32.magnitude(total) / weight
 
 
 def pitch_hz(key, b=0): return min(440.0 * exp2((float(key - 69) + b / 4096.0) / 12.0), MAX_PITCH)
@@ -985,7 +991,7 @@ SQUARE_WINDOWS = [(2205, 44100), (52920, FRAMES)]    # 19 and 16 times 2205 fram
 def mean_answer(y, lo, hi, expected):
     assert (hi - lo) % 2205 == 0
     return {"window": [lo, hi], "expected": expected, "tolerance": MEAN_TOLERANCE,
-            "measured": sum(y[lo:hi]) / (hi - lo)}
+            "measured": P32.compensated_sum(y[lo:hi]) / (hi - lo)}
 
 
 # ---------- the filter's, the LFO's and glide's answers by hand ----------
@@ -1166,7 +1172,7 @@ def b5_answer(case, a, y, asserts):
     if case == "drive_tone":
         lo, hi = DRIVE_TONE_WINDOW
         a["tones"] = [tone(y, 220.0 * n, lo, hi, LIN_6 * tanh_harmonic(DRIVE_TONE_D, n)
-                           / math.tanh(DRIVE_TONE_D) * DRIVE_TONE_GAIN) for n in (1, 3)]
+                           / tanh_by_hand(DRIVE_TONE_D) * DRIVE_TONE_GAIN) for n in (1, 3)]
         asserts.append("tones")
     if case == "drive_zero":
         a["same_as"] = "saw"
@@ -1181,11 +1187,24 @@ DRIVE_TONE_GAIN = 10.0 ** (-(DRIVE_TONE_DB / (1.0 + DRIVE_TONE_DB / 40.0)) / 20.
 DRIVE_TONE_WINDOW = (4410, FRAMES)                   # all sustain
 
 
+def tanh_by_hand(x):
+    """tanh(x) correctly rounded: (e^2x - 1) / (e^2x + 1) in decimal at 40 digits (decimal's
+    exp and division are correctly rounded, the same on every machine), rounded once to the
+    nearest double. Why not math.tanh: it is the C library's, and glibc 2.43's (CI's) is an
+    ulp off on 741 of tanh_harmonic's 4096 points, where 2.44's is correctly rounded, so the
+    drive tone's third harmonic differed by an ulp between machines. The voice keeps the C
+    library's tanh, as the engine does; its frames are f32 and a driven case is close."""
+    with decimal.localcontext() as context:
+        context.prec = 40
+        e = (2 * decimal.Decimal(x)).exp()
+        return float((e - 1) / (e + 1))
+
+
 def tanh_harmonic(d, n, points=4096):
     """By hand: the nth harmonic of tanh(d sin x), its sine series' b_n =
     (1/pi) integral over a period of tanh(d sin x) sin(n x) dx, by the trapezoid rule (a smooth
     periodic integrand: exact to the last digits long before 4096 points)."""
-    return 2.0 / points * math.fsum(math.tanh(d * math.sin(TAU * j / points))
+    return 2.0 / points * math.fsum(tanh_by_hand(d * math.sin(TAU * j / points))
                                     * math.sin(n * TAU * j / points) for j in range(points))
 
 
@@ -1426,8 +1445,8 @@ def b2_checks(cases):
     before = play(values_of(params), note_events(notes, mbpm), FRAMES, law=pulse_with_dc)[0]
     lo, hi = SQUARE_WINDOWS[1]
     check("square_width: with the mean left in, the mix averaged -0.36 of the volume (2w - 1 each)",
-          abs(sum(before[lo:hi]) / (hi - lo) - (-0.36 * LIN_6)) < MEAN_TOLERANCE,
-          "%.6g" % (sum(before[lo:hi]) / (hi - lo)))
+          abs(P32.compensated_sum(before[lo:hi]) / (hi - lo) - (-0.36 * LIN_6)) < MEAN_TOLERANCE,
+          "%.6g" % (P32.compensated_sum(before[lo:hi]) / (hi - lo)))
     # The subtraction of 0.0 leaves every bit: a square of width 0.5 heard alone renders the
     # square's bits from before the pulse was DC-free (the cases' width-0.5 squares keep their answers).
     half = values_of({"osc1_wave": 3.0})
@@ -1517,7 +1536,7 @@ def drive_checks(cases):
     right = cases["drive_tone"]["tones"][0]["expected"]
     check("drive_tone: without the 1/tanh(d) the fundamental would be %.5f, not %.5f"
           % (unscaled, right), abs(unscaled - right) > 0.005)
-    loud = LIN_6 * tanh_harmonic(DRIVE_TONE_D, 1) / math.tanh(DRIVE_TONE_D)
+    loud = LIN_6 * tanh_harmonic(DRIVE_TONE_D, 1) / tanh_by_hand(DRIVE_TONE_D)
     check("drive_tone: without the auto gain the fundamental would be %.5f, not %.5f"
           % (loud, right), abs(loud - right) > 0.1)
     y = render("drive_tone")[0]

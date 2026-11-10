@@ -33,9 +33,9 @@ use crate::ui::palette::Rgb;
 use crate::ui::panels::{Panel, TITLE_GAP};
 use crate::ui::piano_layout::{
     self, View, GLYPH_SWITCH, GLYPH_SWITCH_ICON, KEY_COLUMN_WIDTH, LABEL_RIGHT, LANE_HEIGHT,
-    NOTE_BORDER, PLAYER_GAP, PLAYER_SIDE, PLAYHEAD_WIDTH, PLAY_BUTTON, PLAY_ICON, ROW_HEIGHT,
-    RULER_HEIGHT, SCALE_FOLDED_WIDTH, SELECTED_BORDER, STRIP_GROUP_GAP, STRIP_HEIGHT,
-    STRIP_PADDING, STRIP_SPACING,
+    MENU_ARROW, MENU_ARROW_GAP, NOTE_BORDER, PLAYER_GAP, PLAYER_SIDE, PLAYHEAD_WIDTH, PLAY_BUTTON,
+    PLAY_ICON, ROW_HEIGHT, RULER_HEIGHT, SCALE_FOLDED_WIDTH, SELECTED_BORDER, STRIP_GROUP_GAP,
+    STRIP_HEIGHT, STRIP_PADDING, STRIP_SPACING,
 };
 use crate::ui::pop_out;
 use crate::ui::roll::{
@@ -46,7 +46,7 @@ use crate::ui::scroll::{self, Scrollbar};
 use crate::ui::short_pick_list::{self, natural_width, short_pick_list};
 use crate::ui::style;
 use crate::ui::text_fit::{self, text_width};
-use crate::ui::toolbar::{format_length, glyph_switch, play_stop_button, Glyph};
+use crate::ui::toolbar::{format_length, glyph_switch, menu_arrow, play_stop_button, Glyph};
 
 /// Keys whose rows are black keys on a piano, by their remainder from 12.
 const BLACK_KEYS: [u8; 5] = [1, 3, 6, 8, 10];
@@ -191,11 +191,13 @@ fn velocity_width() -> f32 {
     *WIDTH.get_or_init(|| crate::ui::text_fit::widest((0..=127).map(velocity_words), size::LABEL))
 }
 
-/// The strip's words, which its fold law measures as the view lays them out.
+/// The strip's words, which its fold law measures as the view lays them out. Each character
+/// is one the bundled font has (`strip_glyphs` checks), so no width depends on the system's
+/// fonts; the Notes menu's arrow is drawn ([`MENU_ARROW`]).
 const PREVIEW: &str = "Preview";
 const FOLLOW: &str = "Follow";
 const FOLD: &str = "Fold";
-const NOTES: &str = "Notes \u{25be}";
+const NOTES: &str = "Notes";
 const LOOP: &str = "Loop";
 const REC_NOTES: &str = "\u{25cf} Rec notes";
 /// A text button's padding in the strip, (top and bottom, either side).
@@ -204,6 +206,12 @@ const BUTTON_PADDING: [f32; 2] = [2.0, 8.0];
 /// The width a text button of the strip's takes: its words and its padding either side.
 fn text_button_width(words: &str) -> f32 {
     text_width(words, size::LABEL) + 2.0 * BUTTON_PADDING[1]
+}
+
+/// The Notes menu button's width: its word, the drawn arrow [`MENU_ARROW_GAP`] after it, and
+/// the text buttons' padding either side.
+fn notes_button_width() -> f32 {
+    text_width(NOTES, size::LABEL) + MENU_ARROW_GAP + MENU_ARROW + 2.0 * BUTTON_PADDING[1]
 }
 
 /// The draw length's readout, "Len 0:01:00", after the snap picker until the strip folds it.
@@ -333,7 +341,7 @@ impl<'s> StripShape<'s> {
             apart(&snap, STRIP_SPACING),
             apart(&[switch(PREVIEW), switch(FOLLOW)], STRIP_SPACING),
             apart(&scale, STRIP_SPACING),
-            text_button_width(NOTES),
+            notes_button_width(),
             player_width(),
         ];
         if self.velocity {
@@ -529,11 +537,17 @@ impl<'a> Strip<'a> {
             Message::Roll(RollMessage::ToggleFold),
         );
         scale_and_fold.push(hover_area(rows_folded, Hover::Roll(RollPart::Fold)));
-        let notes = text_button(
-            NOTES,
-            self.menu_open,
-            Message::Roll(RollMessage::MenuButton),
-        );
+        let notes = button(
+            row![
+                text(NOTES).size(size::LABEL),
+                menu_arrow(self.menu_open, MENU_ARROW)
+            ]
+            .spacing(MENU_ARROW_GAP)
+            .align_y(Center),
+        )
+        .padding(BUTTON_PADDING)
+        .style(style::tool_button(self.menu_open))
+        .on_press(Message::Roll(RollMessage::MenuButton));
         let mut groups = row![
             group(snap_and_length),
             switches,
@@ -669,7 +683,7 @@ impl<'a> PianoRoll<'a> {
             channel: target.channel,
             name,
             snap: self.roll.snap,
-            length: format_length(self.roll.draw_length(), self.project.ppq),
+            length: format_length(self.roll.draw_length(), target.signature, self.project.ppq),
             preview: self.preview,
             follow: self.follow,
             scale: self.roll.scale,
@@ -1451,6 +1465,9 @@ impl canvas::Program<Message> for Lane<'_> {
 }
 
 #[cfg(test)]
+mod strip_glyphs;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1465,8 +1482,8 @@ mod tests {
     //   the Scale chooser 62 (folded: 48), a spacing, Fold 24.533 + 16: 112.533 (98.533); a
     //     scale chosen adds its root's chooser, "G#" 16.553 + 30, and a spacing: 169.086
     //     (155.086)
-    //   Notes, "Notes " 36.867 and "▾", which Inter has not, so the system's face draws it
-    //     (7.911 here), + 16: 60.778
+    //   Notes, "Notes" 33.492 (u1_font.json's notes_12px), the drawn arrow's 8 px square 4
+    //     after it, + 16: 61.492
     //   the player: 5 of plain room either side round Play 26 and Loop 28.523 + 16, 4 apart:
     //     10 + 26 + 4 + 44.523 = 84.523 (the room a box round them took the day it stood there;
     //     before it Play and Loop stood a spacing, 10, apart: 80.523, 4 less)
@@ -1474,34 +1491,36 @@ mod tests {
     // So the strip needs, folded to nothing / the length / the glyphs / the scale / the name too
     // ("lead" is its own least: "lea…", 31.51, is wider, so the name fold needs what the scale
     // fold does):
-    //   no scale        733.22, 656.90, 590.14, 576.14, 576.14
-    //   a scale + root  789.77, 713.45, 646.70, 632.70, 632.70
+    //   no scale        733.93, 657.61, 590.86, 576.86, 576.86
+    //   a scale + root  790.48, 714.16, 647.41, 633.41, 633.41
     // and folds, the least fold that fits:
     //   | strip | no scale | scale + root |
     //   | 1000  | Open     | Open         |
-    //   | 700   | Length   | Glyphs       |  733.22 > 700 >= 656.90; 713.45 > 700 >= 646.70
-    //   | 640   | Glyphs   | Scale        |  656.90 > 640 >= 590.14; 646.70 > 640 >= 632.70
-    // In its own window (no grip: 34 less) it needs 699.22, 622.90, 556.14, 542.14, 542.14 with
-    // no scale and 755.77, 679.45, 612.70, 598.70, 598.70 with one: at its least width, 608
+    //   | 700   | Length   | Glyphs       |  733.93 > 700 >= 657.61; 714.16 > 700 >= 647.41
+    //   | 640   | Glyphs   | Scale        |  657.61 > 640 >= 590.86; 647.41 > 640 >= 633.41
+    // In its own window (no grip: 34 less) it needs 699.93, 623.61, 556.86, 542.86, 542.86 with
+    // no scale and 756.48, 680.16, 613.41, 599.41, 599.41 with one: at its least width, 608
     // (crate::desktop::ROLL_WINDOW_MIN_WIDTH), the length and the glyphs fold with no scale
-    // (622.90 > 608 >= 556.14) and the scale too with one (612.70 > 608 >= 598.70); at the
+    // (623.61 > 608 >= 556.86) and the scale too with one (613.41 > 608 >= 599.41); at the
     // panels' 480, which it had, no fold fits and the strip is every fold. A longer name, in
-    // its own window with a scale and its root, every control folded: they take 598.70 − 27.99
-    // = 570.71 beside the name, which at 600 leaves 29.29 for it and at 608 37.29; the name is
+    // its own window with a scale and its root, every control folded: they take 599.41 − 27.99
+    // = 571.42 beside the name, which at 600 leaves 28.58 for it and at 608 36.58; the name is
     // cut to its longest start with "…" that fits, at 14 px, never under its first three
     // characters and "…". A text holding "…" is shaped with the font's pair kerning (plain
     // ASCII is not), and Inter's GPOS kerns K before i by +32 of its 2048 units, 0.22 px at 14
     // (no pair in "Bas…" is kerned):
-    //   "Kick 909" (58.61; folded to the scale 629.32): "Kick…" 40.58 + 0.22 fits neither, "Kic…"
-    //     32.89 + 0.22 = 33.11 fits 608 and not 600, its least either way: 603.82 in all, 3.82
-    //     past 600, 4.18 to spare at 608
-    //   "Bass 808 low" (89.07; 659.78): "Bas…" 36.51, its least, fits 608 (0.78 to spare) but
-    //     not 600, where it runs 607.22, 7.22 past ("Ba…" would fit, under the floor)
-    // so the window's least width is 608, 607.22 up to a whole pixel (604 before the player
-    // took 4 px more). A velocity readout or the Rec light adds its width and a
-    // group's gap. The "▾" is the one width the font's tables cannot give: the sums take this
-    // system's as measured, and the table holds while it is within 0.78 px of 7.911 (the
-    // closest call, "Bass 808 low" at 608).
+    //   "Kick 909" (58.61; folded to the scale 630.04): "Kick…" 40.58 + 0.22 fits neither, "Kic…"
+    //     32.89 + 0.22 = 33.11 fits 608 and not 600, its least either way: 604.54 in all, 4.54
+    //     past 600, 3.46 to spare at 608
+    //   "Bass 808 low" (89.07; 660.50): "Bas…" 36.51, its least, fits 608 (0.07 to spare) but
+    //     not 600, where it runs 607.93, 7.93 past (a shorter start fits only under the floor)
+    // so the window's least width is 608, 607.93 up to a whole pixel (604 before the player
+    // took 4 px more). A velocity readout or the Rec light adds its width and a group's gap.
+    // Every width here is the bundled font's: the strip's words hold no character Inter lacks
+    // (strip_glyphs.rs checks them against its cmap), so the table is the same on every system.
+    // (Pins moved 0.714 px wider: the Notes label was "Notes ▾", whose "▾" Inter has not, so
+    // the system's face drew it, 7.911 px on this Linux, and the pins took that width; Windows'
+    // face drew it over 0.78 px wider and "Bass 808 low" overran 608 there.)
     #[test]
     fn the_strip_folds_by_its_width() {
         let shape = |width, scale, docked| StripShape {
@@ -1513,15 +1532,13 @@ mod tests {
             recording: false,
             docked,
         };
-        let here = 36.867_188 + 7.911 + 16.0;
-        let drift = text_button_width(NOTES) - here;
         assert!(
-            drift.abs() < 2.7,
-            "the system's \u{25be} is {drift} px off 7.911"
+            (notes_button_width() - (33.492_188 + 4.0 + 8.0 + 16.0)).abs() < 0.001,
+            "Notes is {} wide",
+            notes_button_width()
         );
-        let needs = |scale, docked| {
-            StripFold::ALL.map(|fold| shape(0.0, scale, docked).needs(fold) - drift)
-        };
+        let needs =
+            |scale, docked| StripFold::ALL.map(|fold| shape(0.0, scale, docked).needs(fold));
         let near = |found: [f32; 5], wanted: [f32; 5]| {
             found
                 .iter()
@@ -1530,11 +1547,11 @@ mod tests {
         };
         let (plain, scaled) = (needs(false, true), needs(true, true));
         assert!(
-            near(plain, [733.22, 656.90, 590.14, 576.14, 576.14]),
+            near(plain, [733.93, 657.61, 590.86, 576.86, 576.86]),
             "{plain:?}"
         );
         assert!(
-            near(scaled, [789.77, 713.45, 646.70, 632.70, 632.70]),
+            near(scaled, [790.48, 714.16, 647.41, 633.41, 633.41]),
             "{scaled:?}"
         );
         use StripFold::*;
@@ -1556,11 +1573,11 @@ mod tests {
         }
         let (plain, scaled) = (needs(false, false), needs(true, false));
         assert!(
-            near(plain, [699.22, 622.90, 556.14, 542.14, 542.14]),
+            near(plain, [699.93, 623.61, 556.86, 542.86, 542.86]),
             "{plain:?}"
         );
         assert!(
-            near(scaled, [755.77, 679.45, 612.70, 598.70, 598.70]),
+            near(scaled, [756.48, 680.16, 613.41, 599.41, 599.41]),
             "{scaled:?}"
         );
         let least = crate::desktop::ROLL_WINDOW_MIN_WIDTH;
@@ -1581,27 +1598,28 @@ mod tests {
             ..shape(width, true, false)
         };
         for (name, width, shown, total) in [
-            ("Kick 909", 600.0, "Kic\u{2026}", 603.82),
-            ("Kick 909", 608.0, "Kic\u{2026}", 603.82),
-            ("Bass 808 low", 600.0, "Bas\u{2026}", 607.22),
-            ("Bass 808 low", 608.0, "Bas\u{2026}", 607.22),
+            ("Kick 909", 600.0, "Kic\u{2026}", 604.54),
+            ("Kick 909", 608.0, "Kic\u{2026}", 604.54),
+            ("Bass 808 low", 600.0, "Bas\u{2026}", 607.93),
+            ("Bass 808 low", 608.0, "Bas\u{2026}", 607.93),
         ] {
             let case = format!("{name} at {width}");
             let named = named(name, width);
-            assert!(
-                named.needs(Scale) - drift > width,
-                "{case}: whole, it does not fit"
-            );
+            assert!(named.needs(Scale) > width, "{case}: whole, it does not fit");
             assert_eq!(StripFold::of(&named), Name, "{case}");
             let cut = named.shown_name(Name);
             assert_eq!(cut, shown, "{case}");
-            let strip = named.needs(Name) - drift;
+            let strip = named.needs(Name);
             assert!((strip - total).abs() < 0.01, "{case}: {strip}");
             assert_eq!(strip <= width, total <= width, "{case}: fits");
         }
         assert!(
             named("Bass 808 low", least).needs(Name) <= least,
             "608 holds it"
+        );
+        assert!(
+            named("Bass 808 low", least - 1.0).needs(Name) > least - 1.0,
+            "607 does not: 608 is the least whole pixel"
         );
         let lit = StripShape {
             velocity: true,
@@ -1730,6 +1748,7 @@ mod tests {
             scroll: Ticks(0),
             zoom: piano_layout::ZOOM.default,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: piano_layout::Rows::ALL,
         };
         let lines = grid_lines(&view, Ticks(384), Ticks(2000));
@@ -1767,6 +1786,7 @@ mod tests {
             scroll: Ticks(0),
             zoom,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: piano_layout::Rows::ALL,
         };
         let far = beat_tick_color(&view(4.0)).expect("drawn at the farthest zoom");
@@ -1818,6 +1838,7 @@ mod tests {
             scroll: Ticks(0),
             zoom: piano_layout::ZOOM.default,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: crate::ui::piano_layout::Rows::ALL,
         };
         let keys: Vec<u8> = visible_keys(&view, 340.0).collect();

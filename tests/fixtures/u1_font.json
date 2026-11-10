@@ -1,6 +1,7 @@
 {
  "advances": {
   ".": 590,
+  "/": 738,
   "0": 1292,
   "1": 833,
   "2": 1249,
@@ -32,6 +33,9 @@
   "padding": 4,
   "position_shape": "00:00:00",
   "position_width": 80,
+  "signature_shape": "00/00",
+  "signature_size": 11,
+  "signature_width": 41,
   "size": 16,
   "tempo_shape": "000.000",
   "tempo_width": 75

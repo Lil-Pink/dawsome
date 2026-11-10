@@ -35,7 +35,7 @@ pub enum Finish {
 
 /// The board's shades, each one of the theme's palette colors in a new role, so the board stays
 /// the theme's own: Gilt's lit edges and lips are its gold `line_strong` and `knob_ring` on its
-/// green lacquer, Garnet's rose gold on plum, Fjord's steel on navy.
+/// chocolate lacquer, Garnet's rose gold on plum, Fjord's steel on navy.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shades {
     /// The chassis's surface at its top and at its foot: darker than the window's ground round

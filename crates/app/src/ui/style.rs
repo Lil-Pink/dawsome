@@ -9,7 +9,6 @@ use iced::overlay::menu;
 use iced::widget::{button, container, pick_list, text_input};
 use iced::{Background, Border, Color, Theme};
 
-use crate::ui::layout::STEPS_PER_GROUP;
 use crate::ui::palette::mix;
 pub use crate::ui::palette::{accent, palette, slider_fill};
 
@@ -113,8 +112,10 @@ pub fn ghost_rim(channel: Color, row: Color) -> Color {
     mix(channel, row, 3, 10)
 }
 
-pub fn unlit_step(step: u32) -> Color {
-    palette().step_unlit[(step / STEPS_PER_GROUP % 2) as usize]
+/// The unlit tone of `step` in a row of groups of `group` steps: the two tones alternate by
+/// group (by beat).
+pub fn unlit_step(step: u32, group: u32) -> Color {
+    palette().step_unlit[(step / group.max(1) % 2) as usize]
 }
 
 pub fn window(_theme: &Theme) -> container::Style {

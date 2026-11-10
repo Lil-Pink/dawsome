@@ -138,6 +138,11 @@ mod tests {
         sample_rate: 44_100,
         tempo: MilliBpm(120_000),
         ppq: 96,
+        bar: crate::time::BarPos {
+            bar: 0,
+            start: crate::time::Ticks(0),
+            signature: crate::time::TimeSignature::COMMON,
+        },
         transport: TransportInfo {
             playing: true,
             song_tick: Ticks(0),

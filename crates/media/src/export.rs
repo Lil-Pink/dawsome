@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use dawsome_engine::project::{ChannelKind, LoopRange, Project};
 use dawsome_engine::smf::{self, SmfError, SongFile};
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::Ticks;
 
 /// What one export wrote and what it could not carry: shown after the export and written beside
 /// what it wrote ([`Report::path`]).
@@ -127,8 +127,8 @@ fn midi_lines(project: &Project, file: &SongFile) -> Vec<String> {
 /// mode for `bars` played bars.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stems {
-    /// The song's end rounded up to a bar, as the song's export renders it unless told
-    /// otherwise.
+    /// The song's end rounded up to a bar of its meter (bars from tick 0, counted across the
+    /// changes), as the song's export renders it unless told otherwise.
     pub bars: u32,
     pub files: Vec<StemFile>,
 }
@@ -155,22 +155,23 @@ pub fn stems_folder(dir: &Path, name: &str) -> PathBuf {
 /// file (they shape the sound a track's clips make), a track's own mute is kept (its file is
 /// silence), so every file is that track's part of the master. `None` for a song with no clip.
 ///
-/// Every file plays from tick 0 to the song's end rounded up to a bar, through a loop over
+/// Every file plays from tick 0 to the song's end rounded up to a bar of its meter, through a loop over
 /// exactly that range: the project's own loop range would play part of the song again, and the
 /// song's end would wrap to its start inside the last bar; the render ends where the loop
 /// would wrap, so nothing plays twice and the last notes ring on to the bar's end.
 pub fn stems(project: &Project) -> Option<Stems> {
-    let end = project.playlist.end().0;
-    let bar = time::bars_to_ticks(1, project.ppq).0.max(1);
-    if end <= 0 {
+    let end = project.playlist.end();
+    if end <= Ticks(0) {
         return None;
     }
-    // Both are above 0, so this is the end rounded up to a bar.
-    let bars = u32::try_from((end + bar - 1) / bar).ok()?;
+    // The song's end rounded up to a bar line of its meter.
+    let meter = project.meter_map();
+    let held = meter.bars_holding(end);
+    let bars = u32::try_from(held).ok()?;
     let mut song = project.clone();
     song.playlist.loop_range = Some(LoopRange {
         start: Ticks(0),
-        end: time::bars_to_ticks(bars, project.ppq),
+        end: meter.bar_start(held),
         on: true,
     });
     let tracks = &project.playlist.tracks;

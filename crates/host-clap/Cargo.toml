@@ -26,4 +26,6 @@ serde_json.workspace = true
 # The window tests (tests/windows.rs, ignored: they need an X display) call the test interface's
 # exports and look at the host's windows on a connection of their own.
 libloading = "0.8"
-x11rb = "0.13"
+# `xtest`: the tests that type as a keyboard does, on a nested X server of their own only
+# (tests/support/nested_x.rs).
+x11rb = { version = "0.13", features = ["xtest"] }

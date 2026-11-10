@@ -15,18 +15,35 @@ use std::ops::Range;
 
 pub use host::{Captured, Editor, HostError, HostNotice, NoticeKind, PluginParam, ProcessorHost};
 
-use crate::time::{MilliBpm, Ticks};
+use crate::time::{BarPos, MilliBpm, Ticks};
 
 /// What a processor may need to know about the song while it processes: a tempo-synced delay
 /// times its echoes from it, a plugin reads the transport, and a generator plays `events`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProcessContext<'a> {
     pub sample_rate: u32,
+    /// Quarter notes a minute, in thousandths, in every time signature.
     pub tempo: MilliBpm,
+    /// Ticks per quarter note.
     pub ppq: u16,
+    /// The bar the block's first tick is in, of the meter that plays (the song's meter map in
+    /// song mode, the pattern's own signature while one pattern plays alone): a plugin is told
+    /// its numerator, denominator, number and start.
+    pub bar: BarPos,
     pub transport: TransportInfo,
     /// The notes that start in this block, in time order; empty for effects.
     pub events: &'a [PortEvent],
+}
+
+impl ProcessContext<'_> {
+    /// The bar the block's first tick is in, as a plugin's transport gives it: its number,
+    /// counted from 0 across every change of signature, and where it starts in quarter notes
+    /// (its start tick / ppq). In integer ticks first, so a bar of 3.5 or 3.75 quarters starts
+    /// where it does to the bit.
+    pub fn bar_in_quarters(&self) -> (i64, f64) {
+        let start = self.bar.start.0 as f64 / f64::from(self.ppq.max(1));
+        (self.bar.bar, start)
+    }
 }
 
 /// Where playback is, as of the block's first frame.

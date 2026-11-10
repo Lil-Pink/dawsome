@@ -29,7 +29,7 @@ use crate::project::{
     Project, SoundEdits, MAX_AUDIO_CLIPS, MAX_VOLUME,
 };
 use crate::source::{ClipSource, MemorySource, SourceSlot};
-use crate::time::{self, Ticks};
+use crate::time::{self, MeterMap, Ticks};
 use crate::transport::ParamTarget;
 
 /// Why a compile failed. A failed compile changes nothing the next compile depends on.
@@ -573,10 +573,10 @@ impl Compiler {
                 let events = self
                     .patterns
                     .entry(id)
-                    .or_insert_with(|| compile_pattern(pattern, project.ppq));
+                    .or_insert_with(|| compile_pattern(project, id, pattern));
                 PatternPlan {
                     id,
-                    length: time::bars_to_ticks(pattern.length_bars, project.ppq),
+                    length: project.pattern_ticks(id),
                     events: Arc::clone(events),
                 }
             })
@@ -614,9 +614,17 @@ impl Compiler {
                 && automation.target.is_some()
                 && !automation.windows.is_empty()
         });
+        // A pattern played alone is counted in its own bars; the song in the song's.
+        let meter = match mode {
+            PlayMode::Pattern(pattern) | PlayMode::Channel { pattern, .. } => {
+                MeterMap::single(project.pattern_signature(pattern), project.ppq)
+            }
+            PlayMode::Song | PlayMode::Nothing => project.meter_map(),
+        };
         let plan = PlayPlan {
             sample_rate: project.sample_rate,
             ppq: project.ppq,
+            meter,
             channels,
             patterns,
             playing,
@@ -1500,8 +1508,8 @@ fn channel_alone(pattern: &PatternPlan, channel: ChannelId) -> PatternPlan {
 /// ([`time::swung_note`]). Notes at or past the pattern's end are kept in the document but
 /// silent, so they are left out here (by their stored tick: a swung note stays inside the
 /// pattern); so are negative ticks, which a valid project never has.
-fn compile_pattern(pattern: &Pattern, ppq: u16) -> Arc<[NoteEvent]> {
-    let length = time::bars_to_ticks(pattern.length_bars, ppq);
+fn compile_pattern(project: &Project, id: PatternId, pattern: &Pattern) -> Arc<[NoteEvent]> {
+    let (length, ppq) = (project.pattern_ticks(id), project.ppq);
     let mut events: Vec<NoteEvent> = pattern
         .notes
         .iter()
@@ -1531,10 +1539,11 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
+    use crate::edit::{self, Edit};
     use crate::plan::ProcessorSlot;
     use crate::project::{
-        Automations, Channel, ChannelId, ClipId, EffectId, MidiLinks, Mixer, Note, PatternKind,
-        Playlist, TrackId, DEFAULT_KEY, MAX_KEY,
+        Automations, Channel, ChannelId, ClipId, EffectId, LoopRange, MidiLinks, Mixer, Note,
+        PatternKind, Playlist, TrackId, DEFAULT_KEY, MAX_KEY,
     };
     use crate::time::MilliBpm;
 
@@ -1560,6 +1569,8 @@ mod tests {
             sample_rate: 44100,
             tempo: MilliBpm(120_000),
             ppq: 96,
+            time_signature: crate::time::TimeSignature::COMMON,
+            signature_changes: Vec::new(),
             next_channel_id: ChannelId(8),
             channels: BTreeMap::from([
                 (ChannelId(7), channel("snare", 0.5)),
@@ -1571,6 +1582,7 @@ mod tests {
                 Pattern {
                     name: "Pattern 1".into(),
                     length_bars: 2,
+                    time_signature: None,
                     copied_from: None,
                     swing_tenths: time::STRAIGHT_SWING,
                     kind: PatternKind::Pattern,
@@ -1633,7 +1645,7 @@ mod tests {
                 ..note(3, 24, 1.0)
             },
         ]));
-        let speeds: Vec<f64> = plan.patterns[0].events.iter().map(|e| e.speed()).collect();
+        let speeds: Vec<f64> = plan.patterns[0].events.iter().map(|e| e.speed).collect();
         assert_eq!(speeds, [1.0, 2.0]);
     }
 
@@ -2070,5 +2082,171 @@ mod tests {
         let added = compile_update(&mut compiler, &project, &Touched::default());
         let installed: Vec<ProcessorSlot> = added.delta.install.iter().map(|&(s, _)| s).collect();
         assert_eq!(installed, [slot]);
+    }
+
+    // The incremental compiler, edit by edit: the patterns whose event lists a compile rebuilds,
+    // and the ones it shares with the plan before (the same `Arc`). Known answers (c) of
+    // tests/fixtures/gen_p2_expected.py and the swing of gen_p31_expected.py. Here and not in
+    // tests/edits.rs because they read the plan's event lists, which only this crate can.
+
+    mod edit_lists {
+        include!("../../../tests/support/edit_lists.rs");
+    }
+
+    use edit_lists::{every_mixer_edit, every_playlist_edit};
+
+    const P2_THREE: &str = include_str!("../../../tests/fixtures/p2_three_patterns.json");
+    const P31_PLAIN: &str = include_str!("../../../tests/fixtures/p31_plain.json");
+    const P31_TRIPLET: &str = include_str!("../../../tests/fixtures/p31_triplet_120.json");
+
+    /// Pattern `pattern`'s compiled events in `update`'s plan.
+    fn events(update: &PlanUpdate, pattern: u32) -> &Arc<[NoteEvent]> {
+        let patterns = &update.plan().patterns;
+        let index = patterns
+            .binary_search_by_key(&PatternId(pattern), |p| p.id)
+            .expect("pattern compiled");
+        &patterns[index].events
+    }
+
+    fn ticks(events: &[NoteEvent]) -> Vec<i64> {
+        events.iter().map(|event| event.tick.0).collect()
+    }
+
+    #[test]
+    fn c_recompiling_after_an_edit_rebuilds_only_the_touched_pattern() {
+        let mut project = load(P2_THREE);
+        let mut compiler = Compiler::new();
+        let mut compile = |project: &Project, touched: &Touched| {
+            let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
+            compiler
+                .compile(project, touched, PlayMode::Pattern(PatternId(1)), silent)
+                .expect("in-memory samples load")
+        };
+        let before = compile(&project, &Touched::default());
+        assert_eq!(ticks(events(&before, 1)), [0, 96, 192, 288]);
+
+        let step_2 = Edit::ToggleStep {
+            pattern: PatternId(1),
+            channel: ChannelId(1),
+            step: 2,
+        };
+        let applied = edit::apply(&mut project, step_2).expect("toggles");
+        assert_eq!(applied.touched.patterns, BTreeSet::from([PatternId(1)]));
+        let after = compile(&project, &applied.touched);
+        let pattern_1 = ticks(events(&after, 1));
+        assert_eq!(pattern_1, [0, 48, 96, 192, 288]);
+        let samples: Vec<u64> = pattern_1
+            .iter()
+            .map(|&tick| {
+                time::tick_to_sample(Ticks(tick), 44100, project.tempo, 96).expect("in range")
+            })
+            .collect();
+        assert_eq!(samples, [0, 11025, 22050, 44100, 66150]);
+        assert_eq!(ticks(events(&after, 2)), [48, 144]);
+        assert!(events(&after, 3).is_empty());
+        assert!(!Arc::ptr_eq(events(&before, 1), events(&after, 1)));
+        assert!(Arc::ptr_eq(events(&before, 2), events(&after, 2)));
+        assert!(Arc::ptr_eq(events(&before, 3), events(&after, 3)));
+
+        // Channel and tempo edits recompile no pattern.
+        let mut previous = after;
+        let edits = [
+            Edit::SetChannelVolume {
+                channel: ChannelId(1),
+                value: 0.5,
+            },
+            Edit::SetTempo {
+                mbpm: MilliBpm(140_000),
+            },
+        ];
+        for edit in edits {
+            let applied = edit::apply(&mut project, edit.clone()).expect("applies");
+            let next = compile(&project, &applied.touched);
+            for pattern in 1..=3 {
+                assert!(
+                    Arc::ptr_eq(events(&previous, pattern), events(&next, pattern)),
+                    "{edit:?} recompiled pattern {pattern}"
+                );
+            }
+            previous = next;
+        }
+    }
+
+    // `Touched.playlist` never recompiles a pattern list.
+    #[test]
+    fn playlist_edits_recompile_no_pattern() {
+        let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
+        for edit in every_playlist_edit() {
+            let mut project = load(P4_LOOP);
+            let mut compiler = Compiler::new();
+            let before = compiler
+                .compile(&project, &Touched::default(), PlayMode::Song, silent)
+                .expect("in-memory samples load");
+            let applied = edit::apply(&mut project, edit.clone()).expect("applies");
+            let after = compiler
+                .compile(&project, &applied.touched, PlayMode::Song, silent)
+                .expect("in-memory samples load");
+            for pattern in 1..=3 {
+                assert!(
+                    Arc::ptr_eq(events(&before, pattern), events(&after, pattern)),
+                    "{edit:?} recompiled pattern {pattern}"
+                );
+            }
+        }
+    }
+
+    // Mixer and effect edits never recompile a pattern's event list.
+    #[test]
+    fn mixer_edits_recompile_no_pattern() {
+        let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
+        for (edit, _) in every_mixer_edit() {
+            let mut project = load(P5_DELAY_SYNC);
+            let mut compiler = Compiler::new();
+            let mode = PlayMode::Pattern(PatternId(1));
+            let before = compiler
+                .compile(&project, &Touched::default(), mode, silent)
+                .expect("compiles");
+            let applied = edit::apply(&mut project, edit.clone()).expect("applies");
+            let after = compiler
+                .compile(&project, &applied.touched, mode, silent)
+                .expect("compiles");
+            assert!(
+                Arc::ptr_eq(events(&before, 1), events(&after, 1)),
+                "{edit:?} recompiled pattern 1"
+            );
+        }
+    }
+
+    // Known answers (gen_p31): the straight 16 steps set to 66.7 % are p31_triplet_120.json byte
+    // for byte (the two files differ in the swing alone), and the step's inverse gives
+    // p31_plain.json's bytes back. The edit touches its pattern, so a recompile swings that
+    // pattern's events: the second 16th of each pair at 48p + 32, the stored notes still on 24k.
+    #[test]
+    fn a_patterns_swing_is_set_and_undone_byte_for_byte() {
+        let swing = |swing_tenths| Edit::SetPatternSwing {
+            pattern: PatternId(1),
+            swing_tenths,
+        };
+        let json = |project: &Project| project.to_json().expect("serializes");
+        let mut project = load(P31_PLAIN);
+        let mut compiler = Compiler::new();
+        let mode = PlayMode::Pattern(PatternId(1));
+        let silent = |_: &Path| Ok::<_, Infallible>(SampleBuffer::from(vec![0.0]));
+        let before = compiler
+            .compile(&project, &Touched::default(), mode, silent)
+            .expect("compiles");
+        let applied = edit::apply(&mut project, swing(667)).expect("in range");
+        assert_eq!(json(&project), P31_TRIPLET.trim_end());
+        assert_eq!(applied.touched.patterns, BTreeSet::from([PatternId(1)]));
+        assert_eq!(applied.inverse, swing(500));
+        let after = compiler
+            .compile(&project, &applied.touched, mode, silent)
+            .expect("compiles");
+        let straight: Vec<i64> = (0..16).map(|k| 24 * k).collect();
+        let swung: Vec<i64> = (0..8).flat_map(|p| [48 * p, 48 * p + 32]).collect();
+        assert_eq!(ticks(events(&before, 1)), straight);
+        assert_eq!(ticks(events(&after, 1)), swung);
+        edit::apply(&mut project, applied.inverse).expect("undoes");
+        assert_eq!(json(&project), P31_PLAIN.trim_end());
     }
 }

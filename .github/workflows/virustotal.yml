@@ -1,5 +1,5 @@
-# Scans the programs of each published release with VirusTotal and adds each one's verdict and
-# report link to the release notes. The release zips are unpacked first: VirusTotal's free API
+# Scans the programs of each published release with VirusTotal and adds one line of report links
+# to the release notes. The release zips are unpacked first: VirusTotal's free API
 # takes files up to 32 MB, and the programs inside are what a scan of a download judges. A file
 # VirusTotal already knows (by its SHA-256) is not sent again, so a re-run only reads the reports. Runs when a release is
 # published, or by hand for a release that already exists (Actions → VirusTotal → Run workflow).
@@ -34,7 +34,7 @@ jobs:
           cp unpacked/dawsome-*-linux-*/dawsome unpacked/dawsome-*-linux-*/dawsome-app scan/linux/
           cp unpacked/dawsome-*-windows-*/dawsome.exe unpacked/dawsome-*-windows-*/dawsome-app.exe scan/windows/
           ls -l scan/linux scan/windows
-      - name: Scan, and the verdicts in the release notes
+      - name: Scan, and the report links in the release notes
         env:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
@@ -42,7 +42,9 @@ jobs:
           api() { sleep 16; curl -s -H "x-apikey: $VT_API_KEY" "$@"; }
           stats_of() { jq -c '.data.attributes.last_analysis_stats // empty' <<<"$1"; }
           scanned() { jq '.malicious + .suspicious + .undetected + .harmless' <<<"$1"; }
-          lines=()
+          declare -A names=([scan/windows/dawsome-app.exe]="Windows app" [scan/windows/dawsome.exe]="Windows command line"
+                            [scan/linux/dawsome-app]="Linux app" [scan/linux/dawsome]="Linux command line")
+          links=()
           for path in scan/windows/dawsome-app.exe scan/windows/dawsome.exe scan/linux/dawsome-app scan/linux/dawsome; do
             name="${path#scan/}"
             sha="$(sha256sum "$path" | cut -d' ' -f1)"
@@ -60,23 +62,18 @@ jobs:
             fi
             report="https://www.virustotal.com/gui/file/$sha"
             if [ -n "$stats" ]; then
-              flagged="$(jq '.malicious + .suspicious' <<<"$stats")"
-              echo "$name: $flagged of $(scanned "$stats") engines flagged it"
-              lines+=("- \`$name\`: $flagged of $(scanned "$stats") engines flagged it ([report]($report))")
+              echo "$name: $(jq '.malicious + .suspicious' <<<"$stats") of $(scanned "$stats") engines flagged it"
             else
               echo "$name: still being scanned"
-              lines+=("- \`$name\`: still being scanned ([report]($report))")
             fi
+            # The notes carry the links alone, one line: the report page says what the engines found.
+            links+=("[${names[$path]}]($report)")
           done
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > body.md
           # A section written by an earlier run is replaced, not added to.
           sed -i '/^<!-- virustotal -->$/,$d' body.md
           {
             echo '<!-- virustotal -->'
-            echo '### VirusTotal'
-            echo
-            echo 'The programs in the zips, scanned with VirusTotal when this release was published:'
-            echo
-            printf '%s\n' "${lines[@]}"
+            echo "VirusTotal reports for the programs in the zips: ${links[0]} · ${links[1]} · ${links[2]} · ${links[3]}."
           } >> body.md
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md

@@ -451,11 +451,12 @@ mod tests {
     // readout shows only unfolded, Preview and Follow say their words until the glyphs fold,
     // and Loop, the last control, ends at the strip's left + the width its fold needs − the
     // right margin (12) − the grip and its spacing (34) − the player's room after Loop (5):
-    //   1000: 733.22 − 51 = 682.22 / 789.77 − 51 = 738.77; 700: 300 + 656.90 − 51 = 905.90 /
-    //   300 + 646.70 − 51 = 895.70; 640: 300 + 590.14 − 51 = 839.14 / 300 + 632.70 − 51 = 881.70
-    // (pins moved 1 px left when the player took its room: 4 px wider, Loop 5 in from its end)
-    // (each with this system's "▾" past 7.911 px, as there). Folded to the scale, its chooser
-    // is 48 px: it starts 48 + a spacing before the root's chooser.
+    //   1000: 733.93 − 51 = 682.93 / 790.48 − 51 = 739.48; 700: 300 + 657.61 − 51 = 906.61 /
+    //   300 + 647.41 − 51 = 896.41; 640: 300 + 590.86 − 51 = 839.86 / 300 + 633.41 − 51 = 882.41
+    // (pins moved 1 px left when the player took its room: 4 px wider, Loop 5 in from its end;
+    // then 0.714 px right when Notes's arrow was drawn: they took this system's "▾", 7.911 px,
+    // which Inter has not). Folded to the scale, its chooser is 48 px: it starts 48 + a
+    // spacing before the root's chooser.
     #[test]
     fn the_strip_folds_in_the_window_as_its_law_says() {
         use crate::ui::fonts::size;
@@ -466,8 +467,6 @@ mod tests {
         use crate::ui::roll::RollMessage;
         use crate::ui::scale::{Root, ScaleMode};
         use crate::ui::short_pick_list::natural_width;
-        use crate::ui::text_fit::text_width;
-        let drift = text_width("Notes \u{25be}", size::LABEL) - (36.867_188 + 7.911);
         let shows = |app: &App, start: &str| {
             let dump = super::super::layout_dump::dump(
                 app.view(),
@@ -485,12 +484,12 @@ mod tests {
             })
         };
         for (window, library, scale, loop_end, len, words) in [
-            (1000.0, false, false, 682.22, true, true),
-            (1000.0, false, true, 738.77, true, true),
-            (1000.0, true, false, 905.90, false, true),
-            (1000.0, true, true, 895.70, false, false),
-            (940.0, true, false, 839.14, false, false),
-            (940.0, true, true, 881.70, false, false),
+            (1000.0, false, false, 682.93, true, true),
+            (1000.0, false, true, 739.48, true, true),
+            (1000.0, true, false, 906.61, false, true),
+            (1000.0, true, true, 896.41, false, false),
+            (940.0, true, false, 839.86, false, false),
+            (940.0, true, true, 882.41, false, false),
         ] {
             let (mut app, _player) = app_on(&Path::new(FIXTURES).join("p3_roll.json"));
             let _ = app.update(Message::WindowResized(iced::Size::new(window, 560.0)));
@@ -508,10 +507,7 @@ mod tests {
             assert_eq!(shows(&app, "Preview"), words, "{case}: Preview's words");
             assert_eq!(shows(&app, "Follow"), words, "{case}: Follow's words");
             let (_, end) = strip_box(&app, "Loop");
-            assert!(
-                (end - drift - loop_end).abs() < 0.01,
-                "{case}: Loop ends at {end}"
-            );
+            assert!((end - loop_end).abs() < 0.01, "{case}: Loop ends at {end}");
             assert!(
                 end + STRIP_SPACING <= window - 12.0 - 24.0,
                 "{case}: clear of the grip"

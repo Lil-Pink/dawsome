@@ -625,8 +625,10 @@ fn the_wheel_zooms_and_scrolls_the_waveform() {
 }
 
 // Play plays the selection alone, as it sounds now, through the Library's preview, the song
-// stopped: frames 1000..2000 of the ramp (frame k = k/65536) on both sides, then silence; Stop
-// stops it. Space in the editor's window plays it too.
+// stopped: frames 1000..2000 of the ramp (frame k = k/65536) on both sides, at the preview's
+// level, a new channel's step (× 225/512; pin moved from unity): (1000 + k) · 225 / 2^25, exact
+// in f32 (1999 · 225 < 2^24), then silence; Stop stops it. Space in the editor's window plays it
+// too.
 #[test]
 fn play_plays_the_selection_alone_through_the_preview() {
     let (mut app, mut player, _main) = app_on("p30_undo.json");
@@ -644,7 +646,7 @@ fn play_plays_the_selection_alone_through_the_preview() {
     let want: Vec<[f32; 2]> = (0..1200)
         .map(|k| {
             let value = if k < 1000 {
-                (1000 + k) as f32 / 65536.0
+                (1000 + k) as f32 * 225.0 / 33_554_432.0
             } else {
                 0.0
             };
@@ -673,7 +675,12 @@ fn play_plays_the_selection_alone_through_the_preview() {
         Modifiers::empty(),
     );
     player.process(&mut out[..4]);
-    assert_eq!(out[1], [1.0 / 65536.0; 2], "Space plays it from its start");
+    // Frame 1 of the ramp, 1/65536, at the preview's level: 225 / 2^25.
+    assert_eq!(
+        out[1],
+        [225.0 / 33_554_432.0; 2],
+        "Space plays it from its start"
+    );
     assert!(!app.transport_on, "the song stays stopped");
 }
 
@@ -1418,10 +1425,12 @@ fn saving_and_playing_ten_minutes_leave_the_window_at_once() {
     assert_eq!(busy(&app), None);
     let mut out = vec![[9.0f32; 2]; 4];
     player.process(&mut out);
+    // At the preview's level, a new channel's step: each side times 225/512 (one f32 product,
+    // as the player makes it; pin moved from unity).
     let first: Vec<[f32; 2]> = sound
         .chunks(2)
         .take(4)
-        .map(|pair| [pair[0], pair[1]])
+        .map(|pair| [pair[0] * (225.0 / 512.0), pair[1] * (225.0 / 512.0)])
         .collect();
     assert_eq!(out, first, "plays from its first frame");
 

@@ -21,6 +21,7 @@ fn p3_view(scroll: Ticks) -> View {
         scroll,
         zoom: piano_layout::ZOOM.default,
         step: Ticks(24),
+        signature: dawsome_engine::time::TimeSignature::COMMON,
         rows: crate::ui::piano_layout::Rows::ALL,
     }
 }
@@ -178,7 +179,7 @@ fn p5_the_last_rack_rows_menu_shows_whole_over_the_playlist() {
     use crate::ui::panels::{stack_heights, Panel};
     let shot = read_ui_shot();
     let window = iced::Size::new(1000.0, 560.0);
-    let rack = RACK_HEADER_HEIGHT + rack_size(5, 16).height;
+    let rack = RACK_HEADER_HEIGHT + rack_size(5, 16, 4).height;
     let heights = stack_heights(
         &[Panel::Rack, Panel::Playlist],
         rack,
@@ -328,7 +329,7 @@ fn p6_the_racks_steps_scrolled_to_their_end() {
         view: 778.0,
     };
     assert_eq!(span.last_offset(), 234.0);
-    assert_eq!((step_left(8), step_left(31)), (474.0, 1194.0));
+    assert_eq!((step_left(8, 4), step_left(31, 4)), (474.0, 1194.0));
     let (start, size) = span.thumb(1000.0 - STEPS_X);
     assert!((STEPS_X + start - 401.9).abs() < 0.1, "{start}");
     let at = |x: f32, y: f32| shot.pixel(Point::new(x, y));
@@ -346,7 +347,7 @@ fn p6_the_racks_steps_scrolled_to_their_end() {
         (
             "step 31",
             Point::new(974.0, 110.0),
-            rgb8(style::unlit_step(31)),
+            rgb8(style::unlit_step(31, 4)),
         ),
         (
             "step 7 covered",
@@ -732,7 +733,7 @@ fn t1_every_toolbar_group_fills_its_cell() {
 }
 
 // The panel buttons' icons are one size at any width: each of the six icons spans 11 px across
-// in its 25 px button on F1's shot at 1024 px, at 1920 px and on F1's toolbar at 2560 px drawn
+// in its 25 px button on F1's shot at 1080 px, at 1920 px and on F1's toolbar at 2560 px drawn
 // offscreen (`toolbar::panel_icon_size`). Pins moved: they grew with the bar to 16 px in 28 at
 // 1920 px and wider while the toolbar scale lasted (since retired); were 19 in 31 and 12 in 20
 // before the bar was made 0.9 of its size; 11 in 19 until the 24 px targets. What

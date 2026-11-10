@@ -23,7 +23,7 @@ use std::time::Instant;
 use dawsome_engine::edit::takes;
 use dawsome_engine::project::{ChannelId, InsertId, PatternId, PatternKind, TrackId};
 use dawsome_engine::realtime::EngineEvent;
-use dawsome_engine::time::Ticks;
+use dawsome_engine::time::{MeterUnit, Ticks};
 use dawsome_engine::transport::Control;
 use dawsome_media::record::{Feed, Recorded, Recorder, TapFeed};
 
@@ -342,11 +342,12 @@ impl App {
             PlayMode::Song => None,
             PlayMode::Pattern => {
                 let project = self.session.project();
-                let Some(pattern) = self.pattern.and_then(|id| project.patterns.get(&id)) else {
+                let Some(pattern) = self.pattern.filter(|id| project.patterns.contains_key(id))
+                else {
                     self.notice = Some("Recording a pattern needs a pattern".to_owned());
                     return false;
                 };
-                let length = dawsome_engine::time::bars_to_ticks(pattern.length_bars, project.ppq);
+                let length = project.pattern_ticks(pattern);
                 dawsome_engine::time::tick_to_sample(
                     length,
                     project.sample_rate,
@@ -936,18 +937,19 @@ impl App {
             self.notice = Some("Nothing to capture: play something first".to_owned());
             return;
         }
-        let bar = dawsome_engine::time::bars_to_ticks(1, project.ppq).0;
-        let nearest_bar = |tick: i64| (tick + bar / 2).div_euclid(bar) * bar;
         let built = match self.mode {
             PlayMode::Pattern => {
-                let Some((id, pattern)) = self
-                    .pattern
-                    .and_then(|id| Some((id, project.patterns.get(&id)?)))
-                else {
+                let Some(id) = self.pattern.filter(|id| project.patterns.contains_key(id)) else {
                     return;
                 };
-                let length =
-                    dawsome_engine::time::bars_to_ticks(pattern.length_bars, project.ppq).0;
+                let length = project.pattern_ticks(id).0;
+                // The pattern's own bar: Capture into it counts its bars.
+                let bar = project
+                    .pattern_signature(id)
+                    .bar_ticks(project.ppq)
+                    .0
+                    .max(1);
+                let nearest_bar = |tick: i64| (tick + bar / 2).div_euclid(bar) * bar;
                 // Played along the pattern: from the bar start nearest where the first note was
                 // heard in it (a bar start at its end is its first).
                 let base = heard_at
@@ -961,7 +963,10 @@ impl App {
             }
             PlayMode::Song => {
                 let at = self.playhead.unwrap_or(self.song_marker);
-                let start = Ticks(nearest_bar(at.0).max(0));
+                // The song's bar line nearest where it was played, in its meter there.
+                let start = project
+                    .meter_map()
+                    .snap_nearest(Ticks(at.0.max(0)), MeterUnit::Bar);
                 let channel = self
                     .selected_channel
                     .and_then(|id| project.channels.get(&id))

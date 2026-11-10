@@ -20,13 +20,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 use crate::project::{
-    Automation, AutomationId, AutomationPoint, AutomationTarget, Channel, ChannelId, ChannelKind,
-    Clip, ClipId, ClipStretch, Controller, Curve, EffectId, InputSource, InsertId, LoopRange,
-    MidiOut, Note, Pattern, PatternId, PatternKind, ProcessorOwner, ProcessorRef, Project, Sound,
-    SoundEdits, SoundSource, Track, TrackId, ValidationError, DEFAULT_KEY, MAX_KEY, MAX_VOLUME,
-    PAN_RANGE, TEMPO_RANGE,
+    check_signature_changes, Automation, AutomationId, AutomationPoint, AutomationTarget, Channel,
+    ChannelId, ChannelKind, Clip, ClipId, ClipStretch, Controller, Curve, EffectId, InputSource,
+    InsertId, LoopRange, MidiOut, Note, Pattern, PatternId, PatternKind, ProcessorOwner,
+    ProcessorRef, Project, Sound, SoundEdits, SoundSource, Track, TrackId, ValidationError,
+    DEFAULT_KEY, MAX_KEY, MAX_SONG_BARS, MAX_VOLUME, PAN_RANGE, TEMPO_RANGE,
 };
-use crate::time::{self, MilliBpm, Ticks};
+use crate::time::{self, MeterMap, MeterUnit, MilliBpm, SignatureChange, Ticks, TimeSignature};
 
 /// Velocity of a step switched on in the step grid: 100 on the 0..128 velocity scale, the
 /// same as a note drawn in the piano roll, and the default the project-file note record uses.
@@ -96,6 +96,73 @@ pub enum Edit {
     },
     SetTempo {
         mbpm: MilliBpm,
+    },
+    /// Gives the project the time signature `signature` (refused outside its ranges): every
+    /// bar, beat and step grid follows it, and a pattern grows to the whole bars that hold the
+    /// end of every note it played (one starting inside its old length; a step hit ends a tick
+    /// after it starts, as a drawn note grows a pattern), so nothing it played falls silent, up
+    /// to [`MAX_SONG_BARS`] (a hand-made note longer than that song plays on past its pattern's
+    /// end, as before); a pattern never gets shorter and no clip changes (a clip keeps its
+    /// ticks: one of a pattern now shorter plays more passes of it). A pattern with a signature
+    /// of its own keeps its bars. The song's changes of signature settle onto the new bar lines
+    /// ([`time::settle_changes`]). Its inverse is [`Edit::RestoreTimeSignature`]; the signature
+    /// the project has changes nothing.
+    SetTimeSignature {
+        signature: TimeSignature,
+    },
+    /// Puts back the time signature `signature`, each listed pattern's length in bars, in the
+    /// list's order, and the song's changes `changes` as they were before an
+    /// [`Edit::SetTimeSignature`]: its inverse. Its own inverse is the same edit with the
+    /// signature, the lengths (the list reversed, so a pattern named twice comes back to where
+    /// it started) and the changes it replaced, exact whether or not the signature changes. Why
+    /// an edit of its own: setting the old signature anew would grow patterns by the old bar
+    /// instead of giving their lengths back, and settle the changes again.
+    RestoreTimeSignature {
+        signature: TimeSignature,
+        lengths: Vec<(PatternId, u32)>,
+        changes: Vec<SignatureChange>,
+    },
+    /// Gives pattern `pattern` a time signature of its own, or with `None` the project's back:
+    /// its bars, steps and roll follow it wherever its clips lie (every clip of it, as one
+    /// pattern). It grows to the whole bars of the new signature that hold the end of every note
+    /// it played, as [`Edit::SetTimeSignature`] grows a pattern; it never gets shorter. Its
+    /// inverse is [`Edit::RestorePatternTimeSignature`]; the signature it has changes nothing.
+    SetPatternTimeSignature {
+        pattern: PatternId,
+        signature: Option<TimeSignature>,
+    },
+    /// Puts back pattern `pattern`'s own signature (or none) and its bars: the inverse of
+    /// [`Edit::SetPatternTimeSignature`], its own inverse the same edit with what it replaced.
+    RestorePatternTimeSignature {
+        pattern: PatternId,
+        signature: Option<TimeSignature>,
+        bars: u32,
+    },
+    /// A change of the song's time signature to `signature` at the bar line at or before `at`
+    /// in the song's meter, replacing the change already there; then every change settles onto
+    /// the bar lines of the meter before it ([`time::settle_changes`]). Refused in the song's
+    /// first bar (the project's own signature rules there) and outside the signature's ranges.
+    /// Its inverse is [`Edit::RestoreSignatureChanges`].
+    SetSignatureChange {
+        at: Ticks,
+        signature: TimeSignature,
+    },
+    /// Takes out the change of time signature at tick `at`; the changes after it settle.
+    RemoveSignatureChange {
+        at: Ticks,
+    },
+    /// Moves the change of time signature at tick `from` to the bar line at or before `to` in
+    /// the song's meter without it, replacing a change already there; then every change settles.
+    MoveSignatureChange {
+        from: Ticks,
+        to: Ticks,
+    },
+    /// Puts back the song's changes of time signature `changes` as they were (each on its bar
+    /// line, or refused): the inverse of every change edit, its own inverse the list it
+    /// replaced. Why the whole list: settling moves changes after the one edited, and undo must
+    /// put every one back on its tick.
+    RestoreSignatureChanges {
+        changes: Vec<SignatureChange>,
     },
     SetPatternBars {
         pattern: PatternId,
@@ -541,7 +608,8 @@ pub struct Touched {
     pub patterns: BTreeSet<PatternId>,
     pub channels: BTreeSet<ChannelId>,
     pub tempo: bool,
-    /// Tracks, clips or the loop range changed.
+    /// Tracks, clips, the loop range or the song's meter (its time signature from tick 0 or a
+    /// change of it along the song) changed.
     pub playlist: bool,
     /// An insert, a send, the solo set, the order of an insert's effects or which of them are on
     /// changed.
@@ -650,6 +718,10 @@ pub enum EditError {
     NoteMissing { tick: i64, channel: u32, key: u8 },
     #[error("the edit changes nothing")]
     NothingToChange,
+    #[error("a time signature change goes after the song's first bar: the first bar's is the project's own time signature")]
+    SignatureChangeAtStart,
+    #[error("there is no time signature change at tick {0}")]
+    NoSignatureChange(i64),
     #[error("volume {0} must be a finite number from 0 to 4")]
     InvalidVolume(f32),
     #[error("pan {0} must be a number from -1 to 1")]
@@ -884,6 +956,39 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
             let inverse = Edit::SetTempo { mbpm: old };
             Ok(Applied { inverse, touched })
         }
+        Edit::SetTimeSignature { signature } => set_time_signature(project, signature),
+        Edit::RestoreTimeSignature {
+            signature,
+            lengths,
+            changes,
+        } => restore_time_signature(project, signature, lengths, changes),
+        Edit::SetPatternTimeSignature { pattern, signature } => {
+            set_pattern_time_signature(project, pattern, signature)
+        }
+        Edit::RestorePatternTimeSignature {
+            pattern,
+            signature,
+            bars,
+        } => restore_pattern_time_signature(project, pattern, signature, bars),
+        Edit::SetSignatureChange { at, signature } => set_signature_change(project, at, signature),
+        Edit::RemoveSignatureChange { at } => {
+            if !project
+                .signature_changes
+                .iter()
+                .any(|change| change.at == at)
+            {
+                return Err(EditError::NoSignatureChange(at.0));
+            }
+            let kept = project
+                .signature_changes
+                .iter()
+                .filter(|change| change.at != at)
+                .copied()
+                .collect();
+            settle_signature_changes(project, kept)
+        }
+        Edit::MoveSignatureChange { from, to } => move_signature_change(project, from, to),
+        Edit::RestoreSignatureChanges { changes } => restore_signature_changes(project, changes),
         Edit::SetPatternBars { pattern, bars } => {
             if bars == 0 {
                 return Err(EditError::NoBars);
@@ -1112,15 +1217,314 @@ fn pattern_mut(project: &mut Project, id: PatternId) -> Result<&mut Pattern, Edi
         .ok_or(EditError::UnknownPattern(id.0))
 }
 
-/// Fails unless `step` is one of the pattern's steps (16 per bar).
-fn check_step(pattern: &Pattern, step: u32) -> Result<(), EditError> {
-    let per_bar = u64::from(time::BEATS_PER_BAR * time::STEPS_PER_BEAT);
+/// Fails unless `step` is one of the pattern's steps (`per_bar` a bar: the time signature's).
+fn check_step(pattern: &Pattern, step: u32, per_bar: u32) -> Result<(), EditError> {
+    let per_bar = u64::from(per_bar);
     let steps = u64::from(pattern.length_bars) * per_bar;
     if u64::from(step) < steps {
         Ok(())
     } else {
         Err(EditError::StepOutsidePattern { step, steps })
     }
+}
+
+/// The bars `pattern` needs when its bar goes from `old_bar` to `new_bar` ticks: the whole new
+/// bars holding the end of every note it played (one starting inside its old length; a step hit
+/// ends a tick after it starts), held to [`MAX_SONG_BARS`], and never fewer than it has.
+fn bars_holding_notes(pattern: &Pattern, old_bar: Ticks, new_bar: Ticks) -> u32 {
+    let heard = i64::from(pattern.length_bars).saturating_mul(old_bar.0);
+    let reach = pattern
+        .notes
+        .iter()
+        .filter(|note| note.start.0 < heard)
+        .map(|note| note.start.0.saturating_add(note.length.0.max(1)))
+        .max()
+        .unwrap_or(0);
+    let reach = u64::try_from(reach).unwrap_or(0);
+    let new_bar = u64::try_from(new_bar.0.max(1)).unwrap_or(1);
+    // Held to the longest song, as a MIDI file's notes are (`smf::bars_holding`): one
+    // hand-made note of an absurd length would otherwise make a pattern billions of bars
+    // long, more than the window can draw.
+    let needed = u32::try_from(reach.div_ceil(new_bar))
+        .unwrap_or(u32::MAX)
+        .min(MAX_SONG_BARS);
+    needed.max(pattern.length_bars)
+}
+
+/// [`Edit::SetTimeSignature`]: the patterns that follow the project and must grow first (each
+/// to the whole new bars holding the ends of the notes it played), the changes settled onto the
+/// new bar lines, then the signature.
+fn set_time_signature(
+    project: &mut Project,
+    signature: TimeSignature,
+) -> Result<Applied, EditError> {
+    if !signature.is_valid() {
+        return Err(EditError::Invalid(ValidationError::InvalidTimeSignature(
+            signature,
+        )));
+    }
+    let old = project.time_signature;
+    if signature == old {
+        let inverse = Edit::RestoreTimeSignature {
+            signature,
+            lengths: Vec::new(),
+            changes: project.signature_changes.clone(),
+        };
+        return Ok(Applied {
+            inverse,
+            touched: Touched::default(),
+        });
+    }
+    let ppq = project.ppq;
+    let changes = time::settle_changes(signature, project.signature_changes.clone(), ppq);
+    check_signature_changes(signature, &changes, ppq).map_err(EditError::Invalid)?;
+    let (old_bar, new_bar) = (old.bar_ticks(ppq), signature.bar_ticks(ppq));
+    let mut lengths = Vec::new();
+    // A pattern with a signature of its own keeps its bar, so its length.
+    for (&id, pattern) in project
+        .patterns
+        .iter_mut()
+        .filter(|(_, pattern)| pattern.time_signature.is_none())
+    {
+        let needed = bars_holding_notes(pattern, old_bar, new_bar);
+        if needed > pattern.length_bars {
+            lengths.push((id, pattern.length_bars));
+            pattern.length_bars = needed;
+        }
+    }
+    project.time_signature = signature;
+    let old_changes = mem::replace(&mut project.signature_changes, changes);
+    // The song's meter changed (the metronome, the count-in, the bar plugins are told): the
+    // plan is built again even in a project without a pattern.
+    let touched = Touched {
+        patterns: project.patterns.keys().copied().collect(),
+        playlist: true,
+        ..Touched::default()
+    };
+    Ok(Applied {
+        inverse: Edit::RestoreTimeSignature {
+            signature: old,
+            lengths,
+            changes: old_changes,
+        },
+        touched,
+    })
+}
+
+/// [`Edit::RestoreTimeSignature`]: the signature, the listed lengths and the changes put back,
+/// all or none.
+fn restore_time_signature(
+    project: &mut Project,
+    signature: TimeSignature,
+    lengths: Vec<(PatternId, u32)>,
+    changes: Vec<SignatureChange>,
+) -> Result<Applied, EditError> {
+    if !signature.is_valid() {
+        return Err(EditError::Invalid(ValidationError::InvalidTimeSignature(
+            signature,
+        )));
+    }
+    check_signature_changes(signature, &changes, project.ppq).map_err(EditError::Invalid)?;
+    for &(id, bars) in &lengths {
+        if bars == 0 {
+            return Err(EditError::NoBars);
+        }
+        if !project.patterns.contains_key(&id) {
+            return Err(EditError::UnknownPattern(id.0));
+        }
+    }
+    let new = mem::replace(&mut project.time_signature, signature);
+    let mut replaced = Vec::with_capacity(lengths.len());
+    for &(id, bars) in &lengths {
+        if let Some(pattern) = project.patterns.get_mut(&id) {
+            replaced.push((id, mem::replace(&mut pattern.length_bars, bars)));
+        }
+    }
+    replaced.reverse();
+    let new_changes = mem::replace(&mut project.signature_changes, changes);
+    // A changed signature changes every pattern's length in ticks; an unchanged one, only the
+    // patterns whose bars were given.
+    let patterns = if new == signature {
+        lengths.iter().map(|&(id, _)| id).collect()
+    } else {
+        project.patterns.keys().copied().collect()
+    };
+    // A changed signature or list changes the song's meter, which the plan carries.
+    let touched = Touched {
+        patterns,
+        playlist: new != signature || new_changes != project.signature_changes,
+        ..Touched::default()
+    };
+    Ok(Applied {
+        inverse: Edit::RestoreTimeSignature {
+            signature: new,
+            lengths: replaced,
+            changes: new_changes,
+        },
+        touched,
+    })
+}
+
+/// [`Edit::SetPatternTimeSignature`]: the pattern grown to the bars of the new signature that
+/// hold its notes, then given it.
+fn set_pattern_time_signature(
+    project: &mut Project,
+    id: PatternId,
+    signature: Option<TimeSignature>,
+) -> Result<Applied, EditError> {
+    let pattern = project
+        .patterns
+        .get(&id)
+        .ok_or(EditError::UnknownPattern(id.0))?;
+    if let Some(signature) = signature.filter(|signature| !signature.is_valid()) {
+        return Err(EditError::Invalid(
+            ValidationError::InvalidPatternSignature {
+                pattern: pattern.name.clone(),
+                signature,
+            },
+        ));
+    }
+    let inverse = Edit::RestorePatternTimeSignature {
+        pattern: id,
+        signature: pattern.time_signature,
+        bars: pattern.length_bars,
+    };
+    if pattern.time_signature == signature {
+        return Ok(Applied {
+            inverse,
+            touched: Touched::default(),
+        });
+    }
+    let ppq = project.ppq;
+    let old_bar = project.pattern_signature(id).bar_ticks(ppq);
+    let new_bar = signature.unwrap_or(project.time_signature).bar_ticks(ppq);
+    let pattern = pattern_mut(project, id)?;
+    pattern.length_bars = bars_holding_notes(pattern, old_bar, new_bar);
+    pattern.time_signature = signature;
+    Ok(Applied::pattern(inverse, id))
+}
+
+/// [`Edit::RestorePatternTimeSignature`]: the pattern's signature and bars put back.
+fn restore_pattern_time_signature(
+    project: &mut Project,
+    id: PatternId,
+    signature: Option<TimeSignature>,
+    bars: u32,
+) -> Result<Applied, EditError> {
+    if bars == 0 {
+        return Err(EditError::NoBars);
+    }
+    let pattern = pattern_mut(project, id)?;
+    if let Some(signature) = signature.filter(|signature| !signature.is_valid()) {
+        return Err(EditError::Invalid(
+            ValidationError::InvalidPatternSignature {
+                pattern: pattern.name.clone(),
+                signature,
+            },
+        ));
+    }
+    let inverse = Edit::RestorePatternTimeSignature {
+        pattern: id,
+        signature: mem::replace(&mut pattern.time_signature, signature),
+        bars: mem::replace(&mut pattern.length_bars, bars),
+    };
+    Ok(Applied::pattern(inverse, id))
+}
+
+/// [`Edit::SetSignatureChange`]: the change at the bar line at or before `at`, replacing one
+/// there, then all settled.
+fn set_signature_change(
+    project: &mut Project,
+    at: Ticks,
+    signature: TimeSignature,
+) -> Result<Applied, EditError> {
+    if !signature.is_valid() {
+        return Err(EditError::Invalid(
+            ValidationError::InvalidSignatureChange {
+                at: at.0,
+                reason: "1 to 24 beats over 4, 8 or 16",
+            },
+        ));
+    }
+    let at = project.meter_map().snap_down(at, MeterUnit::Bar);
+    if at <= Ticks(0) {
+        return Err(EditError::SignatureChangeAtStart);
+    }
+    let mut changes: Vec<SignatureChange> = project
+        .signature_changes
+        .iter()
+        .filter(|change| change.at != at)
+        .copied()
+        .collect();
+    changes.push(SignatureChange { at, signature });
+    settle_signature_changes(project, changes)
+}
+
+/// [`Edit::MoveSignatureChange`]: the change at `from` to the bar line at or before `to` in the
+/// song's meter without it (replacing one there), then all settled.
+fn move_signature_change(
+    project: &mut Project,
+    from: Ticks,
+    to: Ticks,
+) -> Result<Applied, EditError> {
+    let moved = project
+        .signature_changes
+        .iter()
+        .find(|change| change.at == from)
+        .copied()
+        .ok_or(EditError::NoSignatureChange(from.0))?;
+    let rest: Vec<SignatureChange> = project
+        .signature_changes
+        .iter()
+        .filter(|change| change.at != from)
+        .copied()
+        .collect();
+    let to =
+        MeterMap::new(project.time_signature, &rest, project.ppq).snap_down(to, MeterUnit::Bar);
+    if to <= Ticks(0) {
+        return Err(EditError::SignatureChangeAtStart);
+    }
+    let mut changes: Vec<SignatureChange> =
+        rest.into_iter().filter(|change| change.at != to).collect();
+    changes.push(SignatureChange {
+        at: to,
+        signature: moved.signature,
+    });
+    settle_signature_changes(project, changes)
+}
+
+/// The song's changes become `changes` settled onto their bar lines ([`time::settle_changes`]),
+/// if every one is then inside the song; the same list changes nothing.
+fn settle_signature_changes(
+    project: &mut Project,
+    changes: Vec<SignatureChange>,
+) -> Result<Applied, EditError> {
+    let settled = time::settle_changes(project.time_signature, changes, project.ppq);
+    restore_signature_changes(project, settled)
+}
+
+/// [`Edit::RestoreSignatureChanges`]: the list put back as it is, refused unless every change
+/// lies on its bar line.
+fn restore_signature_changes(
+    project: &mut Project,
+    changes: Vec<SignatureChange>,
+) -> Result<Applied, EditError> {
+    check_signature_changes(project.time_signature, &changes, project.ppq)
+        .map_err(EditError::Invalid)?;
+    if changes == project.signature_changes {
+        return Ok(Applied {
+            inverse: Edit::RestoreSignatureChanges { changes },
+            touched: Touched::default(),
+        });
+    }
+    let old = mem::replace(&mut project.signature_changes, changes);
+    Ok(Applied {
+        inverse: Edit::RestoreSignatureChanges { changes: old },
+        touched: Touched {
+            playlist: true,
+            ..Touched::default()
+        },
+    })
 }
 
 fn toggle_step(
@@ -1133,8 +1537,9 @@ fn toggle_step(
         return Err(EditError::UnknownChannel(channel.0));
     }
     let tick = time::step_to_ticks(step, project.ppq);
+    let per_bar = project.pattern_signature(pattern_id).steps_per_bar();
     let pattern = pattern_mut(project, pattern_id)?;
-    check_step(pattern, step)?;
+    check_step(pattern, step, per_bar)?;
     // Notes are sorted by (tick, channel, key), so this channel's notes on this tick are one
     // run, and a note added at the run's start keeps the order: the JSON stays canonical.
     let on_step = |note: &Note| (note.start, note.channel).cmp(&(tick, channel));

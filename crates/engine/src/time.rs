@@ -1,7 +1,9 @@
 //! Musical time: positions in integer ticks, tempo in integer milli-BPM, and the one function
 //! that turns a tick into a sample. Every time conversion in the engine lives here.
 
+use std::fmt;
 use std::ops::RangeInclusive;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,22 +35,349 @@ impl MilliBpm {
     }
 }
 
-/// Beats in one bar (every bar is 4/4).
-pub const BEATS_PER_BAR: u16 = 4;
+/// Steps in a quarter note: a step is a 16th in every time signature, so a quarter holds 4.
+const STEPS_PER_QUARTER: u16 = 4;
 
-/// Steps in one beat: a step is a 1/16 note.
-pub const STEPS_PER_BEAT: u16 = 4;
-
-/// The tick where step `step` starts: `step * ppq / 4`.
+/// The tick where step `step` starts: `step * ppq / 4`, a 16th note a step in every time
+/// signature.
 pub fn step_to_ticks(step: u32, ppq: u16) -> Ticks {
     // Multiplying before dividing keeps this exact whenever `ppq` is a multiple of 4, which
     // `Project::validate` requires. A u32 times a u16 cannot overflow an i64.
-    Ticks(i64::from(step) * i64::from(ppq) / i64::from(STEPS_PER_BEAT))
+    Ticks(i64::from(step) * i64::from(ppq) / i64::from(STEPS_PER_QUARTER))
 }
 
-/// The length of `bars` bars, in ticks.
-pub fn bars_to_ticks(bars: u32, ppq: u16) -> Ticks {
-    Ticks(i64::from(bars) * i64::from(BEATS_PER_BAR) * i64::from(ppq))
+/// Whether `ppq` is a resolution the project takes: above 0 and a multiple of 4, so a step (a
+/// 16th) and every beat a [`TimeSignature`] makes (a quarter, an eighth, a 16th) is a whole
+/// number of ticks.
+pub fn ppq_is_valid(ppq: u16) -> bool {
+    ppq > 0 && ppq.is_multiple_of(STEPS_PER_QUARTER)
+}
+
+/// A project's time signature: `beats` beats a bar, each a `unit` note (4 a quarter, 8 an
+/// eighth, 16 a sixteenth). The tempo stays quarter notes a minute in every signature and a step
+/// stays a 16th, so the signature sets only where the beats and the bars fall: the grids, the
+/// metronome, the count-in, a pattern's length and what the exports and plugins are told.
+///
+/// Why 1..=24 beats and no /2: the position readout shows a bar's step in two digits, and 24
+/// quarters are 96 steps, the most two digits hold; half-note beats and longer bars are not in
+/// any music the program is made for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TimeSignature {
+    beats: u8,
+    unit: u8,
+}
+
+/// The beats a bar takes, the numerator of a [`TimeSignature`].
+pub const SIGNATURE_BEATS: RangeInclusive<u8> = 1..=24;
+
+/// The notes a beat can be, the denominator of a [`TimeSignature`]: a quarter, an eighth or a
+/// sixteenth.
+pub const SIGNATURE_UNITS: [u8; 3] = [4, 8, 16];
+
+impl TimeSignature {
+    /// 4/4: four quarter notes a bar, what a project has unless it says otherwise.
+    pub const COMMON: Self = Self { beats: 4, unit: 4 };
+
+    /// `beats` over `unit`, or `None` outside [`SIGNATURE_BEATS`] and [`SIGNATURE_UNITS`].
+    pub fn new(beats: u8, unit: u8) -> Option<Self> {
+        let signature = Self { beats, unit };
+        signature.is_valid().then_some(signature)
+    }
+
+    /// Whether the beats and the unit are in their ranges. A signature read from a file may not
+    /// be: `Project::validate` refuses it.
+    pub fn is_valid(self) -> bool {
+        SIGNATURE_BEATS.contains(&self.beats) && SIGNATURE_UNITS.contains(&self.unit)
+    }
+
+    /// Beats a bar, the numerator.
+    pub fn beats(self) -> u8 {
+        self.beats
+    }
+
+    /// The note a beat is, the denominator: 4, 8 or 16.
+    pub fn unit(self) -> u8 {
+        self.unit
+    }
+
+    /// Whether this is 4/4, which a project file leaves out.
+    pub fn is_common(&self) -> bool {
+        *self == Self::COMMON
+    }
+
+    /// A beat in ticks: `ppq · 4 / unit` (96, 48 or 24 at 96 ppq); exact, since a valid ppq is
+    /// a multiple of 4.
+    pub fn beat_ticks(self, ppq: u16) -> Ticks {
+        // A unit of 0 (a signature `is_valid` refuses) counts as a quarter rather than divide
+        // by zero.
+        Ticks(i64::from(ppq) * 4 / i64::from(self.unit.max(1)))
+    }
+
+    /// A bar in ticks: `beats · beat_ticks`.
+    pub fn bar_ticks(self, ppq: u16) -> Ticks {
+        Ticks(i64::from(self.beats) * self.beat_ticks(ppq).0)
+    }
+
+    /// Steps (16ths) a beat: 4, 2 or 1.
+    pub fn steps_per_beat(self) -> u32 {
+        16 / u32::from(self.unit.max(1))
+    }
+
+    /// Steps (16ths) a bar: `beats · steps_per_beat`, 1 to 96.
+    pub fn steps_per_bar(self) -> u32 {
+        u32::from(self.beats) * self.steps_per_beat()
+    }
+
+    /// The length of `bars` bars, in ticks.
+    pub fn bars_to_ticks(self, bars: u32, ppq: u16) -> Ticks {
+        // A u32 times at most 24 · 4 · u16::MAX stays far inside an i64.
+        Ticks(i64::from(bars) * self.bar_ticks(ppq).0)
+    }
+}
+
+impl Default for TimeSignature {
+    fn default() -> Self {
+        Self::COMMON
+    }
+}
+
+impl fmt::Display for TimeSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.beats, self.unit)
+    }
+}
+
+/// A typed time signature that is none this build plays.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Type a time signature such as 3/4 or 6/8: 1 to 24 beats over 4, 8 or 16")]
+pub struct TimeSignatureError;
+
+impl FromStr for TimeSignature {
+    type Err = TimeSignatureError;
+
+    /// "3/4", "6/8": digits on each side of one slash, spaces allowed around the slash and the
+    /// whole; no sign, no point.
+    fn from_str(typed: &str) -> Result<Self, Self::Err> {
+        let (beats, unit) = typed.split_once('/').ok_or(TimeSignatureError)?;
+        let number = |side: &str| {
+            let side = side.trim();
+            if side.is_empty() || !side.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            side.parse::<u8>().ok()
+        };
+        let (beats, unit) = (number(beats), number(unit));
+        beats
+            .zip(unit)
+            .and_then(|(beats, unit)| Self::new(beats, unit))
+            .ok_or(TimeSignatureError)
+    }
+}
+
+/// A change of time signature along the song: from tick `at` on, bars of `signature`. Written
+/// `{"at":768,"beats":3,"unit":4}`. A valid project's changes are sorted, each after tick 0 and
+/// on a bar line of the meter before it ([`settle_changes`] puts them there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SignatureChange {
+    pub at: Ticks,
+    #[serde(flatten)]
+    pub signature: TimeSignature,
+}
+
+/// Where one meter of a [`MeterMap`] runs: from `start` on (to the next segment's start), bars
+/// of `signature`, the first of them bar number `first_bar` (counted from 0 across the song).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeterSegment {
+    pub start: Ticks,
+    pub first_bar: i64,
+    pub signature: TimeSignature,
+}
+
+/// The bar a tick is in: its number (from 0, counted on across every change), the tick it
+/// starts on and its meter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BarPos {
+    pub bar: i64,
+    pub start: Ticks,
+    pub signature: TimeSignature,
+}
+
+/// The grid lines a [`MeterMap`] snaps to: the bars' starts or the beats'.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeterUnit {
+    Bar,
+    Beat,
+}
+
+/// The song's meter: one signature from tick 0 and each change from its tick on, as bars
+/// numbered on across the changes. Everything that counts the song's bars and beats reads it:
+/// the metronome, the count-in, the readout, the ruler and the playlist's grid, the bar a plugin
+/// is told, the exports. A pattern played alone has a map of one segment, its own signature.
+/// Built on the UI thread (the plan carries one); every method is a read, exact integer math.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeterMap {
+    /// At least one; the first starts at tick 0; sorted, each start after the one before.
+    segments: Vec<MeterSegment>,
+    ppq: u16,
+}
+
+impl MeterMap {
+    /// The map of `first` from tick 0 and `changes` (sorted, each after the one before and
+    /// after 0, as a valid project has them). A change off its bar line (a file a build would
+    /// refuse) still makes a map: the bar it cuts short counts as a bar.
+    pub fn new(first: TimeSignature, changes: &[SignatureChange], ppq: u16) -> Self {
+        let mut segments = vec![MeterSegment {
+            start: Ticks(0),
+            first_bar: 0,
+            signature: first,
+        }];
+        for change in changes {
+            let Some(last) = segments.last().copied() else {
+                break;
+            };
+            if change.at <= last.start {
+                continue;
+            }
+            let bar = last.signature.bar_ticks(ppq).0.max(1);
+            // Both are at least 1, so this rounds up.
+            let bars = (change.at.0 - last.start.0).saturating_add(bar - 1) / bar;
+            segments.push(MeterSegment {
+                start: change.at,
+                first_bar: last.first_bar.saturating_add(bars),
+                signature: change.signature,
+            });
+        }
+        Self { segments, ppq }
+    }
+
+    /// One signature from tick 0 on: the meter of a pattern played alone.
+    pub fn single(signature: TimeSignature, ppq: u16) -> Self {
+        Self::new(signature, &[], ppq)
+    }
+
+    /// Ticks per quarter note.
+    pub fn ppq(&self) -> u16 {
+        self.ppq
+    }
+
+    /// Every segment, from tick 0 on.
+    pub fn segments(&self) -> &[MeterSegment] {
+        &self.segments
+    }
+
+    /// The segment `tick` is in: the last starting at or before it (the first for a tick
+    /// before 0).
+    pub fn segment_at(&self, tick: Ticks) -> &MeterSegment {
+        let after = self
+            .segments
+            .partition_point(|segment| segment.start <= tick);
+        &self.segments[after.saturating_sub(1)]
+    }
+
+    /// The meter `tick` is in.
+    pub fn signature_at(&self, tick: Ticks) -> TimeSignature {
+        self.segment_at(tick).signature
+    }
+
+    /// The bar `tick` is in: the last bar start at or before it.
+    pub fn bar_at(&self, tick: Ticks) -> BarPos {
+        let segment = self.segment_at(tick);
+        let bar = segment.signature.bar_ticks(self.ppq).0.max(1);
+        let count = (tick.0 - segment.start.0).div_euclid(bar);
+        BarPos {
+            bar: segment.first_bar.saturating_add(count),
+            start: Ticks(segment.start.0.saturating_add(count.saturating_mul(bar))),
+            signature: segment.signature,
+        }
+    }
+
+    /// Where bar `bar` (from 0) starts.
+    pub fn bar_start(&self, bar: i64) -> Ticks {
+        let after = self
+            .segments
+            .partition_point(|segment| segment.first_bar <= bar);
+        let segment = &self.segments[after.saturating_sub(1)];
+        let length = segment.signature.bar_ticks(self.ppq).0.max(1);
+        Ticks(
+            segment
+                .start
+                .0
+                .saturating_add((bar - segment.first_bar).saturating_mul(length)),
+        )
+    }
+
+    /// The bars from tick 0 that hold the song up to `end`: the number of the first bar starting
+    /// at or after it (`end` rounded up to a bar line, counted in bars).
+    pub fn bars_holding(&self, end: Ticks) -> i64 {
+        let bar = self.bar_at(end);
+        if bar.start == end {
+            bar.bar
+        } else {
+            bar.bar.saturating_add(1)
+        }
+    }
+
+    /// The `unit` line at or before `tick`: its bar's start, or its beat's.
+    pub fn snap_down(&self, tick: Ticks, unit: MeterUnit) -> Ticks {
+        let bar = self.bar_at(tick);
+        match unit {
+            MeterUnit::Bar => bar.start,
+            MeterUnit::Beat => {
+                let beat = bar.signature.beat_ticks(self.ppq).0.max(1);
+                Ticks(bar.start.0 + (tick.0 - bar.start.0).div_euclid(beat) * beat)
+            }
+        }
+    }
+
+    /// The `unit` line after the one at or before `tick`: the next bar's start, or the next
+    /// beat's (never past the next segment's start, where both begin again).
+    pub fn snap_next(&self, tick: Ticks, unit: MeterUnit) -> Ticks {
+        let bar = self.bar_at(tick);
+        let next_bar = self.bar_start(bar.bar.saturating_add(1));
+        match unit {
+            MeterUnit::Bar => next_bar,
+            MeterUnit::Beat => {
+                let beat = bar.signature.beat_ticks(self.ppq).0.max(1);
+                let down = self.snap_down(tick, MeterUnit::Beat);
+                Ticks(down.0.saturating_add(beat).min(next_bar.0))
+            }
+        }
+    }
+
+    /// The nearer of the `unit` lines either side of `tick`, half way going up: the one at or
+    /// before it unless `tick` is at least half way to the next.
+    pub fn snap_nearest(&self, tick: Ticks, unit: MeterUnit) -> Ticks {
+        let down = self.snap_down(tick, unit);
+        let up = self.snap_next(tick, unit);
+        if 2 * (tick.0 - down.0) >= up.0 - down.0 {
+            up
+        } else {
+            down
+        }
+    }
+}
+
+/// `changes` (in any order) each moved onto a bar line after the one before it, the rule every
+/// change edit ends with: in tick order, with P the settled change before (or tick 0) and `bar`
+/// its meter's, a change at `at` goes down to P + k·bar, k = floor((at − P) / bar), when k ≥ 1,
+/// else up to P + bar, the first bar line after P. A change already on its bar line stays; the
+/// order holds and every change lies after the one before it (of two on one tick, the later in
+/// the list goes up a bar).
+pub fn settle_changes(
+    first: TimeSignature,
+    mut changes: Vec<SignatureChange>,
+    ppq: u16,
+) -> Vec<SignatureChange> {
+    changes.sort_by_key(|change| change.at);
+    let (mut before, mut meter) = (0i64, first);
+    for change in &mut changes {
+        let bar = meter.bar_ticks(ppq).0.max(1);
+        let k = (change.at.0 - before).div_euclid(bar);
+        change.at = Ticks(before.saturating_add(k.max(1).saturating_mul(bar)));
+        before = change.at.0;
+        meter = change.signature;
+    }
+    changes
 }
 
 /// A pattern's swing when it has none: each 16th takes half of its 8th-note pair.
@@ -258,7 +587,12 @@ mod tests {
                 let got = tick_to_sample(step_to_ticks(step, PPQ), rate, bpm(tempo), PPQ);
                 assert_eq!(got, Some(want), "{rate} Hz, {tempo} BPM, step {step}");
             }
-            let got = tick_to_sample(bars_to_ticks(1, PPQ), rate, bpm(tempo), PPQ);
+            let got = tick_to_sample(
+                TimeSignature::COMMON.bars_to_ticks(1, PPQ),
+                rate,
+                bpm(tempo),
+                PPQ,
+            );
             assert_eq!(got, Some(bar), "{rate} Hz, {tempo} BPM, one bar");
         }
     }
@@ -357,8 +691,11 @@ mod tests {
         assert_eq!(step_to_ticks(1, PPQ), Ticks(24));
         assert_eq!(step_to_ticks(4, PPQ), Ticks(96), "four steps make one beat");
         // A 2-bar pattern holds 32 steps: step 32 is exactly where it ends.
-        assert_eq!(step_to_ticks(32, PPQ), bars_to_ticks(2, PPQ));
-        assert_eq!(bars_to_ticks(2, PPQ), Ticks(768));
+        assert_eq!(
+            step_to_ticks(32, PPQ),
+            TimeSignature::COMMON.bars_to_ticks(2, PPQ)
+        );
+        assert_eq!(TimeSignature::COMMON.bars_to_ticks(2, PPQ), Ticks(768));
     }
 
     // Known answers worked by hand (the swing design's table, checked with Python's integers):
@@ -472,7 +809,7 @@ mod tests {
     #[test]
     fn every_swung_note_stays_inside_its_pattern() {
         for ppq in [4, 8, 96, 960] {
-            let length = bars_to_ticks(1, ppq);
+            let length = TimeSignature::COMMON.bars_to_ticks(1, ppq);
             for swing in SWING_RANGE {
                 for start in 0..length.0 {
                     let tick = swung(Ticks(start), swing, ppq);

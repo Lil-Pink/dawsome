@@ -256,9 +256,9 @@ assert [r["note"] for r in LISTS["both"]["library"]["Dawsome"]] == ["VST3", "als
 
 # What a scan child prints for the test module (`--scan-child` of the app, `scan --child` of the
 # command line): a progress line per audio class, then the result line, the records by id with
-# the parameter counts of the grown oracle (Sine 5, Gain 3, View 5; gen_p27_expected.py's
-# SCANNED).
-SCAN_PARAMS = {SINE: 5, GAIN: 3, FAIL: 1, TICK: 2, LATE: 8, VIEW: 5}
+# the parameter counts of the grown oracle (Sine 5, Gain 3, View 5, Latency 10 with the time
+# signature's two readouts; gen_p27_expected.py's SCANNED).
+SCAN_PARAMS = {SINE: 5, GAIN: 3, FAIL: 1, TICK: 2, LATE: 10, VIEW: 5}
 SCAN_RECORDS = sorted([dict(p, params=SCAN_PARAMS[p["id"]]) for p in VST3_SCANNED], key=lambda p: p["id"])
 SCAN_CHILD = "".join("dawsome-scan-progress %d\n" % n for n in range(1, len(VST3_SCANNED) + 1)) + \
     "dawsome-scan-result " + J({"plugins": SCAN_RECORDS}) + "\n"

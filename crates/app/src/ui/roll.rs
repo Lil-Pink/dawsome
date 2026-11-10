@@ -63,18 +63,22 @@ pub enum NoteEdit {
     Humanize,
 }
 
-/// The grid the Quantize dialog moves notes to: the roll's snap, or a note value.
+/// The grid the Quantize dialog moves notes to: the roll's snap, a bar of the time signature,
+/// or a note value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantizeGrid {
     Snap,
-    /// A 1/n note: 1/16 is a step, 1/1 a bar (four beats).
+    /// A bar of the project's time signature.
+    Bar,
+    /// A 1/n note: 1/16 is a step, 1/4 a quarter, 1/1 a whole note (a bar of 4/4 alone).
     Note(u8),
 }
 
 impl QuantizeGrid {
     /// Every choice, as the dialog lists them.
-    pub const ALL: [QuantizeGrid; 7] = [
+    pub const ALL: [QuantizeGrid; 8] = [
         QuantizeGrid::Snap,
+        QuantizeGrid::Bar,
         QuantizeGrid::Note(32),
         QuantizeGrid::Note(16),
         QuantizeGrid::Note(8),
@@ -83,10 +87,11 @@ impl QuantizeGrid {
         QuantizeGrid::Note(1),
     ];
 
-    /// Its grid in ticks: the snap unit `snap`, or 4·ppq/n.
-    pub fn ticks(self, snap: Ticks, ppq: u16) -> Ticks {
+    /// Its grid in ticks: the snap unit `snap`, the bar `bar`, or 4·ppq/n.
+    pub fn ticks(self, snap: Ticks, bar: Ticks, ppq: u16) -> Ticks {
         match self {
             QuantizeGrid::Snap => snap,
+            QuantizeGrid::Bar => Ticks(bar.0.max(1)),
             QuantizeGrid::Note(n) => Ticks((4 * i64::from(ppq) / i64::from(n.max(1))).max(1)),
         }
     }
@@ -96,7 +101,7 @@ impl fmt::Display for QuantizeGrid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             QuantizeGrid::Snap => f.write_str("Snap"),
-            QuantizeGrid::Note(1) => f.write_str("1 bar"),
+            QuantizeGrid::Bar => f.write_str("Bar"),
             QuantizeGrid::Note(n) => write!(f, "1/{n}"),
         }
     }
@@ -141,10 +146,11 @@ impl Default for QuantizeForm {
 }
 
 impl QuantizeForm {
-    /// The quantize it chooses, on a roll whose snap unit is `snap` in a project of `ppq`.
-    fn how(self, snap: Ticks, ppq: u16) -> Quantize {
+    /// The quantize it chooses, on a roll whose snap unit is `snap` in a project whose bar is
+    /// `bar` at `ppq`.
+    fn how(self, snap: Ticks, bar: Ticks, ppq: u16) -> Quantize {
         Quantize {
-            grid: self.grid.ticks(snap, ppq),
+            grid: self.grid.ticks(snap, bar, ppq),
             strength: self.strength,
             swing_tenths: self.swing_tenths,
             ends: self.ends,
@@ -330,6 +336,7 @@ impl Roll {
                 scroll: Ticks(0),
                 zoom: ZOOM.default,
                 step,
+                signature: dawsome_engine::time::TimeSignature::COMMON,
                 rows: crate::ui::piano_layout::Rows::ALL,
             },
             snap: Snap::default(),
@@ -507,10 +514,12 @@ impl Roll {
     }
 
     /// Brings the state in line with a changed document: selected notes that are gone are
-    /// dropped, and the view stays inside the (possibly shorter) pattern.
+    /// dropped, the grid takes the project's time signature, and the view stays inside the
+    /// (possibly shorter) pattern.
     pub fn refresh(&mut self, target: Option<&Target>) {
         match target {
             Some(target) => {
+                self.view.signature = target.signature;
                 self.selection.retain(|&key| {
                     target
                         .note(key)
@@ -882,7 +891,8 @@ impl Roll {
             .filter(|&note| target.note(key_of(note)) == Some(note))
             .cloned()
             .collect();
-        let how = form.how(self.snap.unit(&self.view), target.ppq);
+        let bar = target.signature.bar_ticks(target.ppq);
+        let how = form.how(self.snap.unit(&self.view), bar, target.ppq);
         Some((note_ops::quantized(target, &notes, how), notes.len()))
     }
 
@@ -1333,6 +1343,7 @@ mod tests {
             pattern: PatternId(1),
             length_bars: 1,
             ppq: 96,
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             channel: ChannelId(1),
             notes,
         }
@@ -1711,7 +1722,11 @@ mod tests {
             roll.view.zoom = zoom;
             assert_eq!(roll.draw_length(), Ticks(unit), "{zoom} px a step");
             assert_eq!(
-                crate::ui::toolbar::format_length(roll.draw_length(), 96),
+                crate::ui::toolbar::format_length(
+                    roll.draw_length(),
+                    dawsome_engine::time::TimeSignature::COMMON,
+                    96
+                ),
                 len
             );
             roll.update(press((100.0, 66.0)), Some(&target(&notes)), NONE);

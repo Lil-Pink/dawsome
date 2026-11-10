@@ -31,8 +31,8 @@ use serde_json::Value;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageEvent, ConfigureNotifyEvent, ConnectionExt as _, EventMask,
-    FocusInEvent, MapState, NotifyDetail, NotifyMode, CONFIGURE_NOTIFY_EVENT, FOCUS_IN_EVENT,
-    FOCUS_OUT_EVENT,
+    FocusInEvent, KeyButMask, KeyPressEvent, MapState, NotifyDetail, NotifyMode,
+    CONFIGURE_NOTIFY_EVENT, FOCUS_IN_EVENT, FOCUS_OUT_EVENT, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
 };
 use x11rb::protocol::ErrorKind;
 use x11rb::rust_connection::RustConnection;
@@ -416,6 +416,39 @@ impl X {
     }
 
     /// `window` told it gained (`focused`) or lost the focus, X11's focus `detail` saying how.
+    /// `window` sent the press (`pressed`) or the release of `keycode` at `time`, as the X server
+    /// reports a key to a window that hears keys.
+    fn key(&self, window: u32, keycode: u8, pressed: bool, time: u32) {
+        let event = KeyPressEvent {
+            response_type: if pressed {
+                KEY_PRESS_EVENT
+            } else {
+                KEY_RELEASE_EVENT
+            },
+            detail: keycode,
+            sequence: 0,
+            time,
+            root: self.conn.setup().roots[0].root,
+            event: window,
+            child: 0,
+            root_x: 0,
+            root_y: 0,
+            event_x: 10,
+            event_y: 10,
+            state: KeyButMask::from(0u16),
+            same_screen: true,
+        };
+        let mask = if pressed {
+            EventMask::KEY_PRESS
+        } else {
+            EventMask::KEY_RELEASE
+        };
+        self.conn
+            .send_event(false, window, mask, event)
+            .expect("sends");
+        self.conn.flush().expect("flushes");
+    }
+
     fn focus(&self, window: u32, focused: bool, detail: u8) {
         let event = FocusInEvent {
             response_type: if focused {
@@ -817,6 +850,55 @@ fn w7_our_focus_reaches_the_editor_as_xembed_messages() {
             "{never} was called: {whole_log:?}"
         );
     }
+    opened.finish();
+}
+
+// A key that comes to our window (the editor's own takes none: an XEmbed client's keys reach
+// its embedder) is offered to the editor first, as the SDK has a host hand keys on: the press
+// to onKeyDown, the release to onKeyUp. The View's editor uses none (kResultFalse), so both go on
+// to the app as keys, A's scancode 30 (keycode 38, evdev's KEY_A plus 8), pressed then released.
+#[test]
+#[ignore = "opens a window: scripts/ui-check.sh runs it in a graphical session"]
+fn w11_a_key_to_our_window_is_offered_to_the_editor_first() {
+    let _turn = turn();
+    let (opened, _) = Opened::new(false);
+    settle(&opened.host, 100);
+    opened.oracle.clear();
+    opened.x.key(opened.ours, 38, true, 1_000);
+    opened.x.key(opened.ours, 38, false, 1_100);
+    let key = |pressed| NoticeKind::Key {
+        scancode: 30,
+        pressed,
+        repeat: false,
+    };
+    let mut notices = until(&opened.host, "both keys", || {
+        opened
+            .oracle
+            .log()
+            .iter()
+            .filter(|line| line.starts_with("onKey"))
+            .count()
+            >= 2
+    });
+    notices.extend(settle(&opened.host, 100));
+    let log: Vec<String> = opened
+        .oracle
+        .log()
+        .into_iter()
+        .filter(|line| line.starts_with("onKey"))
+        .collect();
+    assert_eq!(
+        log,
+        ["onKeyDown", "onKeyUp"],
+        "offered, the press then the release"
+    );
+    let keys: Vec<&NoticeKind> = notices
+        .iter()
+        .map(|notice| &notice.kind)
+        .filter(|kind| matches!(kind, NoticeKind::Key { .. }))
+        .collect();
+    assert_eq!(keys, [&key(true), &key(false)], "and passed on, unused");
+    assert!(notices.iter().all(|notice| notice.owner == VIEW));
     opened.finish();
 }
 

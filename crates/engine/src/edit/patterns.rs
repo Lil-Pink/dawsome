@@ -35,6 +35,7 @@ pub(super) fn add(
     let pattern = Pattern {
         name,
         length_bars: bars,
+        time_signature: None,
         copied_from,
         swing_tenths: time::STRAIGHT_SWING,
         kind: PatternKind::Pattern,
@@ -57,11 +58,13 @@ pub(super) fn unadd(project: &mut Project, id: PatternId) -> Result<Applied, Edi
     // pattern deleted above it, giving its ID back would make the deleted one's ID the next
     // but one, and the add that undid this would not restore the counter.
     let added_last = id.0.checked_add(1) == Some(project.pattern_counter().0);
-    // Why straight and a pattern too: `AddPattern` adds a straight pattern, so the inverse of
-    // taking out a swung one or a take would lose its swing or its kind.
+    // Why straight, a pattern and without a signature of its own too: `AddPattern` adds a
+    // straight pattern that follows the project's signature, so the inverse of taking out a
+    // swung one, a take or one in its own meter would lose its swing, its kind or its signature.
     let as_added = pattern.notes.is_empty()
         && pattern.swing_tenths == time::STRAIGHT_SWING
-        && pattern.kind == PatternKind::Pattern;
+        && pattern.kind == PatternKind::Pattern
+        && pattern.time_signature.is_none();
     if !added_last || !as_added || is_played(project, id) {
         return Err(EditError::PatternNotRemovable(id.0));
     }

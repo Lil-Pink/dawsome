@@ -50,10 +50,11 @@ fn place(
     }
 }
 
-/// Whole bars that hold a span of `span` ticks: at least 1. A take in song mode is as long as
-/// the bars that hold what it played, and while it plays, the bar the playhead is in.
-pub fn bars_holding(span: Ticks, ppq: u16) -> u32 {
-    let bar = time::bars_to_ticks(1, ppq).0.max(1);
+/// Whole bars of `bar` ticks (the pattern's bar, [`Project::pattern_signature`]) that hold a span of
+/// `span` ticks: at least 1. A take in song mode is as long as the bars that hold what it
+/// played, and while it plays, the bar the playhead is in.
+pub fn bars_holding(span: Ticks, bar: Ticks) -> u32 {
+    let bar = bar.0.max(1);
     // Rounded up; `span` is not negative here and a bar is at least 1.
     let span = span.0.max(0);
     let bars = (span / bar + i64::from(span % bar != 0)).max(1);
@@ -129,12 +130,13 @@ pub fn song_take(
     let pattern = project
         .next_pattern_id()
         .ok_or(EditError::PatternIdsExhausted)?;
-    let bar = time::bars_to_ticks(1, project.ppq);
+    // A new take follows the project's signature: its bars are the project's.
+    let bar = project.time_signature.bar_ticks(project.ppq);
     let first_bar_end = Ticks(start.0.saturating_add(bar.0));
     let (track, add_track) = place(project, track, start, first_bar_end);
     let added_track = add_track.is_some();
     let clip = project.playlist.next_clip_id;
-    let length = time::bars_to_ticks(bars, project.ppq);
+    let length = project.time_signature.bars_to_ticks(bars, project.ppq);
     let mut edits = vec![
         Edit::AddPattern {
             id: pattern,
@@ -293,13 +295,13 @@ fn one_per_slot(notes: Vec<Note>) -> Vec<Note> {
 }
 
 /// The bars that hold every note's end (a step hit its start), at least `least`.
-fn bars_for(notes: &[Note], least: u32, ppq: u16) -> u32 {
+fn bars_for(notes: &[Note], least: u32, bar: Ticks) -> u32 {
     let reach = notes
         .iter()
         .map(|note| note.start.0.saturating_add(note.length.0))
         .max()
         .unwrap_or(0);
-    bars_holding(Ticks(reach), ppq).max(least)
+    bars_holding(Ticks(reach), bar).max(least)
 }
 
 /// Captured `notes` laid into `pattern` (their ticks from its start), each replacing a note of
@@ -311,7 +313,8 @@ pub fn capture_into(project: &Project, pattern: PatternId, notes: Vec<Note>) -> 
     if notes.is_empty() {
         return None;
     }
-    let bars = bars_for(&notes, held.length_bars, project.ppq);
+    let bar = project.pattern_signature(pattern).bar_ticks(project.ppq);
+    let bars = bars_for(&notes, held.length_bars, bar);
     let remove = held
         .notes
         .iter()
@@ -347,7 +350,8 @@ pub fn capture_song(
     if notes.is_empty() {
         return Ok(None);
     }
-    let bars = bars_for(&notes, 1, project.ppq);
+    // The new pattern follows the project's signature.
+    let bars = bars_for(&notes, 1, project.time_signature.bar_ticks(project.ppq));
     let take = song_take(project, name, start, track, bars)?;
     let Edit::Transaction(mut edits) = take.edit else {
         unreachable!("a song take is a transaction");

@@ -9,16 +9,16 @@ use std::thread;
 use std::time::Duration;
 
 use dawsome_engine::realtime::Player;
-use dawsome_engine::time;
 
 use crate::write::{Encoding, Sink, WriteError};
 
-/// Frames from the start of play to where bar `bars` (counting from 0) starts, if one file of
+/// Frames from the start of play to where bar `bars` (counting from 0, bars of the meter the
+/// player's plan plays: the song's map, or a pattern's own signature) starts, if one file of
 /// `encoding` holds that many. In song mode these are played bars: a wrap moves the playhead,
 /// not the length of the file.
-pub fn frames_for_bars(player: &Player, bars: u32, ppq: u16, encoding: Encoding) -> Option<u64> {
+pub fn frames_for_bars(player: &Player, bars: u32, encoding: Encoding) -> Option<u64> {
     player
-        .tick_to_sample(time::bars_to_ticks(bars, ppq))
+        .tick_to_sample(player.meter().bar_start(i64::from(bars)))
         .filter(|&frames| frames <= encoding.max_frames())
 }
 

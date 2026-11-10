@@ -28,6 +28,10 @@ iced = { version = "0.14", default-features = false, features = [
     "wgpu", "tiny-skia", "crisp", "web-colors", "x11", "wayland",
     "canvas", "tokio", "advanced", "image-without-codecs",
 ] }
+# The physical key of a scancode a plugin window passes on, as the main window's keys are placed:
+# winit's `PhysicalKeyExtScancode::from_scancode` (re-exported here) and the toolkit's own
+# conversion of it. The crate iced itself is built on, so the tree is the same.
+iced_winit = { version = "0.14", default-features = false }
 # Screenshots are saved as PNG, the pixel probe reads them back, and the Help window's pictures
 # are read with it.
 png = "0.18"
@@ -70,6 +74,15 @@ cpal = { version = "=0.18", features = ["pipewire", "jack", "realtime-dbus"] }
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 cpal = "=0.18"
 
+# The main window's focus guard on Windows (src/focus_guard.rs): its window procedure wrapped,
+# the focus and Alt's state read. 0.61 is the line the toolkit and host-common already pull in.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 # Reads `--play-to` WAV files back in the integration tests.
 hound.workspace = true
@@ -81,7 +94,9 @@ sha2 = "0.10"
 # The desktop drop's check (tests/desktop_drop.rs, ignored: it needs an X display) is the other
 # X11 client: it finds the app's window and drops a file on it over XDND, as a file manager does.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-x11rb = "0.13"
+# `xtest`: the tests that type as a keyboard does, on a nested X server of their own only
+# (tests/support/nested_x.rs).
+x11rb = { version = "0.13", features = ["xtest"] }
 
 # dawsome-app.exe's icon and version details (build.rs, dawsome-app.rc). Listed for every build
 # machine: cargo matches a build dependency's platform against the machine building, and a

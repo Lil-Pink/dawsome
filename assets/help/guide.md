@@ -75,7 +75,8 @@ your mind mid-drag? Drag back to resize, or press **Esc**.
 ## The toolbar
 The toolbar runs across the top of the main window. On its left are the controls for playing:
 **Play**, **Stop**, **Record** and the metronome. **Space** plays and stops too, so you rarely
-need the mouse for it. Next come the tempo, the pattern box, **Pat** and **Song**, and **Loop**.
+need the mouse for it. Next come the tempo, the time signature, the pattern box, **Pat** and
+**Song**, and **Loop**.
 Further along, the position counts bar : step : tick as the song plays, and a switch lets your
 computer keyboard play notes. The panel buttons, the **File** and **Edit** menus and **Help** sit
 at the right end.
@@ -83,7 +84,19 @@ at the right end.
 The tempo is your song's speed, in beats per minute (BPM), such as 120.0. Drag it left or
 right, scroll over it, or click it and type a number. **Stop** takes you back to where the song plays from.
 
-![The left of the toolbar: Play, Stop, Record, the metronome, the tempo and the pattern box](toolbar.png)
+The time signature right of the tempo, **4/4** to start, says how many beats make a bar and which
+note is a beat: 4/4 is four quarter notes, 3/4 three (a waltz), 6/8 six eighth notes. Drag it up
+or down or scroll over it for more or fewer beats, hold **Shift** to change the beat's note, or
+click it and type one, such as 3/4. The steps, the grids, the metronome and the count-in follow
+it. The tempo still counts quarter notes, so in 6/8 the metronome clicks twice as fast.
+
+A pattern can count in a signature of its own: right-click its name, choose **Time signature…**
+and pick one (or **Project's** to follow the toolbar's again); the rack's header then shows it
+beside **Bars**. A song can change its signature partway too: right-click the numbers along the
+top of the Playlist at the bar where it should change and pick one. A small flag there shows it;
+drag the flag along the bars to move the change, right-click it to change or remove it.
+
+![The left of the toolbar: Play, Stop, Record, the metronome, the tempo, the time signature and the pattern box](toolbar.png)
 
 ## The hint bar
 The line at the bottom of the window tells you about whatever is under the mouse: its name, its
@@ -99,8 +112,8 @@ plugin, at your screen's own scale.
 
 ## Colours
 For another look, open Settings (**6**), click the **Theme** tab at the top and choose a theme:
-**Graphite** (the one you start with), **Slate** (darker), **Gilt** (gold on deep green),
-**Garnet** (rose gold on deep plum) or **Fjord** (ice blue on deep navy). The two small squares
+**Slate** (the one you start with), **Graphite** (lighter), **Gilt** (gold leaf on deep
+chocolate), **Garnet** (rose gold on deep plum) or **Fjord** (ice blue on deep navy). The two small squares
 on each show its colours. Every window changes at once. Your clips, notes, lights and meters
 keep their colours in every theme.
 Under them, **Colours** has one colour wheel and a menu over it. On **Accent** it sets the
@@ -128,8 +141,8 @@ and open hi-hats, three toms, a rim, a cowbell and a crash. A new project starts
 already in the rack: Kick 909, Snare, Hat closed and Clap.
 
 **Instrument sets** are instruments with a recording for each part of the keyboard, so they sound
-right wherever you play them: a piano, basses, guitars, an organ, pads, strings, a marimba, drum
-kits and more, grouped by kind.
+right wherever you play them: pianos and electric pianos, basses, guitars, an organ, pads,
+strings, a marimba, drum kits and more, grouped by kind.
 
 **Plugins** starts with **Dawsome Synth**, Dawsome's own synthesizer (see **Dawsome Synth**),
 then lists the CLAP and VST® 3 plugins on your computer, such as Surge XT, a synthesizer that
@@ -337,9 +350,10 @@ name to rename the pattern or delete it.
 
 ![The pattern box: the pattern you are working on, and its arrows](pattern-box.png)
 
-In the Channel rack, each row has 16 steps to a bar. Click a step to switch it on, and that
-channel plays on that step. **Bars −** and **+** at the top of the rack make the pattern shorter
-or longer, from 1 to 32 bars. For melodies, the piano roll is easier (see **The piano roll**).
+In the Channel rack, each row has 16 steps to a bar in 4/4 (a step is always a sixteenth note, so
+a bar of 3/4 or 6/8 has 12). Click a step to switch it on, and that channel plays on that step.
+**Bars −** and **+** at the top of the rack make the pattern shorter or longer, from 1 bar up to
+512 steps (32 bars of 4/4). For melodies, the piano roll is easier (see **The piano roll**).
 The **Swing** knob left of them plays every second step a little late, for a shuffle: drag it
 right (66.7% is a triplet feel), and double-click it to play straight again. The steps still look
 straight on the grid; you hear the swing.
@@ -839,8 +853,11 @@ use.
 ## Words to know
 - **BPM** (beats per minute): the tempo, how fast the song goes. At 120 BPM there are two beats
   a second.
-- **Bar**: a group of four beats. Patterns and the Playlist are counted in bars.
-- **Step**: a sixteenth of a bar, one square of the Channel rack's grid.
+- **Bar**: a group of beats, four unless the time signature says otherwise. Patterns and the
+  Playlist are counted in bars.
+- **Time signature**: two numbers such as 4/4 or 6/8: the beats in a bar over the note each beat
+  is (4 a quarter note, 8 an eighth).
+- **Step**: a sixteenth note, one square of the Channel rack's grid; 16 make a bar of 4/4.
 - **Chord**: three or more notes played together.
 - **Scale**: a set of notes that sound good together, counted from the note it starts on.
 - **Motif**: a short musical idea that a melody is built from.

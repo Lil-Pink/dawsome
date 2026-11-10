@@ -39,9 +39,13 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                    [--open-adder] [--hints on|off] [--open-instrument channel:<id>]
                    [--library-preview <set.sfz>] [--show export|edit-menu|help[:<n>]]
                    [--settings-page general|keys|theme] [--callouts on|off] [--scroll end]
+                   [--time-signature <beats>/<note>]
+                   [--pattern-time-signature <id>:<beats>/<note>]
+                   [--signature-change <tick>:<beats>/<note>]...
                    [--drag-over channel:<id>] [--channel-menu channel:<id>] [--select-clip clip:<id>]
                    [--curve-menu automation:<id>] [--slot-menu insert:<id>,slot:<n>]
                    [--library-menu device:<port>] [--midi-monitor <port>] [--drop-monitor]
+                   [--key-monitor]
                    [--open-sample-editor channel:<id>|clip:<id>
                    [--sample-editor-select <from>-<to>]]
        dawsome-app --list-instruments
@@ -130,7 +134,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --song         start in song mode: play the playlist instead of the first pattern
   --device-rate  open the audio device at this rate, resampling when it is not the project's
   --play-to      play the project into a WAV file instead of the audio device, with no window
-  --bars N       bars to play, counted as played: loop and song-end wraps count (default 1)
+  --bars N       bars to play, counted as played: loop and song-end wraps count (default 1);
+                 bars of the project's time signature
   --bits         the WAV sample format of --play-to (default 32f); an .mp3 output is 320 kbps
   --plugin-path  look for CLAP and VST3 plugins here instead of the standard folders
                  (~/.clap and /usr/lib/clap, ~/.vst3 and /usr/lib/vst3 among others;
@@ -188,6 +193,14 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                  headless check)
   --settings-page  the Settings window's page at start: general, keys or theme (a headless
                  check)
+  --time-signature  the opened project's time signature, such as 3/4 or 6/8 (1 to 24 beats
+                 over 4, 8 or 16), set as the run starts, as the toolbar sets it (a headless
+                 check)
+  --pattern-time-signature  pattern <id>'s own time signature, set as the run starts, as its
+                 name's menu sets it (a headless check)
+  --signature-change  a change of the song's time signature from the bar line at or before
+                 <tick>, set as the run starts, as the ruler's menu sets it; repeatable (a
+                 headless check)
   --callouts     on: show the first-run notes not yet put away (a scripted run hides them);
                  off: hide them
   --scroll       end: the views that scroll along time start scrolled to their bar's end (a
@@ -212,6 +225,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --drop-monitor  print where each file dropped on the window lands: the pointer the window
                  system gives, the cursor the window saw, the track and tick (a check of the
                  real drop path; writes no settings)
+  --key-monitor  print each key a plugin window passes on and each note the player starts and
+                 ends (a check of the typing keyboard in plugin windows; writes no settings)
 The user's cache folder is $DAWSOME_CACHE_HOME, else $XDG_CACHE_HOME or ~/.cache on Linux and
 %LOCALAPPDATA% on Windows.";
 
@@ -395,6 +410,68 @@ pub fn take_settings_page(
     )
 }
 
+/// Takes `--time-signature <beats>/<note>` out of `raw`: the time signature a scripted run sets
+/// on the project it opens (for screenshots and checks of a meter other than 4/4).
+pub fn take_time_signature(
+    raw: &mut Vec<String>,
+) -> Result<Option<dawsome_engine::time::TimeSignature>, ArgsError> {
+    take_choice(
+        raw,
+        "--time-signature",
+        "a time signature such as 3/4 or 6/8 (1 to 24 beats over 4, 8 or 16)",
+        |value| value.parse().ok(),
+    )
+}
+
+/// Takes `--pattern-time-signature <id>:<beats>/<note>` out of `raw`: a pattern's own time
+/// signature a scripted run sets (for screenshots of a pattern in its own meter).
+pub fn take_pattern_time_signature(
+    raw: &mut Vec<String>,
+) -> Result<Option<(u32, dawsome_engine::time::TimeSignature)>, ArgsError> {
+    take_choice(
+        raw,
+        "--pattern-time-signature",
+        "a pattern and a time signature such as 2:3/4",
+        |value| {
+            let (id, signature) = value.split_once(':')?;
+            Some((
+                id.parse().ok().filter(|&id| id > 0)?,
+                signature.parse().ok()?,
+            ))
+        },
+    )
+}
+
+/// Takes every `--signature-change <tick>:<beats>/<note>` out of `raw`, in order: the changes
+/// of the song's time signature a scripted run sets (for screenshots of the ruler's flags).
+pub fn take_signature_changes(
+    raw: &mut Vec<String>,
+) -> Result<Vec<(i64, dawsome_engine::time::TimeSignature)>, ArgsError> {
+    let mut changes = Vec::new();
+    while let Some(at) = raw.iter().position(|word| word == "--signature-change") {
+        let flag = raw.remove(at);
+        if at >= raw.len() {
+            return Err(ArgsError::MissingValue(flag));
+        }
+        let value = raw.remove(at);
+        let parsed = value.split_once(':').and_then(|(tick, signature)| {
+            Some((
+                tick.parse().ok().filter(|&tick| tick > 0)?,
+                signature.parse().ok()?,
+            ))
+        });
+        let Some(change) = parsed else {
+            return Err(bad_value(
+                &flag,
+                "a tick after 0 and a time signature such as 768:3/4",
+                value,
+            ));
+        };
+        changes.push(change);
+    }
+    Ok(changes)
+}
+
 /// Takes `--callouts on|off` out of `raw`: whether the first-run notes show, which a scripted
 /// run leaves hidden otherwise.
 pub fn take_callouts(raw: &mut Vec<String>) -> Result<Option<bool>, ArgsError> {
@@ -513,6 +590,14 @@ pub enum EditorOn {
 pub fn take_drop_monitor(raw: &mut Vec<String>) -> bool {
     let before = raw.len();
     raw.retain(|word| word != "--drop-monitor");
+    raw.len() != before
+}
+
+/// Takes `--key-monitor` out of `raw`: whether the run prints each key a plugin window passes
+/// on and the player's live notes (a check of the real key path; such a run writes no settings).
+pub fn take_key_monitor(raw: &mut Vec<String>) -> bool {
+    let before = raw.len();
+    raw.retain(|word| word != "--key-monitor");
     raw.len() != before
 }
 
@@ -2370,6 +2455,64 @@ mod tests {
             take_callouts(&mut words("--callouts yes")),
             Err(bad_value("--callouts", "on or off", "yes".to_owned()))
         );
+    }
+
+    // --time-signature names the signature a scripted run sets, once, as the toolbar reads it.
+    #[test]
+    fn the_time_signature_flag_names_a_signature() {
+        use dawsome_engine::time::TimeSignature;
+        let mut line = words("--load a.json --time-signature 6/8");
+        assert_eq!(take_time_signature(&mut line), Ok(TimeSignature::new(6, 8)));
+        assert_eq!(line, words("--load a.json"));
+        assert_eq!(take_time_signature(&mut words("--load a.json")), Ok(None));
+        let expected = "a time signature such as 3/4 or 6/8 (1 to 24 beats over 4, 8 or 16)";
+        assert_eq!(
+            take_time_signature(&mut words("--time-signature 3/2")),
+            Err(bad_value("--time-signature", expected, "3/2".to_owned()))
+        );
+        assert_eq!(
+            take_time_signature(&mut words("--time-signature 3/4 --time-signature 6/8")),
+            Err(ArgsError::Repeated("--time-signature".to_owned()))
+        );
+    }
+
+    // --pattern-time-signature names a pattern and its own signature, once;
+    // --signature-change a tick after 0 and a signature, as often as wanted, in order.
+    #[test]
+    fn the_meter_flags_name_a_pattern_signature_and_changes() {
+        use dawsome_engine::time::TimeSignature;
+        let mut line = words(
+            "--load a.json --signature-change 768:3/4 --pattern-time-signature 2:7/8 \
+             --signature-change 1344:6/8",
+        );
+        assert_eq!(
+            take_pattern_time_signature(&mut line),
+            Ok(Some((2, TimeSignature::new(7, 8).expect("7/8"))))
+        );
+        assert_eq!(
+            take_signature_changes(&mut line),
+            Ok(vec![
+                (768, TimeSignature::new(3, 4).expect("3/4")),
+                (1344, TimeSignature::new(6, 8).expect("6/8"))
+            ])
+        );
+        assert_eq!(line, words("--load a.json"));
+        assert_eq!(
+            take_signature_changes(&mut words("--load a.json")),
+            Ok(vec![])
+        );
+        for bad in ["0:3/4", "768", "768:3/2", "x:3/4"] {
+            assert_eq!(
+                take_signature_changes(&mut words(&format!("--signature-change {bad}"))),
+                Err(bad_value(
+                    "--signature-change",
+                    "a tick after 0 and a time signature such as 768:3/4",
+                    bad.to_owned()
+                )),
+                "{bad}"
+            );
+        }
+        assert!(take_pattern_time_signature(&mut words("--pattern-time-signature 0:3/4")).is_err());
     }
 
     // --settings-page names the settings panel's page a scripted run opens on, once.

@@ -15,7 +15,7 @@ use super::{App, Message, PlayMode};
 use crate::session::SessionError;
 use crate::ui::panels::Panel;
 use crate::ui::rack::RackHeader;
-use crate::ui::step_grid::MAX_STEP_BARS;
+use crate::ui::step_grid::max_step_bars;
 
 /// The text box a pattern's name is edited in.
 pub const RENAME_INPUT: &str = "pattern-rename";
@@ -329,14 +329,16 @@ impl App {
     }
 
     /// The selected pattern and its length `by` bars longer, when that keeps it from 1 to
-    /// [`MAX_STEP_BARS`] bars: a pattern the piano roll grew past that can still get shorter,
-    /// never longer.
+    /// [`max_step_bars`] bars of the time signature: a pattern the piano roll grew past that
+    /// can still get shorter, never longer.
     fn nudged_bars(&self, by: i32) -> Option<(PatternId, u32)> {
         let pattern = self.pattern?;
         let shown = self.session.project().patterns.get(&pattern)?;
         let bars = i64::from(shown.length_bars) + i64::from(by);
         let allowed = if by > 0 {
-            bars <= i64::from(MAX_STEP_BARS)
+            bars <= i64::from(max_step_bars(
+                self.session.project().pattern_signature(pattern),
+            ))
         } else {
             bars >= 1
         };
@@ -396,6 +398,10 @@ impl App {
             shorter: self.nudged_bars(-1).is_some(),
             longer: self.nudged_bars(1).is_some(),
             swing: self.selected_swing().map(|(_, swing)| swing),
+            signature: self
+                .pattern
+                .and_then(|id| self.session.project().patterns.get(&id))
+                .and_then(|shown| shown.time_signature),
         }
     }
 }

@@ -16,7 +16,7 @@ use thiserror::Error;
 use crate::edit::Edit;
 use crate::project::{ChannelId, Note, PatternId, Project, MAX_SONG_BARS};
 use crate::song;
-use crate::time::{self, MilliBpm, Ticks};
+use crate::time::{self, MilliBpm, Ticks, TimeSignature};
 
 /// The division an exported file is written at.
 pub const EXPORT_PPQ: u16 = 96;
@@ -199,7 +199,10 @@ pub fn import_into(
     if removed.is_empty() && added.is_empty() {
         return Err(SmfError::NothingToImport);
     }
-    let bars = bars_holding(&added, project.ppq)?;
+    let bars = bars_holding(
+        &added,
+        project.pattern_signature(pattern).bar_ticks(project.ppq),
+    )?;
     let replace = Edit::ReplaceNotes {
         pattern,
         remove: removed,
@@ -310,8 +313,8 @@ fn tempo_of(per_quarter: u32) -> Option<MilliBpm> {
 /// The bars a pattern needs to hold every note, a zero-length one counting a tick: at least 1,
 /// and at most [`MAX_SONG_BARS`]. Why the cap: one variable-length delta can place a note
 /// 67 million bars out, and a pattern that long is more than the window can draw.
-fn bars_holding(notes: &[Note], ppq: u16) -> Result<u32, SmfError> {
-    let bar = u64::try_from(time::bars_to_ticks(1, ppq).0.max(1)).unwrap_or(1);
+fn bars_holding(notes: &[Note], bar: Ticks) -> Result<u32, SmfError> {
+    let bar = u64::try_from(bar.0.max(1)).unwrap_or(1);
     let last_end = notes
         .iter()
         .map(|note| note.start.0.saturating_add(note.length.0.max(1)))
@@ -327,7 +330,8 @@ fn bars_holding(notes: &[Note], ppq: u16) -> Result<u32, SmfError> {
 
 /// The notes `channel` plays in `pattern` (those inside the pattern, which are heard) as a
 /// format 0 file at [`EXPORT_PPQ`], on MIDI channel 1, each where the pattern's swing plays it
-/// ([`time::swung_note`]). Tick 0 carries the tempo, 4/4 and the pattern's name; a step (length
+/// ([`time::swung_note`]). Tick 0 carries the tempo, the pattern's time signature and the
+/// pattern's name; a step (length
 /// 0) is written one step long, or as long as swing leaves it; velocity is round-half-up(v ·
 /// 128) from 1 to 127; at one tick note-offs come first, then by key; the track ends on its last
 /// event.
@@ -349,7 +353,7 @@ pub fn export(
             .and_then(|ticks| time::rescale_ticks(ticks, project.ppq, EXPORT_PPQ))
             .ok_or(SmfError::TooLong)
     };
-    let end = time::bars_to_ticks(shown.length_bars, project.ppq);
+    let end = project.pattern_ticks(pattern);
     let step = time::step_to_ticks(1, project.ppq);
     let mut timed: Vec<Timed> = Vec::new();
     for note in shown
@@ -373,7 +377,7 @@ pub fn export(
     timed.sort_by_key(|&(tick, kind, key, _)| (tick, kind, key));
     let mut track = vec![
         meta(MetaMessage::Tempo(per_quarter(project.tempo)?)),
-        meta(MetaMessage::TimeSignature(4, 2, 24, 8)),
+        meta(time_signature(project.pattern_signature(pattern))),
         meta(MetaMessage::TrackName(shown.name.as_bytes())),
     ];
     push_timed(&mut track, timed, None)?;
@@ -384,6 +388,19 @@ pub fn export(
     let mut bytes = Vec::new();
     smf.write_std(&mut bytes)?;
     Ok(bytes)
+}
+
+/// The time signature meta event of `signature` (FF 58 04 nn dd cc bb): the beats, the unit as
+/// a power of two, the MIDI clocks a metronome click lasts (24 a quarter note, so 96 / unit: the
+/// metronome clicks the beat's note, as the player's does) and 8 32nd notes a quarter.
+fn time_signature(signature: TimeSignature) -> MetaMessage<'static> {
+    let unit = signature.unit();
+    MetaMessage::TimeSignature(
+        signature.beats(),
+        unit.trailing_zeros() as u8,
+        96 / unit.max(1),
+        8,
+    )
 }
 
 /// A note-on and its note-off, timed and ordered as both exports write them: (tick, 0 for a
@@ -432,16 +449,9 @@ fn push_timed(
     timed: Vec<Timed>,
     end: Option<u64>,
 ) -> Result<(), SmfError> {
-    let delta_to = |tick: u64, last: u64| {
-        u32::try_from(tick - last)
-            .ok()
-            .filter(|&delta| delta <= u28::max_value().as_int())
-            .map(u28::new)
-            .ok_or(SmfError::TooLong)
-    };
     let mut last = 0u64;
     for (tick, _, _, message) in timed {
-        let delta = delta_to(tick, last)?;
+        let delta = delta_between(last, tick)?;
         last = tick;
         track.push(TrackEvent {
             delta,
@@ -452,10 +462,19 @@ fn push_timed(
         });
     }
     track.push(TrackEvent {
-        delta: delta_to(end.unwrap_or(last).max(last), last)?,
+        delta: delta_between(last, end.unwrap_or(last).max(last))?,
         kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
     });
     Ok(())
+}
+
+/// The delta time from file tick `last` to `tick` (at or after it), if a delta holds it.
+fn delta_between(last: u64, tick: u64) -> Result<u28, SmfError> {
+    u32::try_from(tick - last)
+        .ok()
+        .filter(|&delta| delta <= u28::max_value().as_int())
+        .map(u28::new)
+        .ok_or(SmfError::TooLong)
 }
 
 /// A note's end on the file's ticks, at least one tick after its start. Why: at a project PPQ
@@ -504,8 +523,8 @@ struct SongNote {
     key: u8,
 }
 
-/// The playlist as a format 1 file at [`EXPORT_PPQ`]: track 0 the conductor (the tempo and 4/4
-/// on tick 0), then one track per channel in rack order, named after it, every note on MIDI
+/// The playlist as a format 1 file at [`EXPORT_PPQ`]: track 0 the conductor (the tempo and the
+/// time signature on tick 0, then each change of signature on its tick), then one track per channel in rack order, named after it, every note on MIDI
 /// channel 1. Each pattern clip that plays is unrolled as playback plays it ([`song`]): a clip
 /// longer than its pattern repeats it, a note plays where the pattern's swing plays it and
 /// sounds its length (a step hit one step, less when swing moved it), cut at its clip's end. An
@@ -513,7 +532,7 @@ struct SongNote {
 /// order: a second note on the same tick is left out (the first stays), and a note still
 /// sounding when the same key starts again ends there, since a MIDI file cannot tell two such
 /// notes apart. Velocity and the order on one tick are as [`export`] writes them; every
-/// track ends on the song's last note-off.
+/// track ends on the song's last note-off (the conductor on its last change, when later).
 pub fn export_song(project: &Project) -> Result<SongFile, SmfError> {
     let to_file = |ticks: Ticks| {
         u64::try_from(ticks.0)
@@ -582,9 +601,23 @@ pub fn export_song(project: &Project) -> Result<SongFile, SmfError> {
     }
     let mut conductor = vec![
         meta(MetaMessage::Tempo(per_quarter(project.tempo)?)),
-        meta(MetaMessage::TimeSignature(4, 2, 24, 8)),
+        meta(time_signature(project.time_signature)),
     ];
-    push_timed(&mut conductor, Vec::new(), Some(end))?;
+    // Each change of signature where it falls; the track ends on the song's last note-off, or
+    // on the last change when that is later.
+    let mut last = 0u64;
+    for change in &project.signature_changes {
+        let at = to_file(change.at)?;
+        conductor.push(TrackEvent {
+            delta: delta_between(last, at)?,
+            kind: TrackEventKind::Meta(time_signature(change.signature)),
+        });
+        last = at;
+    }
+    conductor.push(TrackEvent {
+        delta: delta_between(last, end.max(last))?,
+        kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+    });
     let mut tracks = vec![conductor];
     for (id, channel) in &project.channels {
         let mut track = vec![meta(MetaMessage::TrackName(channel.name.as_bytes()))];

@@ -542,10 +542,10 @@ pub fn render_session(
         eprintln!("dawsome-app: warning: {notice}");
     }
     let too_long = PlayToError::TooLong { bars: render.bars };
-    let song_frames = dawsome_media::frames_for_bars(&player, render.bars, ppq, render.encoding)
-        .ok_or(too_long)?;
+    let song_frames =
+        dawsome_media::frames_for_bars(&player, render.bars, render.encoding).ok_or(too_long)?;
     // The recording, when there is one: its file and the tap it drains, and the bar of
-    // count-in the render plays first (s(384) at the tempo).
+    // count-in the render plays first (s(bar) at the tempo: s(384) in 4/4).
     let mut taping = match options.recording {
         Some(recording) => Some(Taping::start(&mut session, recording, sample_rate)?),
         None => None,
@@ -555,7 +555,7 @@ pub fn render_session(
         .is_some_and(|recording| recording.count_in)
         || options.notes.is_some_and(|notes| notes.count_in);
     let count_in = match counts_in {
-        true => dawsome_media::frames_for_bars(&player, 1, ppq, render.encoding)
+        true => dawsome_media::frames_for_bars(&player, 1, render.encoding)
             .ok_or(PlayToError::TooLong { bars: 1 })?,
         false => 0,
     };

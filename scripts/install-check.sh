@@ -99,8 +99,8 @@ for source, root in (("kit", os.path.join(kit, "sets")), ("electronic", electron
 with open(listed, encoding="utf-8") as f:
     got = [tuple(line.split("\t")) for line in f.read().splitlines()]
 problems = []
-if counts != {"kit": 15, "electronic": 7}:
-    problems.append("the sets shipped are %r, not 15 of the kit and 7 electronic" % counts)
+if counts != {"kit": 19, "electronic": 7}:
+    problems.append("the sets shipped are %r, not 19 of the kit and 7 electronic" % counts)
 problems += ["not listed: %s" % "\t".join(line) for line in want if line not in got]
 problems += ["listed, not shipped: %s" % "\t".join(line) for line in got if line not in want]
 if problems:

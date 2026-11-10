@@ -14,8 +14,8 @@
     "black": "1E2127"
    },
    "gilt": {
-    "white": "23382C",
-    "black": "1D2F25"
+    "white": "382A24",
+    "black": "30221D"
    },
    "garnet": {
     "white": "3B222E",
@@ -40,7 +40,7 @@
   "channels_least": {
    "graphite": 3.2027,
    "slate": 3.8703,
-   "gilt": 3.368,
+   "gilt": 3.6964,
    "garnet": 3.8758,
    "fjord": 3.3645
   },
@@ -363,11 +363,11 @@
  "slider_fill": {
   "probe": {
    "graphite": "316B86",
-   "gilt": "2C6C82"
+   "gilt": "33677E"
   },
   "own": {
    "slate": "8F5F25",
-   "gilt": "8F7936",
+   "gilt": "97724E",
    "garnet": "956C62",
    "fjord": "56899C"
   }

@@ -8,7 +8,7 @@ use std::fmt;
 
 use dawsome_engine::edit::{Edit, STEP_VELOCITY};
 use dawsome_engine::project::{ChannelId, Note, PatternId, Project, MAX_KEY};
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::{Ticks, TimeSignature};
 
 use crate::ui::piano_layout::{drawn_length, View};
 
@@ -97,6 +97,8 @@ pub struct Target<'a> {
     pub pattern: PatternId,
     pub length_bars: u32,
     pub ppq: u16,
+    /// The pattern's time signature (its own, else the project's): the bars its length counts.
+    pub signature: TimeSignature,
     pub channel: ChannelId,
     /// Every note of the pattern, all channels, in the pattern's order.
     pub notes: &'a [Note],
@@ -116,6 +118,7 @@ impl<'a> Target<'a> {
             pattern,
             length_bars: shown.length_bars,
             ppq: project.ppq,
+            signature: project.pattern_signature(pattern),
             channel,
             notes: &shown.notes,
         })
@@ -152,7 +155,7 @@ impl<'a> Target<'a> {
 
     /// The pattern's length in ticks.
     pub fn end(&self) -> Ticks {
-        time::bars_to_ticks(self.length_bars, self.ppq)
+        self.signature.bars_to_ticks(self.length_bars, self.ppq)
     }
 }
 
@@ -202,7 +205,7 @@ impl Change {
         if self.is_empty() {
             return None;
         }
-        let bar = time::bars_to_ticks(1, target.ppq).0.max(1);
+        let bar = target.signature.bar_ticks(target.ppq).0.max(1);
         let needed = self
             .add
             .iter()
@@ -366,6 +369,7 @@ mod tests {
             pattern: PatternId(1),
             length_bars: 1,
             ppq: 96,
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             channel: ChannelId(1),
             notes,
         }
@@ -377,6 +381,7 @@ mod tests {
             scroll: Ticks(0),
             zoom: ZOOM.default,
             step: Ticks(24),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
             rows: crate::ui::piano_layout::Rows::ALL,
         }
     }

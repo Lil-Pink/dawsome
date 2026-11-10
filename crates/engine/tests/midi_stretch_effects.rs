@@ -751,6 +751,11 @@ fn context(rate: u32) -> ProcessContext<'static> {
         sample_rate: rate,
         tempo: MilliBpm(120_000),
         ppq: 96,
+        bar: dawsome_engine::time::BarPos {
+            bar: 0,
+            start: dawsome_engine::time::Ticks(0),
+            signature: dawsome_engine::time::TimeSignature::COMMON,
+        },
         transport: TransportInfo {
             playing: true,
             song_tick: Ticks(0),

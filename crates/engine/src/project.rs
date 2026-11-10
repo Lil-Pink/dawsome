@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::time::{self, MilliBpm, Ticks};
+use crate::time::{self, MeterMap, MilliBpm, SignatureChange, Ticks, TimeSignature};
 
 pub(crate) mod automation;
 mod edits;
@@ -107,6 +107,17 @@ pub const EDITS_FORMAT_VERSION: u32 = 8;
 /// channel's sound, and lose it on save.
 pub const SYNTH_FORMAT_VERSION: u32 = 9;
 
+/// The `format_version` this build writes for a project whose time signature is not 4/4
+/// ([`Project::time_signature`]), that changes its signature along the song
+/// ([`Project::signature_changes`]) or that has a pattern with a signature of its own
+/// ([`Pattern::time_signature`]); it reads as version 9 does, with the fields. A project of one
+/// 4/4 writes none of them and keeps its version, so its bytes do not change; this version wins
+/// over every other. Why its own version and not a field a build reads past: a build before it would
+/// play a 3/4 song as 4/4 (the grid, the metronome, the count-in, a pattern's length and the
+/// exports all wrong) and save it so; by the version it refuses the file, saying which versions
+/// it reads.
+pub const METER_FORMAT_VERSION: u32 = 10;
+
 /// The most tracks a playlist holds: the range of the project-file playlist item's track index.
 pub const MAX_TRACKS: usize = 500;
 
@@ -120,9 +131,45 @@ pub const MAX_PATTERNS: usize = 999;
 /// The longest song, in bars: no clip and no loop point reaches past its end.
 pub const MAX_SONG_BARS: u32 = 100_000;
 
-/// The tick where the longest song ends, [`MAX_SONG_BARS`] bars.
+/// The tick where the longest song ends, [`MAX_SONG_BARS`] bars of 4/4. Why 4/4 in every
+/// signature: the cap is a length in ticks, so a change of signature never makes a clip that
+/// was inside it lie past it.
 pub fn max_song_tick(ppq: u16) -> Ticks {
-    time::bars_to_ticks(MAX_SONG_BARS, ppq)
+    TimeSignature::COMMON.bars_to_ticks(MAX_SONG_BARS, ppq)
+}
+
+/// Checks the song's changes of time signature: each a signature this build plays, after tick 0
+/// and before [`max_song_tick`], after the change before it and on a bar line of the meter
+/// before it (the settled form [`time::settle_changes`] gives).
+pub fn check_signature_changes(
+    first: TimeSignature,
+    changes: &[SignatureChange],
+    ppq: u16,
+) -> Result<(), ValidationError> {
+    let (mut before, mut meter) = (Ticks(0), first);
+    for change in changes {
+        let refused = |reason| ValidationError::InvalidSignatureChange {
+            at: change.at.0,
+            reason,
+        };
+        if !change.signature.is_valid() {
+            return Err(refused("1 to 24 beats over 4, 8 or 16"));
+        }
+        if change.at <= before {
+            return Err(refused(
+                "each change lies after tick 0 and after the change before it",
+            ));
+        }
+        if change.at >= max_song_tick(ppq) {
+            return Err(refused("it lies past the longest song"));
+        }
+        let bar = meter.bar_ticks(ppq).0.max(1);
+        if (change.at.0 - before.0) % bar != 0 {
+            return Err(refused("it lies off a bar line of the meter before it"));
+        }
+        (before, meter) = (change.at, change.signature);
+    }
+    Ok(())
 }
 
 /// The key a note plays when the file does not give one: middle C.
@@ -174,8 +221,18 @@ pub struct Project {
     pub sample_rate: u32,
     #[serde(rename = "tempo_mbpm")]
     pub tempo: MilliBpm,
-    /// Ticks per beat.
+    /// Ticks per quarter note.
     pub ppq: u16,
+    /// Beats a bar and the note a beat is; 4/4, the default, is not written (and the file keeps
+    /// its version), any other makes the file version [`METER_FORMAT_VERSION`].
+    #[serde(default, skip_serializing_if = "TimeSignature::is_common")]
+    pub time_signature: TimeSignature,
+    /// The song's changes of signature after tick 0, sorted, each on a bar line of the meter
+    /// before it ([`time::settle_changes`]); with `time_signature` the song's meter map
+    /// ([`Project::meter_map`]). Not written when there are none; any makes the file version
+    /// [`METER_FORMAT_VERSION`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signature_changes: Vec<SignatureChange>,
     /// The ID the next new channel gets: above every ID ever given out, so none is reused.
     pub next_channel_id: ChannelId,
     /// Channels by ID. ID order is rack order.
@@ -689,6 +746,12 @@ pub enum ProcessorOwner {
 pub struct Pattern {
     pub name: String,
     pub length_bars: u32,
+    /// The pattern's own time signature, or `None` to follow the project's
+    /// ([`Project::pattern_signature`]): its bars, its step grid and its roll's beats, wherever
+    /// its clips lie (the song's bars stay the song's). Written only when it has one, which
+    /// makes the file version [`METER_FORMAT_VERSION`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_signature: Option<TimeSignature>,
     /// The pattern this one was copied from when a clip was given its own copy (unlinked), so
     /// the clip can be linked back to it; it may since have been deleted. Below the pattern's
     /// own ID, since a copy is made after its original, and pattern IDs are never given out
@@ -1051,7 +1114,7 @@ pub enum LoadError {
     #[error("not a valid project file: {0}")]
     Json(#[from] serde_json::Error),
     #[error(
-        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8 and 9)"
+        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8, 9 and 10)"
     )]
     UnsupportedVersion(u32),
     #[error("tempo_bpm {0} is not a positive tempo")]
@@ -1118,6 +1181,15 @@ pub enum ValidationError {
     TempoOutOfRange(u32),
     #[error("ppq {0} must be a positive multiple of 4, so that a step (ppq/4 ticks) is a whole number of ticks")]
     InvalidPpq(u16),
+    #[error("time_signature {0} is not one this build plays: 1 to 24 beats over 4, 8 or 16")]
+    InvalidTimeSignature(TimeSignature),
+    #[error("pattern \"{pattern}\"'s time_signature {signature} is not one this build plays: 1 to 24 beats over 4, 8 or 16")]
+    InvalidPatternSignature {
+        pattern: String,
+        signature: TimeSignature,
+    },
+    #[error("the time signature change at tick {at} is not one this build plays: {reason}")]
+    InvalidSignatureChange { at: i64, reason: &'static str },
     #[error(
         "channel id {id} is not below next_channel_id {next}, so a new channel could reuse it"
     )]
@@ -1315,6 +1387,8 @@ impl Project {
             sample_rate,
             tempo,
             ppq,
+            time_signature: TimeSignature::COMMON,
+            signature_changes: Vec::new(),
             next_channel_id: ChannelId(1),
             channels: BTreeMap::new(),
             next_pattern_id: None,
@@ -1324,6 +1398,33 @@ impl Project {
             automation: Automations::default(),
             midi_links: MidiLinks::default(),
         }
+    }
+
+    /// The time signature pattern `id` counts its bars in: its own, else the project's (the
+    /// project's for a pattern it does not have). The one place a pattern's bar is decided:
+    /// every bar or beat inside a pattern (its length, its step grid, its roll, its growth, its
+    /// MIDI file) goes through it.
+    pub fn pattern_signature(&self, id: PatternId) -> TimeSignature {
+        self.patterns
+            .get(&id)
+            .and_then(|pattern| pattern.time_signature)
+            .unwrap_or(self.time_signature)
+    }
+
+    /// Pattern `id`'s length in ticks: its bars of [`Project::pattern_signature`] (0 for a
+    /// pattern the project does not have).
+    pub fn pattern_ticks(&self, id: PatternId) -> Ticks {
+        self.patterns.get(&id).map_or(Ticks(0), |pattern| {
+            self.pattern_signature(id)
+                .bars_to_ticks(pattern.length_bars, self.ppq)
+        })
+    }
+
+    /// The song's meter: the project's signature from tick 0, then each change. What every
+    /// song bar and beat is counted by (the ruler, the readout in song mode, the metronome, the
+    /// exports' bars).
+    pub fn meter_map(&self) -> MeterMap {
+        MeterMap::new(self.time_signature, &self.signature_changes, self.ppq)
     }
 
     /// The ID a new pattern takes: above every ID given out so far, so the list keeps the
@@ -1370,19 +1471,21 @@ impl Project {
         let mut project = match format_version {
             1 => serde_json::from_str::<v1::ProjectFile>(text)?.into_project()?,
             // Version 4 added the instrument channel, 5 the sound settings, 6 the input channel,
-            // 7 its MIDI out, 8 a sound's edits and 9 the synth channel, and nothing else, so
-            // they read with the same shape; a version 2 file is a version 4 file without an
-            // instrument channel, a version 4 file a version 5 file without sound settings, a
-            // version 5 file a version 6 file without an input channel, a version 6 file a
-            // version 7 file without a MIDI out, a version 7 file a version 8 file without edits,
-            // and a version 8 file a version 9 file without a synth channel.
+            // 7 its MIDI out, 8 a sound's edits, 9 the synth channel and 10 a time signature
+            // other than 4/4, and nothing else, so they read with the same shape; a version 2
+            // file is a version 4 file without an instrument channel, a version 4 file a version
+            // 5 file without sound settings, a version 5 file a version 6 file without an input
+            // channel, a version 6 file a version 7 file without a MIDI out, a version 7 file a
+            // version 8 file without edits, a version 8 file a version 9 file without a synth
+            // channel, and a version 9 file a version 10 file in 4/4.
             FORMAT_VERSION
             | INSTRUMENT_FORMAT_VERSION
             | SOUND_FORMAT_VERSION
             | INPUT_FORMAT_VERSION
             | MIDI_OUT_FORMAT_VERSION
             | EDITS_FORMAT_VERSION
-            | SYNTH_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
+            | SYNTH_FORMAT_VERSION
+            | METER_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
             other => return Err(LoadError::UnsupportedVersion(other)),
         };
         project.mixer.adopt_former_native_ids();
@@ -1434,7 +1537,7 @@ impl Project {
     /// The canonical JSON text of this project, in the current format (version 2; 4 when it has
     /// an instrument channel, 5 when a channel holds sound settings, 6 when it has an input
     /// channel, 7 when one of those has a MIDI out, 8 when a sound has edits, 9 when it has a
-    /// synth channel): compact, fields in a fixed order, channels and patterns by
+    /// synth channel, 10 when its time signature is not 4/4): compact, fields in a fixed order, channels and patterns by
     /// ID, notes by (tick, channel, key). Equal projects give identical bytes, so an undo can be
     /// checked byte for byte.
     ///
@@ -1471,7 +1574,15 @@ impl Project {
             .channels
             .values()
             .any(|channel| channel.kind == ChannelKind::Synth);
-        let format_version = if synths {
+        let meter = !self.time_signature.is_common()
+            || !self.signature_changes.is_empty()
+            || self
+                .patterns
+                .values()
+                .any(|pattern| pattern.time_signature.is_some());
+        let format_version = if meter {
+            METER_FORMAT_VERSION
+        } else if synths {
             SYNTH_FORMAT_VERSION
         } else if edits {
             EDITS_FORMAT_VERSION
@@ -1500,9 +1611,13 @@ impl Project {
         if !TEMPO_RANGE.contains(&self.tempo.0) {
             return Err(ValidationError::TempoOutOfRange(self.tempo.0));
         }
-        if self.ppq == 0 || !self.ppq.is_multiple_of(time::STEPS_PER_BEAT) {
+        if !time::ppq_is_valid(self.ppq) {
             return Err(ValidationError::InvalidPpq(self.ppq));
         }
+        if !self.time_signature.is_valid() {
+            return Err(ValidationError::InvalidTimeSignature(self.time_signature));
+        }
+        check_signature_changes(self.time_signature, &self.signature_changes, self.ppq)?;
         if let (Some(next), Some(&highest)) =
             (self.next_pattern_id, self.patterns.keys().next_back())
         {
@@ -1799,6 +1914,15 @@ impl Project {
                 swing_tenths: pattern.swing_tenths,
             });
         }
+        if let Some(signature) = pattern
+            .time_signature
+            .filter(|signature| !signature.is_valid())
+        {
+            return Err(ValidationError::InvalidPatternSignature {
+                pattern: name(),
+                signature,
+            });
+        }
         for note in &pattern.notes {
             if !self.channels.contains_key(&note.channel) {
                 return Err(ValidationError::UnknownChannel {
@@ -1810,7 +1934,11 @@ impl Project {
                 return Err(ValidationError::NoteOutsidePattern {
                     pattern: name(),
                     start: note.start.0,
-                    length: time::bars_to_ticks(pattern.length_bars, self.ppq).0,
+                    length: pattern
+                        .time_signature
+                        .unwrap_or(self.time_signature)
+                        .bars_to_ticks(pattern.length_bars, self.ppq)
+                        .0,
                 });
             }
             if note.length < Ticks(0) {
@@ -1989,6 +2117,8 @@ mod v1 {
                 sample_rate: self.sample_rate,
                 tempo,
                 ppq,
+                time_signature: crate::time::TimeSignature::COMMON,
+                signature_changes: Vec::new(),
                 next_channel_id: ChannelId(next_channel_id),
                 channels,
                 next_pattern_id: None,
@@ -2020,7 +2150,8 @@ mod v1 {
             if self.length_bars == 0 {
                 return Err(ValidationError::EmptyPattern { pattern: self.name });
             }
-            let length = time::bars_to_ticks(self.length_bars, ppq);
+            // Version 1 had no time signature: its bars are 4/4.
+            let length = crate::time::TimeSignature::COMMON.bars_to_ticks(self.length_bars, ppq);
             let mut notes = Vec::new();
             for row in &self.steps {
                 if !usize::try_from(row.channel).is_ok_and(|index| index < channel_count) {
@@ -2053,6 +2184,7 @@ mod v1 {
             Ok(Pattern {
                 name: self.name,
                 length_bars: self.length_bars,
+                time_signature: None,
                 copied_from: None,
                 swing_tenths: time::STRAIGHT_SWING,
                 kind: PatternKind::Pattern,

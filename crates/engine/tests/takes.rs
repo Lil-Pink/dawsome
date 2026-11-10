@@ -210,8 +210,9 @@ fn a_song_take_with_no_free_track_adds_one_and_the_armed_track_wins() {
     );
 }
 
-// By hand: whole bars of 384 ticks holding a span, at least one; "<channel> take N" for the
-// first N no pattern is named.
+// By hand: whole bars of 384 ticks (4/4) holding a span, at least one, and of 288 ticks (3/4):
+// 288 is one bar, 289 two, 865 = 3·288 + 1 four; "<channel> take N" for the first N no
+// pattern is named.
 #[test]
 fn bars_holding_a_span_and_take_names() {
     for (span, bars) in [
@@ -223,7 +224,14 @@ fn bars_holding_a_span_and_take_names() {
         (2113, 6),
         (2304, 6),
     ] {
-        assert_eq!(takes::bars_holding(Ticks(span), 96), bars, "{span}");
+        assert_eq!(takes::bars_holding(Ticks(span), Ticks(384)), bars, "{span}");
+    }
+    for (span, bars) in [(0, 1), (288, 1), (289, 2), (865, 4)] {
+        assert_eq!(
+            takes::bars_holding(Ticks(span), Ticks(288)),
+            bars,
+            "3/4: {span}"
+        );
     }
     let mut project = fixture("p17_song.json");
     assert_eq!(takes::take_name(&project, "Kick"), "Kick take 1");

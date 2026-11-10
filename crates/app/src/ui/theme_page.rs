@@ -105,14 +105,15 @@ const KEY_PAD: f32 = 8.0;
 pub const SET_SWATCH: Size = Size::new(2.0 * SET_SQUARE + 2.0, SET_SQUARE + 2.0);
 const SET_SQUARE: f32 = 8.0;
 const SET_SWATCH_GAP: f32 = 4.0;
-/// Each theme's key in [`ThemeId::ALL`]'s order: its swatch and its name with [`KEY_PAD`]
-/// either side, rounded up to an even width (Graphite: 8 + 18 + 4 + 48.5 + 8 = 86.5, so 88), a
+/// Each theme's key in [`ThemeId::ALL`]'s order (Slate, Graphite, Gilt, Garnet, Fjord): its
+/// swatch and its name with [`KEY_PAD`] either side, rounded up to an even width (Graphite: 8 +
+/// 18 + 4 + 48.5 + 8 = 86.5, so 88), a
 /// gap between them as between the header's tabs. Why a width each and not one for all: five
 /// keys as wide as Graphite's would need 5 × 88 + 4 × 4 = 456 px, more than the Settings
 /// window's least width (420); these end at 388, inside the row's text box (x 392), so the five
 /// stand in one row. A sixth set: a width here, and a second row once the row's test says it no
 /// longer fits.
-pub const THEME_KEY_WIDTHS: [f32; ThemeId::ALL.len()] = [88.0, 68.0, 58.0, 78.0, 68.0];
+pub const THEME_KEY_WIDTHS: [f32; ThemeId::ALL.len()] = [68.0, 88.0, 58.0, 78.0, 68.0];
 pub const THEME_KEY_GAP: f32 = 4.0;
 /// The colour's row: the swatch at the left margin, as tall as a stepper's button; the gap after
 /// it and after the wheel; the hex box ("#F29A2E" with room either side) and the own-colour key
@@ -509,14 +510,15 @@ mod tests {
     // keys' row under it (52..76: 24 px rows; 22 before), each key the row's whole
     // 24 px (52..76; they were 18 tall, 55..73, under WCAG 2.2's spacing
     // exception), from the left
-    // margin, 12, each 4 px after the one before at its own width (88, 68, 58, 78, 68):
-    // Graphite 12..100, Slate 104..172, Gilt 176..234, Garnet 238..316, Fjord 320..388, one row
+    // margin, 12, each 4 px after the one before at its own width (68, 88, 58, 78, 68):
+    // Slate 12..80, Graphite 84..172, Gilt 176..234, Garnet 238..316, Fjord 320..388 (Graphite
+    // and Slate swapped places, Graphite first before), one row
     // ending inside the row's text box (12 + 14 + 8 + 360 = 394, the 14 px box's) and so the
     // Settings window's least width (420); each key's swatch 8 px in, centred in its 24 px
-    // ((24 − 10) / 2 = 7: Graphite's 20..38 by 59..69, where it was in the 18 px key, 3 + 4)
-    // and its name 4 px after the swatch
-    // (Graphite's from 42). A press on each key is its theme, at its top and foot rows too (52,
-    // 75); one between two keys, right of Fjord or on the title none.
+    // ((24 − 10) / 2 = 7: Slate's 20..38 by 59..69, Graphite's 92..110, where it was in the 18
+    // px key, 3 + 4) and its name 4 px after the swatch
+    // (Slate's from 42, Graphite's from 114). A press on each key is its theme, at its top and
+    // foot rows too (52, 75); one between two keys, right of Fjord or on the title none.
     #[test]
     fn the_theme_keys_stand_in_one_row_under_their_title() {
         assert_eq!(theme_title().y, 32.0);
@@ -529,8 +531,8 @@ mod tests {
         assert_eq!(
             spans,
             [
-                (12.0, 100.0),
-                (104.0, 172.0),
+                (12.0, 80.0),
+                (84.0, 172.0),
                 (176.0, 234.0),
                 (238.0, 316.0),
                 (320.0, 388.0)
@@ -552,10 +554,14 @@ mod tests {
             }
         }
         assert_eq!(
-            set_swatch(ThemeId::Graphite),
+            set_swatch(ThemeId::Slate),
             Rectangle::new(Point::new(20.0, 59.0), Size::new(18.0, 10.0))
         );
-        assert_eq!(ThemeId::ALL.map(name_x), [42.0, 134.0, 206.0, 268.0, 350.0]);
+        assert_eq!(
+            set_swatch(ThemeId::Graphite),
+            Rectangle::new(Point::new(92.0, 59.0), Size::new(18.0, 10.0))
+        );
+        assert_eq!(ThemeId::ALL.map(name_x), [42.0, 114.0, 206.0, 268.0, 350.0]);
         let last = theme_key(ThemeId::Fjord);
         assert!(
             last.x + last.width <= LABEL_X + TEXT_WIDTH,
@@ -564,7 +570,7 @@ mod tests {
         let least = crate::ui::settings_panel::WINDOW_MIN.width;
         assert!(LABEL_X + TEXT_WIDTH <= least, "inside the least window");
         for (at, what) in [
-            (Point::new(102.0, 64.0), "between Graphite and Slate"),
+            (Point::new(82.0, 64.0), "between Slate and Graphite"),
             (Point::new(392.0, 64.0), "right of Fjord"),
             (Point::new(20.0, 42.0), "the title"),
         ] {

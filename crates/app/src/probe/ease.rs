@@ -46,8 +46,9 @@ fn assert_panel_buttons(shot: &Screenshot, open: &[Panel]) {
     }
 }
 
-// F1 with the rack alone at 1024 x 560 (at 1000 the panel buttons fold since File and Edit are
-// as wide as Help): six panel buttons right of the typing keyboard, the rack's lit.
+// F1 with the rack alone at 1080 x 560 (the panel buttons fold below 1049.292 px since the time
+// signature stands beside the tempo): six panel buttons right of the typing keyboard, the
+// rack's lit.
 #[test]
 #[ignore = "needs a screenshot of F1: scripts/ui-check.sh takes one and runs this"]
 fn a1_the_open_panels_button_is_lit_and_the_others_are_not() {
@@ -55,7 +56,7 @@ fn a1_the_open_panels_button_is_lit_and_the_others_are_not() {
 }
 
 // The new document with the Library, the rack, the playlist and the mixer (a first start's
-// panels, `Panels::FIRST_START`) at 1024 x 560 (the panel buttons fold at 1000): their four
+// panels, `Panels::FIRST_START`) at 1080 x 560 (the panel buttons fold at 1000): their four
 // buttons lit, the piano roll's and the settings' not.
 #[test]
 #[ignore = "needs a screenshot with --panels browser,rack,playlist,mixer: scripts/ui-check.sh takes one and runs this"]
@@ -127,7 +128,7 @@ fn a2_an_empty_sampler_row_shows_its_hint_right_of_its_steps() {
     let shot = read_ui_shot();
     let row = layout::name_button_rect(0);
     let top = layout::rack_in_window(row.position()).y;
-    let left = layout::rack_size(1, 16).width;
+    let left = layout::rack_size(1, 16, 4).width;
     let dim = rgb8(style::palette().text_secondary);
     let on_line = shot.count_matching(left..1000.0, top..top + row.height, |pixel| {
         near(pixel, dim, 24)
@@ -234,6 +235,7 @@ fn a5b_the_roll_at_the_stacks_foot_keeps_its_lane_above_the_hint_bar() {
         scroll: dawsome_engine::time::Ticks(0),
         zoom: ZOOM.default,
         step: dawsome_engine::time::Ticks(24),
+        signature: dawsome_engine::time::TimeSignature::COMMON,
         rows: crate::ui::piano_layout::Rows::ALL,
     };
     let a = dawsome_engine::project::Note {
@@ -415,7 +417,7 @@ fn b2_the_piano_roll_keeps_its_grid_under_three_other_panels() {
     use crate::ui::piano_layout::{DIVIDER_HEIGHT, GRID_TOP, LANE_HEIGHT, ROW_HEIGHT, UNDER_GRID};
     let shot = read_ui_shot();
     let stacked = [Panel::Rack, Panel::Playlist, Panel::PianoRoll, Panel::Mixer];
-    let rack = RACK_HEADER_HEIGHT + rack_size(2, 16).height;
+    let rack = RACK_HEADER_HEIGHT + rack_size(2, 16, 4).height;
     let heights = stack_heights(&stacked, rack, &Kept::default(), 560.0 - TOOLBAR_HEIGHT);
     assert_eq!(heights[2], ROLL_GIVEN_WAY_HEIGHT + DIVIDER_BAND);
     assert_eq!(

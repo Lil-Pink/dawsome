@@ -15,6 +15,9 @@ Expected values come from the font file's own tables and these rules, never from
                 digits are proportional (its '1' is far narrower than its '4'), iced 0.14 cannot
                 ask a font for tnum, and a changed copy of the font was ruled out (one more
                 font to license, ship and lock, for looks alone)
+  the signature the time signature's readout beside the tempo, the same rule at the type
+                scale's numbers size, 11 px: "00/00" (up to 24 beats over 16) with the widest
+                digit, plus 4 px either side, rounded up
   the column    beside Record: its widest word of "Notes", "Audio", "Capture" at 12 px (the type
                 scale's label size; 11 px before) and 4 px either side, rounded up
 
@@ -37,6 +40,8 @@ READOUT_SIZE = 16
 READOUT_PADDING = 4
 TEMPO_SHAPE = "000.000"
 POSITION_SHAPE = "00:00:00"
+SIGNATURE_SHAPE = "00/00"
+SIGNATURE_SIZE = 11
 TAKE_TEXT = 12
 TAKE_SIDE = 4
 TAKE_WORDS = ("Notes", "Audio", "Capture")
@@ -150,11 +155,11 @@ def answers():
     # The first of the widest, should two be as wide.
     widest = max(digits, key=lambda digit: (advance(digit), -digits.index(digit)))
 
-    def readout(shape):
+    def readout(shape, size=READOUT_SIZE):
         widest_form = "".join(widest if c.isdigit() else c for c in shape)
-        return math.ceil(width(widest_form, READOUT_SIZE) + 2 * READOUT_PADDING)
+        return math.ceil(width(widest_form, size) + 2 * READOUT_PADDING)
 
-    used = sorted(set(digits + ".:" + "Notes" + "".join(TAKE_WORDS)))
+    used = sorted(set(digits + ".:/" + "Notes" + "".join(TAKE_WORDS)))
     return {
         "font": REGULAR,
         "version": version,
@@ -167,6 +172,9 @@ def answers():
             "padding": READOUT_PADDING,
             "tempo_shape": TEMPO_SHAPE,
             "tempo_width": readout(TEMPO_SHAPE),
+            "signature_shape": SIGNATURE_SHAPE,
+            "signature_size": SIGNATURE_SIZE,
+            "signature_width": readout(SIGNATURE_SHAPE, SIGNATURE_SIZE),
             "position_shape": POSITION_SHAPE,
             "position_width": readout(POSITION_SHAPE),
         },

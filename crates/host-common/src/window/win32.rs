@@ -3,6 +3,15 @@
 //! loop, the toolkit's own, hands the window's messages to [`window_proc`], which queues what the
 //! user did for [`Display::events`]. Every display of the thread (one per plugin format's host)
 //! shares that queue and takes its own windows' events from it.
+//!
+//! Keys: a key goes to the window that has the keyboard focus, which is the plugin's own window
+//! (a child of ours) once it is clicked, so our window procedure never sees it. While any plugin
+//! window is open, a keyboard hook on this thread (WH_KEYBOARD) looks at each key as the message
+//! loop takes it from the queue and queues it for our window when the focus is inside one of
+//! ours, and always passes it on unchanged. Our window procedure queues the keys it is sent while
+//! our window itself has the focus. A plugin may post the keys it does not use to its parent,
+//! our window (JUCE's plugins do, Surge XT among them): those come with the focus still on the
+//! plugin's window and the hook has them already, so the window procedure leaves them alone.
 
 use std::cell::RefCell;
 use std::io;
@@ -13,15 +22,23 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Graphics::Gdi::{GetStockObject, ScreenToClient, BLACK_BRUSH};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetFocus, GetKeyState, MapVirtualKeyW, MAPVK_VK_TO_CHAR, MAPVK_VK_TO_VSC_EX,
+    MAPVK_VSC_TO_VK_EX, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetWindowRect,
-    IsWindow, LoadCursorW, RegisterClassExW, SetWindowPos, ShowWindow, CW_USEDEFAULT,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetAncestor, GetClientRect,
+    GetCursorPos, GetWindowRect, IsWindow, LoadCursorW, RegisterClassExW, SetWindowPos,
+    SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, CW_USEDEFAULT, GA_ROOT, HC_ACTION, HHOOK,
     HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNORMAL, WM_CLOSE, WM_SIZE, WNDCLASSEXW, WS_CLIPCHILDREN,
-    WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+    SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNORMAL, WA_INACTIVE, WH_KEYBOARD, WM_ACTIVATE, WM_CLOSE,
+    WM_KEYDOWN, WM_KEYUP, WM_NCDESTROY, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
 };
 
-use super::{clamp_side, take_own, WindowEvent};
+use super::keys::{typed_of_vk, win32_key};
+use super::{clamp_side, take_own, Typed, WindowEvent};
 
 /// What shows instead of a plugin window when no window of ours can be made.
 pub const UNAVAILABLE: &str = "Plugin windows cannot be opened";
@@ -47,6 +64,128 @@ const CLASS: &str = "DawsomePluginWindow";
 thread_local! {
     /// What the user did to this thread's plugin windows since [`Display::events`] last looked.
     static EVENTS: RefCell<Vec<WindowEvent>> = const { RefCell::new(Vec::new()) };
+    /// This thread's plugin windows, every display's, and the keyboard hook while there is one.
+    static KEYS: RefCell<Watch> = const {
+        RefCell::new(Watch {
+            windows: Vec::new(),
+            hook: ptr::null_mut(),
+        })
+    };
+}
+
+/// The plugin windows whose keys the hook looks for, and the hook (null: none installed).
+struct Watch {
+    windows: Vec<WindowId>,
+    hook: HHOOK,
+}
+
+/// `window` is a plugin window of this thread from now; the keyboard hook goes in with the first
+/// one. A hook the system refuses leaves the window procedure's keys alone (see `window_proc`),
+/// and the next window opened asks again.
+fn watch_keys(window: WindowId) {
+    let unhooked = KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        keys.windows.push(window);
+        keys.hook.is_null()
+    });
+    if unhooked {
+        // SAFETY: asks for this thread's id.
+        let thread = unsafe { GetCurrentThreadId() };
+        // SAFETY: a hook for this thread alone, whose procedure is this program's own (so no
+        // module is named), removed with this thread's last plugin window.
+        let hook =
+            unsafe { SetWindowsHookExW(WH_KEYBOARD, Some(keyboard_hook), ptr::null_mut(), thread) };
+        KEYS.with(|keys| keys.borrow_mut().hook = hook);
+    }
+}
+
+/// `window` is gone; the hook goes out with this thread's last plugin window.
+fn unwatch_keys(window: WindowId) {
+    let hook = KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        keys.windows.retain(|&own| own != window);
+        if keys.windows.is_empty() {
+            std::mem::replace(&mut keys.hook, ptr::null_mut())
+        } else {
+            ptr::null_mut()
+        }
+    });
+    if !hook.is_null() {
+        // SAFETY: the hook `watch_keys` installed, removed once.
+        unsafe { UnhookWindowsHookEx(hook) };
+    }
+}
+
+/// Whether the keyboard hook is in.
+fn hooked() -> bool {
+    KEYS.with(|keys| !keys.borrow().hook.is_null())
+}
+
+/// The plugin window of ours whose inside holds the focus `focus`: the plugin's window or one
+/// inside it. None for our window itself (its window procedure hears its keys) and for a window
+/// of anyone else's.
+fn holding(focus: HWND) -> Option<WindowId> {
+    if focus.is_null() {
+        return None;
+    }
+    // SAFETY: asks for a window's top-level ancestor; any handle may be asked.
+    let root = unsafe { GetAncestor(focus, GA_ROOT) };
+    let id = root as WindowId;
+    let ours = root != focus && KEYS.with(|keys| keys.borrow().windows.contains(&id));
+    ours.then_some(id)
+}
+
+/// The thread's keyboard hook: each keyboard message as the message loop takes it from the queue
+/// (HC_ACTION; a message only looked at, HC_NOREMOVE, comes again). One for a window inside a
+/// plugin window of ours is queued for that window. Never swallowed: the next hook is always
+/// called and its answer given back.
+///
+/// # Safety
+/// Called by the system alone, as this thread's WH_KEYBOARD hook: `wparam` is the key's virtual
+/// key, `lparam` its flags.
+unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        // SAFETY: asks this thread which window has the keyboard focus.
+        let focus = unsafe { GetFocus() };
+        if let Some(window) = holding(focus) {
+            queue_key(window, wparam as u16, lparam, true);
+        }
+    }
+    // SAFETY: the arguments the system passed in; a null hook handle is what the call takes.
+    unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
+}
+
+/// Whether the key of virtual key `vk` is down now, as the thread's input has it.
+fn held(vk: u16) -> bool {
+    // SAFETY: reads the thread's key state; any virtual key may be asked.
+    let state = unsafe { GetKeyState(i32::from(vk)) };
+    // The high bit: down.
+    state < 0
+}
+
+/// Queues the key of a keyboard message (virtual key `vk`, flags `lparam`) for `window`, unless
+/// it is the press of a chord with Ctrl, Alt or the logo key (the plugin's shortcut). A message
+/// whose device gave no scan code (some media keys) is given the virtual key's, as winit does.
+fn queue_key(window: WindowId, vk: u16, lparam: LPARAM, plugin_focused: bool) {
+    let key = win32_key(lparam);
+    let chord = key.alt || held(VK_MENU) || held(VK_CONTROL) || held(VK_LWIN) || held(VK_RWIN);
+    if key.pressed && chord {
+        return;
+    }
+    let scancode = if key.scancode == 0 {
+        // SAFETY: maps a virtual key to its scan code; any value may be asked.
+        unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) }
+    } else {
+        key.scancode
+    };
+    let event = WindowEvent::Key {
+        window,
+        scancode,
+        pressed: key.pressed,
+        repeat: key.repeat,
+        plugin_focused,
+    };
+    EVENTS.with(|events| events.borrow_mut().push(event));
 }
 
 /// The window class plugin windows are made from, and the windows made from it here.
@@ -132,6 +271,7 @@ impl Display {
             ));
         }
         self.own.borrow_mut().push(window as WindowId);
+        watch_keys(window as WindowId);
         fit_inside(window, width, height);
         // SAFETY: `window` is a live window of ours.
         unsafe { ShowWindow(window, SW_SHOWNORMAL) };
@@ -181,6 +321,18 @@ impl Display {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             )
         };
+    }
+
+    /// What the key of `scancode` (as [`WindowEvent::Key`] has it) types on the keyboard layout
+    /// of this thread with no modifier held: its virtual key's name, or its character. `None`
+    /// for a key that types nothing this knows.
+    pub fn typed(&self, scancode: u32) -> Option<Typed> {
+        // SAFETY: maps a scan code to its virtual key; any value may be asked.
+        let vk = unsafe { MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK_EX) };
+        let vk = u16::try_from(vk).ok().filter(|&vk| vk != 0)?;
+        // SAFETY: maps a virtual key to the character it types; any value may be asked.
+        let character = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_CHAR) };
+        typed_of_vk(vk, character)
     }
 
     /// What happened to this display's windows since the last call; another display's events
@@ -269,10 +421,11 @@ fn fit_inside(window: HWND, width: u32, height: u32) {
     };
 }
 
-/// What our windows do with their messages: the close button and a new inside size are queued
-/// for the host's tick, everything else is the system's. Why the close button does not close:
-/// the host takes the plugin's interface down first and only then destroys the window, as it
-/// does on every other way out.
+/// What our windows do with their messages: the close button, a new inside size, a key while our
+/// window itself has the focus and the window losing the activation are queued for the host's
+/// tick; everything else, and every key too, is the system's as before. Why the close button
+/// does not close: the host takes the plugin's interface down first and only then destroys the
+/// window, as it does on every other way out.
 ///
 /// # Safety
 /// Called by the system alone (it is our class's `lpfnWndProc`), with the arguments of a message
@@ -284,6 +437,25 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     let event = match message {
+        WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP => {
+            // Only while our window has the focus itself: with the plugin's window holding it,
+            // the hook has the key already, and a key the plugin posted up to us would come
+            // twice. Without the hook, every key we are sent.
+            // SAFETY: asks this thread which window has the keyboard focus.
+            if unsafe { GetFocus() } == window || !hooked() {
+                queue_key(window as WindowId, wparam as u16, lparam, false);
+            }
+            None
+        }
+        // Clicked away from (another window activated): a key held now goes up elsewhere.
+        WM_ACTIVATE if (wparam & 0xFFFF) as u32 == WA_INACTIVE => {
+            Some(WindowEvent::KeysLost(window as WindowId))
+        }
+        // The last message a window gets.
+        WM_NCDESTROY => {
+            unwatch_keys(window as WindowId);
+            None
+        }
         WM_CLOSE => Some(WindowEvent::Closed(window as WindowId)),
         // A minimized window has no inside to fit the plugin to.
         WM_SIZE if wparam != SIZE_MINIMIZED as WPARAM => Some(WindowEvent::Resized {

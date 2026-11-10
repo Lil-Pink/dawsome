@@ -5,19 +5,25 @@ use std::collections::BTreeSet;
 
 use dawsome_engine::edit::Edit;
 use dawsome_engine::project::{ChannelId, Note, PatternId, Project, DEFAULT_KEY};
-use dawsome_engine::time::{self, Ticks, BEATS_PER_BAR, STEPS_PER_BEAT};
+use dawsome_engine::time::{self, Ticks, TimeSignature};
 
-/// Steps in one bar.
-pub const STEPS_PER_BAR: u32 = (BEATS_PER_BAR * STEPS_PER_BEAT) as u32;
+use crate::ui::layout;
 
-/// The longest pattern the rack header's "+" makes: 512 steps, the longest fixed length a step
-/// sequencer row offers. The piano roll can still grow a pattern past it.
-pub const MAX_STEP_BARS: u32 = 32;
+/// The most steps a rack row holds: 512, the longest fixed length a step sequencer row offers.
+pub const MAX_RACK_STEPS: u32 = 512;
 
-/// Lit steps of one pattern, per channel.
+/// The longest pattern the rack header's "+" makes in `signature`: the whole bars inside
+/// [`MAX_RACK_STEPS`] (32 bars of 4/4, 42 of 3/4 or 6/8). The piano roll can still grow a
+/// pattern past it.
+pub fn max_step_bars(signature: TimeSignature) -> u32 {
+    MAX_RACK_STEPS / signature.steps_per_bar().max(1)
+}
+
+/// Lit steps of one pattern, per channel, and the groups (beats) its row is drawn in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepGrid {
     steps: u32,
+    group: u32,
     lit: BTreeSet<(ChannelId, u32)>,
 }
 
@@ -37,12 +43,18 @@ impl StepGrid {
                 (step < steps).then_some((note.channel, step))
             })
             .collect();
-        Self { steps, lit }
+        let group = layout::steps_per_group(signature_of(project, pattern));
+        Self { steps, group, lit }
     }
 
     /// Steps in each row.
     pub fn steps(&self) -> u32 {
         self.steps
+    }
+
+    /// Steps in each group of a row: a beat of the time signature.
+    pub fn group(&self) -> u32 {
+        self.group
     }
 
     pub fn is_lit(&self, channel: ChannelId, step: u32) -> bool {
@@ -125,11 +137,19 @@ pub fn step_press(
     }
 }
 
-/// Steps in a row for `pattern`: 16 per bar, none without a pattern.
+/// The time signature `pattern`'s row counts in: its own, else the project's (the project's
+/// without a pattern).
+pub fn signature_of(project: &Project, pattern: Option<PatternId>) -> TimeSignature {
+    pattern.map_or(project.time_signature, |id| project.pattern_signature(id))
+}
+
+/// Steps in a row for `pattern`: its time signature's steps a bar (16 in 4/4, 12 in 3/4 and
+/// 6/8) times its bars, none without a pattern.
 pub fn step_count(project: &Project, pattern: Option<PatternId>) -> u32 {
+    let per_bar = signature_of(project, pattern).steps_per_bar();
     pattern
         .and_then(|id| project.patterns.get(&id))
-        .map_or(0, |shown| shown.length_bars.saturating_mul(STEPS_PER_BAR))
+        .map_or(0, |shown| shown.length_bars.saturating_mul(per_bar))
 }
 
 /// The step under `position`, wrapping at the pattern's `steps`; `None` when there are none.
@@ -163,6 +183,80 @@ mod tests {
         (0..grid.steps())
             .filter(|&step| grid.is_lit(channel, step))
             .collect()
+    }
+
+    // Known answers 11 of gen_p34_expected.py: a pattern's row has the time signature's steps a
+    // bar (12 in 6/8 and 3/4, 14 in 7/8, 15 in 15/16), a note lights the step its tick is on
+    // (144 in 6/8: step 6), the groups are a beat wide (2 in 6/8, 4 in 3/4, 1 in 15/16), and the
+    // rack's "+" stops at the whole bars inside 512 steps (42 in 6/8, 32 in 4/4).
+    #[test]
+    fn the_rows_steps_and_groups_follow_the_time_signature() {
+        let p34: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p34_expected.json"
+        )))
+        .expect("p34_expected.json");
+        let signature = |value: &serde_json::Value| {
+            TimeSignature::new(
+                value[0].as_u64().expect("beats") as u8,
+                value[1].as_u64().expect("unit") as u8,
+            )
+            .expect("a signature")
+        };
+        for case in p34["step_grids"].as_array().expect("step grids") {
+            let (mut project, pattern, channel) = f1();
+            project.time_signature = signature(&case["signature"]);
+            let shown = project.patterns.get_mut(&pattern).expect("pattern");
+            shown.length_bars = case["bars"].as_u64().expect("bars") as u32;
+            shown.notes.truncate(1);
+            shown.notes[0].start = Ticks(case["tick"].as_i64().expect("a tick"));
+            let grid = StepGrid::new(&project, Some(pattern));
+            let want = |key: &str| case[key].as_u64().expect(key) as u32;
+            assert_eq!(grid.steps(), want("steps"), "{}", project.time_signature);
+            assert_eq!(lit_steps(&grid, channel), [want("lit")]);
+            let groups = case["groups"].as_array().expect("groups");
+            assert_eq!(grid.group(), groups[0].as_u64().expect("a group") as u32);
+            assert_eq!(grid.steps() / grid.group(), groups.len() as u32);
+        }
+        for row in p34["table"].as_array().expect("table") {
+            let sig = signature(&row["signature"]);
+            let most = row["max_step_bars"].as_u64().expect("most") as u32;
+            assert_eq!(max_step_bars(sig), most, "{sig}");
+        }
+    }
+
+    // Known answers B 4 of gen_p35_expected.py: p35_pattern_34's pattern 2 has its own 3/4, so
+    // its row has 3 * 16 / 4 = 12 steps in groups of 4; pattern 1 (the project's 4/4) 16. The
+    // rack's "+" stops at 512 // 12 = 42 bars for it.
+    #[test]
+    fn a_patterns_own_signature_sets_its_steps() {
+        let p35: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p35_expected.json"
+        )))
+        .expect("p35_expected.json");
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p35_pattern_34.json"
+        ))
+        .expect("the fixture");
+        let project = Project::load_json(&text).expect("loads");
+        for case in p35["b"]["steps"].as_array().expect("cases") {
+            let pattern = PatternId(case["pattern"].as_u64().expect("a pattern") as u32);
+            let grid = StepGrid::new(&project, Some(pattern));
+            assert_eq!(
+                u64::from(grid.steps()),
+                case["steps"].as_u64().expect("steps")
+            );
+            assert_eq!(
+                u64::from(grid.group()),
+                case["group"].as_u64().expect("group")
+            );
+        }
+        assert_eq!(
+            max_step_bars(signature_of(&project, Some(PatternId(2)))),
+            42
+        );
     }
 
     // F1 lights steps 0, 4, 8 and 12 (ticks 0, 96, 192, 288 at 24 ticks per step).

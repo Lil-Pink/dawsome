@@ -237,7 +237,7 @@ impl Screenshot {
 
 /// Where the probe samples step `step` of `row`: the button's center, window coordinates.
 pub(crate) fn step_center_in_window(row: usize, step: u32) -> Point {
-    layout::rack_in_window(layout::step_rect(row, step).center())
+    layout::rack_in_window(layout::step_rect(row, step, 4).center())
 }
 
 /// The tone at the center of each of the first `steps` step buttons in `row`.
@@ -370,6 +370,49 @@ mod tests {
         assert_eq!(tones, every_fourth_lit());
     }
 
+    // F1 opened with `--time-signature 6/8` at 1200 x 560, the rack alone: the signature's
+    // edit grows F1's one bar to the bars of 288 ticks holding its last hit (tick 288, ending at
+    // 289): 2 bars, 2 · 12 = 24 steps, its hits on ticks 0, 96, 192 and 288 lighting steps 0, 4,
+    // 8 and 12. The groups are a beat wide, an eighth, 2 steps (gen_p34_expected.py's step
+    // grid): step s at x 222 + 30s + 6 · floor(s / 2), its unlit tone by group (the first tone
+    // for groups 0, 2, 4, …), a beat line (Graphite's soft line, 2 px) in the middle of each
+    // gap between groups, (222 + 30 · (2k − 1) + 6 · (k − 1) + 28 + 222 + 60k + 6k) / 2 = 284
+    // for k = 1, 350 for k = 2, and none between the steps of a group (x 251, the rack's
+    // ground); no step past step 23 (step 24's place, x 222 + 720 + 72 + 14 = 1028, holds no
+    // step's tone).
+    #[test]
+    #[ignore = "needs a screenshot of F1 in 6/8: scripts/ui-check.sh takes one and runs this"]
+    fn f1_in_6_8_draws_two_bars_of_twelve_steps_in_groups_of_two() {
+        let shot = read_ui_shot();
+        let group = 2;
+        let center = |step: u32| layout::rack_in_window(layout::step_rect(0, step, group).center());
+        let tones: Vec<Tone> = (0..24).map(|step| tone(shot.pixel(center(step)))).collect();
+        let want: Vec<Tone> = (0..24)
+            .map(|step| match step {
+                0 | 4 | 8 | 12 => Tone::Lit,
+                s => Tone::Unlit((s / 2 % 2) as usize),
+            })
+            .collect();
+        assert_eq!(tones, want);
+        let y = center(0).y;
+        let palette = crate::ui::palette::GRAPHITE;
+        let rgb = |color: iced::Color| color.into_rgba8()[..3].try_into().expect("three");
+        for x in [284.0, 350.0] {
+            let pixel = shot.pixel(Point::new(x, y));
+            assert!(
+                near(pixel, rgb(palette.line_soft), TOLERANCE),
+                "a beat line at x {x}: {pixel:?}"
+            );
+        }
+        let between = shot.pixel(Point::new(251.0, y));
+        assert!(
+            near(between, rgb(palette.bg), TOLERANCE),
+            "the rack's ground inside a group: {between:?}"
+        );
+        let past = tone(shot.pixel(Point::new(1028.0, y)));
+        assert!(matches!(past, Tone::Other(_)), "no step 24: {past:?}");
+    }
+
     // The new document with the rack alone (positions from crate::ui::layout, colors from
     // crate::ui::style): its one row, "Sampler", lights no step, so its 16 steps show the two
     // unlit tones by beat; under it the add row (rack y 46..70): "+ Instrument…" its words
@@ -490,6 +533,7 @@ mod tests {
                 scroll: Ticks(0),
                 zoom: piano_layout::ZOOM.default,
                 step: Ticks(24),
+                signature: dawsome_engine::time::TimeSignature::COMMON,
                 rows: crate::ui::piano_layout::Rows::ALL,
             }
         }
@@ -715,6 +759,77 @@ mod tests {
         };
         assert_eq!((area.height, grid.lane, grid.rows()), (434.0, 50.0, 8));
         grid
+    }
+
+    // p4_two_clips with the playlist alone and two changes of signature (--signature-change
+    // 768:3/4 --signature-change 1344:6/8), Graphite: at 64 px a 4/4 bar a tick is 1/6 px, so
+    // the changes' flags stand at x 120 + 768 / 6 = 248 and 120 + 1344 / 6 = 344 in the ruler's
+    // number band (window y 88..104 under the 64 px toolbar and the 24 px header): each pole
+    // (2 px from the bar line) in the accent's dimmer tone, Graphite's slider fill #8A5A24, the
+    // flag's glass right of it the readouts' #141619; none at bar 2's line (x 184). The bars
+    // after them are the meter map's (gen_p35_expected.py's rule): 3/4 bars of 288 ticks from 768
+    // put bar 4's line at 120 + 1056 / 6 = 296 (#484D55, the lane's bar line), where 4/4 would put
+    // none; bar 3 (768..1056, x 248..296) is shaded #393D44 (x 270, between its beat lines at 264
+    // and 280), bar 4 (1056..1344) is not: x 304 (tick 1104, no beat) is lane ground #34383F,
+    // where 4/4's bar 3 (768..1152) would shade it; 6/8 bars of 288 from 1344 put bar 5's strong
+    // line (bars 1, 5, 9) at x 344 (#626873) and bar 6's at 120 + 1632 / 6 = 392, where 4/4 has
+    // none.
+    #[test]
+    #[ignore = "needs a screenshot of p4_two_clips with two signature changes: scripts/ui-check.sh takes one and runs this"]
+    fn p4_with_two_changes_flags_the_ruler_and_counts_their_bars() {
+        let shot = read_ui_shot();
+        let grid = p4_grid();
+        let x = |tick: i64| grid.x_of(dawsome_engine::time::Ticks(tick));
+        assert_eq!(
+            (x(768), x(1056), x(1344), x(1632)),
+            (248.0, 296.0, 344.0, 392.0)
+        );
+        let ruler = |x: f32, y: f32| ruler_in_window(Point::new(x, y));
+        let tracks = |x: f32| tracks_in_window(Point::new(x, grid.row_top(1) + 40.0));
+        let pole = [0x8A, 0x5A, 0x24];
+        let glass = [0x14, 0x16, 0x19];
+        let points: Vec<(String, Point, [u8; 3])> = vec![
+            ("the 3/4 flag's pole".into(), ruler(x(768) + 1.0, 2.0), pole),
+            (
+                "the 3/4 flag's glass".into(),
+                ruler(x(768) + 3.5, 1.0),
+                glass,
+            ),
+            (
+                "the 6/8 flag's pole".into(),
+                ruler(x(1344) + 1.0, 2.0),
+                pole,
+            ),
+            (
+                "the 6/8 flag's glass".into(),
+                ruler(x(1344) + 3.5, 1.0),
+                glass,
+            ),
+            (
+                "bar 4's line, 3/4".into(),
+                tracks(x(1056) + 0.5),
+                [0x48, 0x4D, 0x55],
+            ),
+            ("bar 4 unshaded".into(), tracks(304.5), [0x34, 0x38, 0x3F]),
+            ("bar 3 shaded".into(), tracks(270.0), [0x39, 0x3D, 0x44]),
+            (
+                "bar 5's strong line, 6/8".into(),
+                tracks(x(1344) + 0.5),
+                [0x62, 0x68, 0x73],
+            ),
+            (
+                "bar 6's line, 6/8".into(),
+                tracks(x(1632) + 0.5),
+                [0x48, 0x4D, 0x55],
+            ),
+        ];
+        let wrong = wrong_colors(&shot, &points);
+        assert!(wrong.is_empty(), "wrong color at {wrong:?}");
+        let bare = shot.pixel(ruler(x(384) + 1.0, 2.0));
+        assert!(
+            !near(bare, pole, TOLERANCE),
+            "no flag at bar 2's line: {bare:?}"
+        );
     }
 
     // p4_two_clips with the playlist alone (colors and window points as gen_p4_expected.py prints

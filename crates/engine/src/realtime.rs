@@ -33,7 +33,7 @@ use crate::project::{
 };
 use crate::render::{self, Controls, Preview, Runtime, BUSES, CHUNK};
 use crate::source::{ClipSource, SourceSlot};
-use crate::time::{self, MilliBpm, Ticks};
+use crate::time::{self, MeterMap, MeterUnit, MilliBpm, Ticks};
 use crate::transport::{Control, ParamTarget, Transport, Wrap};
 
 /// The most frames one block covers: every processor, plugins included, is called for at most
@@ -1034,9 +1034,15 @@ impl Expressions {
 struct CountIn {
     frames: u64,
     done: u64,
-    /// Where each beat's click starts, counted from the count-in's start.
-    beats: [u64; 4],
+    /// Where each beat's click starts, counted from the count-in's start: the first `count`
+    /// (the time signature's beats, at most 24) hold one. A fixed array, so starting a count-in
+    /// on the audio thread allocates nothing.
+    beats: [u64; MAX_COUNT_IN_BEATS],
+    count: usize,
 }
+
+/// The most beats a count-in clicks: a bar of the time signature with the most beats.
+const MAX_COUNT_IN_BEATS: usize = *time::SIGNATURE_BEATS.end() as usize;
 
 #[derive(Debug, Clone, Copy)]
 struct Recording {
@@ -1056,7 +1062,7 @@ fn post(events: &mut Producer<EngineEvent>, shared: &Shared, event: EngineEvent)
 impl CountIn {
     /// The click at frame `frame` of the count-in: [`click`] at each beat, accented on beat 1.
     fn click(&self, frame: u64) -> f32 {
-        self.beats
+        self.beats[..self.count]
             .iter()
             .enumerate()
             .find_map(|(beat, &at)| click(frame.checked_sub(at)?, beat == 0))
@@ -1118,6 +1124,7 @@ impl Player {
             sample_rate: self.plan.sample_rate,
             tempo: self.transport.timeline().tempo(),
             ppq: self.plan.ppq,
+            bar: self.plan.meter.bar_at(self.transport.playhead_tick()),
             transport: TransportInfo {
                 playing: false,
                 song_tick: self.transport.playhead_tick(),
@@ -1290,26 +1297,26 @@ impl Player {
     }
 
     /// Adds the metronome's clicks into `piece`, which plays from song sample `position`: one
-    /// from the first sample of every beat (a tick that is a multiple of the ppq) the piece
-    /// plays, accented on a bar's first, timed by the output frames, so a click that began in
-    /// an earlier piece (before a wrap too) plays on; each held to full scale ([`add_click`]).
+    /// from the first sample of every beat of the meter that plays (each segment's beat: a
+    /// quarter, an eighth or a 16th, from the segment's start) the piece plays, accented on a
+    /// bar's first, timed by the output frames, so a click that began in an earlier piece
+    /// (before a wrap too) plays on; each held to full scale ([`add_click`]).
     fn add_clicks(&mut self, piece: &mut [[f32; 2]], position: u64) {
         let timeline = self.transport.timeline();
-        let beat = i64::from(self.plan.ppq);
-        let bar = beat * i64::from(time::BEATS_PER_BAR);
+        let meter = &self.plan.meter;
         // From the beat the piece's first sample is in, the first that starts in the piece.
-        let mut tick = timeline.tick_at(position).0.div_euclid(beat) * beat;
-        let mut next = timeline.tick_to_sample(Ticks(tick));
+        let mut tick = meter.snap_down(timeline.tick_at(position), MeterUnit::Beat);
+        let mut next = timeline.tick_to_sample(tick);
         while next.is_some_and(|sample| sample < position) {
-            tick += beat;
-            next = timeline.tick_to_sample(Ticks(tick));
+            tick = meter.snap_next(tick, MeterUnit::Beat);
+            next = timeline.tick_to_sample(tick);
         }
         for (offset, frame) in (0u64..).zip(piece.iter_mut()) {
             let at = self.output_frames.saturating_add(offset);
             if next == Some(position.saturating_add(offset)) {
-                self.last_click = Some((at, tick.rem_euclid(bar) == 0));
-                tick += beat;
-                next = timeline.tick_to_sample(Ticks(tick));
+                self.last_click = Some((at, meter.bar_at(tick).start == tick));
+                tick = meter.snap_next(tick, MeterUnit::Beat);
+                next = timeline.tick_to_sample(tick);
             }
             let value = self
                 .last_click
@@ -1922,7 +1929,8 @@ impl Player {
         }
     }
 
-    /// Starts recording: after a bar of count-in when `count_in`, else at once.
+    /// Starts recording: after a bar of count-in when `count_in` (the beats of the meter at the
+    /// tick play starts from), else at once.
     fn record(&mut self, count_in: bool, tap_master: bool) {
         if self.transport.playing() || self.count_in.is_some() {
             return;
@@ -1937,15 +1945,18 @@ impl Player {
         let tempo = timeline.tempo();
         let (rate, ppq) = (self.plan.sample_rate, self.plan.ppq);
         let at = |tick: Ticks| time::tick_to_sample(tick, rate, tempo, ppq).unwrap_or(0);
-        let beat = time::step_to_ticks(time::STEPS_PER_BEAT.into(), ppq);
-        let mut beats = [0; 4];
-        for (index, start) in (0..).zip(beats.iter_mut()) {
+        let signature = self.plan.meter.signature_at(self.transport.playhead_tick());
+        let beat = signature.beat_ticks(ppq);
+        let count = usize::from(signature.beats()).min(MAX_COUNT_IN_BEATS);
+        let mut beats = [0; MAX_COUNT_IN_BEATS];
+        for (index, start) in (0..).zip(beats[..count].iter_mut()) {
             *start = at(Ticks(beat.0 * index));
         }
         self.count_in = Some(CountIn {
-            frames: at(time::bars_to_ticks(1, ppq)),
+            frames: at(signature.bar_ticks(ppq)),
             done: 0,
             beats,
+            count,
         });
     }
 
@@ -2026,6 +2037,11 @@ impl Player {
     /// before the latest tempo change. An offline render uses it to stop exactly on a bar line.
     pub fn tick_to_sample(&self, tick: Ticks) -> Option<u64> {
         self.transport.timeline().tick_to_sample(tick)
+    }
+
+    /// The meter the plan in force plays: where an offline render of whole bars ends.
+    pub fn meter(&self) -> &MeterMap {
+        &self.plan.meter
     }
 
     /// Whether an automation governs `target` in the block just rendered: then a live value

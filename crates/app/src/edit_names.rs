@@ -37,6 +37,14 @@ pub fn name(edit: &Edit) -> &'static str {
             edits.ops.last().map_or("Revert sound", |op| op.name())
         }
         Edit::SetTempo { .. } => "Tempo",
+        Edit::SetTimeSignature { .. } | Edit::RestoreTimeSignature { .. } => "Time signature",
+        Edit::SetPatternTimeSignature { .. } | Edit::RestorePatternTimeSignature { .. } => {
+            "Pattern time signature"
+        }
+        Edit::SetSignatureChange { .. }
+        | Edit::RemoveSignatureChange { .. }
+        | Edit::MoveSignatureChange { .. }
+        | Edit::RestoreSignatureChanges { .. } => "Time signature change",
         Edit::SetPatternBars { .. } => "Pattern length",
         Edit::SetPatternSwing { .. } => "Swing",
         Edit::SetPatternKind {

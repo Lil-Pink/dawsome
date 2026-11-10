@@ -1320,7 +1320,7 @@ mod tests {
     ) -> Option<Message> {
         use iced::widget::canvas::Program as _;
         let project = app.session.project();
-        let size = crate::ui::layout::rack_size(project.channels.len(), 16);
+        let size = crate::ui::layout::rack_size(project.channels.len(), 16, 4);
         let bounds = iced::Rectangle::new(iced::Point::ORIGIN, size);
         let cursor = iced::mouse::Cursor::Available(at);
         let action = app.channel_rack().update(state, &event, bounds, cursor)?;

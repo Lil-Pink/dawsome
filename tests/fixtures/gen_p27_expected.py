@@ -17,8 +17,10 @@ code; their formulas are the CLAP test plugins' (gen_p7_expected.py), so the sam
             y[n] = f32(f64(x[n - 64]) * gain), 0 for n < 64, and reports a latency of 64 frames;
             it also reports the transport it was given through six read-only parameters
             (ids 10-15: tempo, beats, bar, playing, samples, clock), each divided by 2**24
-            (exact) so that it is a normalized value, and a seventh, id 16 "Wild", that reports
-            values out of range on purpose (the host's clamp), so it has 8.
+            (exact) so that it is a normalized value, a seventh, id 16 "Wild", that reports
+            values out of range on purpose (the host's clamp), and the time signature it was
+            given, ids 17 "Numerator" and 18 "Denominator" (gen_p34_expected.py's plugin
+            transport), so it has 10.
   parameter id 0 "Gain", normalized value = gain, 0..1, default 1.0; a point changes it at its
             sample offset. The sine's controller adds id 9 "Linked" (read-only, 1.0 once its link
             to the component answered) and, for VST3 in the app (gen_p28_expected.py), ids 1
@@ -226,7 +228,7 @@ SCANNED = sorted([record(SINE, "Dawsome Test Sine", "instrument", 5),
                   record(GAIN, "Dawsome Test Gain", "effect", 3),
                   record(FAIL, "Dawsome Test Fail", "instrument", 1),
                   record(TICK, "Dawsome Test Tick", "instrument", 2),
-                  record(LATE, "Dawsome Test Latency", "effect", 8),
+                  record(LATE, "Dawsome Test Latency", "effect", 10),
                   record(VIEW, "Dawsome Test View", "instrument", 5)], key=lambda r: r["id"])
 
 CLAP_PLUGINS = [

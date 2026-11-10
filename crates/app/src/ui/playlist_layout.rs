@@ -41,12 +41,14 @@
 use std::sync::OnceLock;
 
 use dawsome_engine::project::{Clip, LoopRange};
-use dawsome_engine::time::Ticks;
+use dawsome_engine::time::{MeterMap, MeterUnit, SignatureChange, Ticks, TimeSignature};
 use iced::{Point, Rectangle, Size};
 
 use crate::ui::add_words;
+use crate::ui::fonts::size;
 use crate::ui::grid_rules::{self, ZoomRange, NUMBER_BAND_HEIGHT};
 use crate::ui::scroll::{self, Span};
+use crate::ui::text_fit::text_width;
 
 pub const HEADER_HEIGHT: f32 = 24.0;
 pub const LOOP_STRIP_HEIGHT: f32 = 12.0;
@@ -170,7 +172,9 @@ pub struct Grid {
     pub scroll: Ticks,
     /// Pixels per bar, in [`ZOOM`]'s range.
     pub zoom: f32,
-    /// Ticks in one bar, at least 1.
+    /// Ticks in one bar of the song's first meter (the project's time signature), at least 1:
+    /// the zoom's pixels per bar are this many ticks. The bars and beats drawn are the song's
+    /// meter map's ([`visible_bars`]).
     pub bar: Ticks,
     /// Index, in track order, of the track in the top row.
     pub top: usize,
@@ -187,31 +191,54 @@ impl Grid {
         ZOOM.kept(self.zoom)
     }
 
-    /// Ticks in one beat (a quarter of a bar), at least 1.
-    pub fn beat(&self) -> Ticks {
-        Ticks((self.bar.0 / 4).max(1))
+    /// Pixels `ticks` take on the timeline.
+    pub fn px_of(&self, ticks: Ticks) -> f32 {
+        (ticks.0 as f64 * f64::from(self.px_per_bar()) / self.ticks()) as f32
     }
 
-    /// The cell a scroll comes to rest on ([`grid_rules::cell`]): a beat while beat lines are
-    /// drawn, else a bar.
-    pub fn cell(&self) -> Ticks {
-        grid_rules::cell(self.beat(), self.bar, self.px_per_bar())
+    /// The cell a scroll comes to rest on at `tick`: a beat of the meter there while its beat
+    /// lines are drawn (a beat wide enough to show, [`grid_rules::line_alpha`]), else a bar.
+    pub fn cell(&self, meter: &MeterMap, tick: Ticks) -> MeterUnit {
+        let beat = meter.signature_at(tick).beat_ticks(meter.ppq());
+        if grid_rules::line_alpha(self.px_of(beat)) > 0.0 {
+            MeterUnit::Beat
+        } else {
+            MeterUnit::Bar
+        }
     }
 
-    /// `tick` moved to the nearest cell's start ([`grid_rules::landed`]).
-    pub fn landed(&self, tick: Ticks) -> Ticks {
-        grid_rules::landed(tick, self.cell())
+    /// `tick` moved to the nearest cell's start in `meter`, halfway going on: where a scroll
+    /// along time comes to rest, so the view starts on a whole beat or bar.
+    pub fn landed(&self, meter: &MeterMap, tick: Ticks) -> Ticks {
+        meter.snap_nearest(tick, self.cell(meter, tick))
     }
 
-    /// Where a scroll from the view's start towards `to` comes to rest
-    /// ([`grid_rules::landed_towards`]): a short move still moves a cell.
-    pub fn landed_towards(&self, to: Ticks) -> Ticks {
-        grid_rules::landed_towards(self.scroll, to, self.cell())
+    /// Where a scroll from the view's start towards `to` comes to rest: [`Grid::landed`],
+    /// unless that is no further along than where it started, then the next cell start that
+    /// way. Why: a move shorter than half a cell would land back where it was, and the view
+    /// could not be moved at all.
+    pub fn landed_towards(&self, meter: &MeterMap, to: Ticks) -> Ticks {
+        let from = self.scroll;
+        let landed = self.landed(meter, to);
+        let unit = self.cell(meter, from);
+        if to > from && landed <= from {
+            meter.snap_next(from, unit)
+        } else if to < from && landed >= from {
+            let down = meter.snap_down(from, unit);
+            let before = if down < from {
+                down
+            } else {
+                meter.snap_down(Ticks(from.0 - 1), self.cell(meter, Ticks(from.0 - 1)))
+            };
+            Ticks(before.0.max(0))
+        } else {
+            landed
+        }
     }
 
     /// The start of the cell holding `tick`.
-    pub fn cell_start(&self, tick: Ticks) -> Ticks {
-        grid_rules::cell_start(tick, self.cell())
+    pub fn cell_start(&self, meter: &MeterMap, tick: Ticks) -> Ticks {
+        meter.snap_down(tick, self.cell(meter, tick))
     }
 
     /// This grid at `px` pixels per bar (kept), scrolled so that what shows at `x` now shows
@@ -503,29 +530,89 @@ pub fn loop_edge_under(grid: &Grid, range: &LoopRange, x: f32) -> Option<LoopEdg
     }
 }
 
-/// The bars whose line is inside the timeline of a canvas `width` wide, as (bar number counted
-/// from 1, line x).
-pub fn visible_bars(grid: &Grid, width: f32) -> impl Iterator<Item = (i64, f32)> + '_ {
-    let bar = grid.bar.0.max(1);
-    grid_rules::bar_lines(grid.scroll, grid.tick_at(width), grid.bar)
-        .map(move |index| (index + 1, grid.x_of(Ticks(index * bar))))
+/// The bars of `meter` whose line is inside the timeline of a canvas `width` wide, as (bar
+/// number counted from 1 across the changes, line x).
+pub fn visible_bars(grid: &Grid, meter: &MeterMap, width: f32) -> impl Iterator<Item = (i64, f32)> {
+    let (from, to) = (grid.scroll, grid.tick_at(width));
+    let first = meter.bar_at(from);
+    let first = if first.start < from {
+        first.bar + 1
+    } else {
+        first.bar
+    };
+    let mut bars = Vec::new();
+    for bar in first.. {
+        let start = meter.bar_start(bar);
+        if start > to {
+            break;
+        }
+        bars.push((bar + 1, grid.x_of(start)));
+    }
+    bars.into_iter()
 }
 
-/// The x spans the shaded bars ([`grid_rules::shaded`]) take on the timeline of a canvas
-/// `width` wide, left to right: one a shaded bar, or a shaded four bars far out, cut to the
-/// timeline.
-pub fn shaded_spans(grid: &Grid, width: f32) -> impl Iterator<Item = (f32, f32)> + '_ {
-    grid_rules::shaded_ticks(
-        grid.scroll,
-        grid.tick_at(width),
-        grid.bar,
-        grid.px_per_bar(),
-    )
-    .filter_map(move |(start, end)| {
-        let left = grid.x_of(start).max(TRACK_HEADER_WIDTH);
-        let right = grid.x_of(end).min(width);
-        (right > left).then_some((left, right))
-    })
+/// The x spans the shaded bars ([`grid_rules::shaded`], by bar number) of `meter` take on the
+/// timeline of a canvas `width` wide, left to right: one a shaded bar, or a shaded four bars far
+/// out, cut to the timeline.
+pub fn shaded_spans<'a>(
+    grid: &'a Grid,
+    meter: &'a MeterMap,
+    width: f32,
+) -> impl Iterator<Item = (f32, f32)> + 'a {
+    let px = grid.px_per_bar();
+    let group = grid_rules::shade_group(px);
+    let first = meter.bar_at(grid.scroll).bar.div_euclid(group);
+    let last = meter.bar_at(grid.tick_at(width)).bar.div_euclid(group);
+    (first..=last)
+        .filter(move |&index| grid_rules::shaded(index * group, px))
+        .map(move |index| {
+            (
+                meter.bar_start(index * group),
+                meter.bar_start((index + 1) * group),
+            )
+        })
+        .filter_map(move |(start, end)| {
+            let left = grid.x_of(start).max(TRACK_HEADER_WIDTH);
+            let right = grid.x_of(end).min(width);
+            (right > left).then_some((left, right))
+        })
+}
+
+/// Room either side of a flag's signature ([`flag_rect`]), and its pole down the bar line.
+pub const FLAG_PAD: f32 = 3.0;
+pub const FLAG_POLE: f32 = 2.0;
+
+/// The flag of a change of signature at tick `at`, in the ruler's number band: from its bar
+/// line, its pole ([`FLAG_POLE`]) then its signature at the numbers' size with [`FLAG_PAD`]
+/// either side, the band's height; `None` when its line is off the timeline of a canvas
+/// `width` wide.
+pub fn flag_rect(
+    grid: &Grid,
+    at: Ticks,
+    signature: TimeSignature,
+    width: f32,
+) -> Option<Rectangle> {
+    let x = grid.x_of(at);
+    if !(TRACK_HEADER_WIDTH..width).contains(&x) {
+        return None;
+    }
+    let wide = FLAG_POLE + text_width(&signature.to_string(), size::DENSE) + 2.0 * FLAG_PAD;
+    Some(Rectangle::new(
+        Point::new(x, 0.0),
+        Size::new(wide.ceil(), NUMBER_BAND_HEIGHT),
+    ))
+}
+
+/// The change whose flag is under ruler point `at` (the latest drawn on top when two meet).
+pub fn flag_under(grid: &Grid, changes: &[SignatureChange], at: Point) -> Option<Ticks> {
+    changes
+        .iter()
+        .rev()
+        .find(|change| {
+            flag_rect(grid, change.at, change.signature, f32::INFINITY)
+                .is_some_and(|rect| rect.contains(at))
+        })
+        .map(|change| change.at)
 }
 
 /// How far past the song's end the scroll bar reaches.
@@ -558,6 +645,67 @@ mod tests {
     use super::*;
     use crate::ui::grid_rules::{beat_alpha, shaded, strong};
 
+    /// A song of one 4/4 at 96 ppq.
+    fn common() -> MeterMap {
+        MeterMap::single(dawsome_engine::time::TimeSignature::COMMON, 96)
+    }
+
+    // Known answers C 6 of gen_p35_expected.py: p35_meter's bars (4/4, 3/4 from 768, 6/8 from
+    // 1344, 7/8 from 1920) start at 0, 384, 768, 1056, 1344, 1632, 1920, 2256, 2592; at 64 px a
+    // 4/4 bar a tick is 1/6 px, so their lines are at x 120 + t / 6: 120, 184, 248, 296, 344,
+    // 392, 440, 496, 552, numbered 1 to 9. Shaded bars 1, 3, 5, 7, 9 (every other by number):
+    // 120..184, 248..296, 344..392, 440..496, 552..608 (cut at 610). A scroll near 1100 (in
+    // 3/4 from 768, beats of 96 ticks, 16 px, drawn) lands on the nearest beat of that meter:
+    // 1100 and 1103 on 1056 (under half of 96 past it), 1104 (half way) on 1152.
+    #[test]
+    fn the_bars_shading_and_landing_follow_the_meter_map() {
+        let p35: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p35_expected.json"
+        )))
+        .expect("p35_expected.json");
+        let changes: Vec<dawsome_engine::time::SignatureChange> = p35["c"]["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .map(|change| dawsome_engine::time::SignatureChange {
+                at: Ticks(change[0].as_i64().expect("a tick")),
+                signature: dawsome_engine::time::TimeSignature::new(
+                    change[1][0].as_u64().expect("beats") as u8,
+                    change[1][1].as_u64().expect("unit") as u8,
+                )
+                .expect("a signature"),
+            })
+            .collect();
+        let meter = MeterMap::new(dawsome_engine::time::TimeSignature::COMMON, &changes, 96);
+        let bars: Vec<(i64, f32)> = visible_bars(&grid(), &meter, 560.0).collect();
+        let starts: Vec<i64> = p35["c"]["bars"]
+            .as_array()
+            .expect("bars")
+            .iter()
+            .map(|start| start.as_i64().expect("a tick"))
+            .collect();
+        let want: Vec<(i64, f32)> = (1..)
+            .zip(&starts)
+            .map(|(number, &start)| (number, 120.0 + start as f32 / 6.0))
+            .collect();
+        assert_eq!(bars, want);
+        let spans: Vec<(f32, f32)> = shaded_spans(&grid(), &meter, 610.0).collect();
+        assert_eq!(
+            spans,
+            [
+                (120.0, 184.0),
+                (248.0, 296.0),
+                (344.0, 392.0),
+                (440.0, 496.0),
+                (552.0, 608.0)
+            ]
+        );
+        assert_eq!(grid().landed(&meter, Ticks(1100)), Ticks(1056));
+        assert_eq!(grid().landed(&meter, Ticks(1103)), Ticks(1056));
+        assert_eq!(grid().landed(&meter, Ticks(1104)), Ticks(1152));
+    }
+
     /// The grid as the playlist opens: no scroll, 64 px per bar, a bar of 384 ticks, the 12
     /// rows a 426 px track area holds whole (the playlist alone in a 1000 x 560 window).
     fn grid() -> Grid {
@@ -586,7 +734,7 @@ mod tests {
         assert_eq!(grid.x_of(Ticks(96)), 136.0, "a beat is 16 px");
         assert_eq!(grid.row_top(1), 33.0);
         assert_eq!(grid.row_top(7), 231.0);
-        let bars: Vec<(i64, f32)> = visible_bars(&grid, 1000.0).collect();
+        let bars: Vec<(i64, f32)> = visible_bars(&grid, &common(), 1000.0).collect();
         assert_eq!(bars.first(), Some(&(1, 120.0)));
         assert_eq!(bars[12], (13, 888.0));
         assert_eq!(bars.last(), Some(&(14, 952.0)));
@@ -640,6 +788,7 @@ mod tests {
                 scroll: Ticks(400),
                 ..grid
             },
+            &common(),
             300.0,
         )
         .map(|(number, _)| number)
@@ -1076,11 +1225,11 @@ mod tests {
     #[test]
     fn beat_lines_fade_in_as_the_beats_grow_apart() {
         let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
-        assert_eq!((beat_alpha(16.0), beat_alpha(20.0)), (0.0, 0.0));
-        assert!(close(beat_alpha(32.0), 3.0 / 14.0));
-        assert!(close(beat_alpha(48.0), 0.5));
-        assert!(close(beat_alpha(64.0), 11.0 / 14.0));
-        assert_eq!((beat_alpha(76.0), beat_alpha(256.0)), (1.0, 1.0));
+        assert_eq!((beat_alpha(16.0, 4), beat_alpha(20.0, 4)), (0.0, 0.0));
+        assert!(close(beat_alpha(32.0, 4), 3.0 / 14.0));
+        assert!(close(beat_alpha(48.0, 4), 0.5));
+        assert!(close(beat_alpha(64.0, 4), 11.0 / 14.0));
+        assert_eq!((beat_alpha(76.0, 4), beat_alpha(256.0, 4)), (1.0, 1.0));
     }
 
     // The shading rule by hand: at 64 px a bar every other bar from bar 1, so bars 1, 3, 5, 7
@@ -1103,7 +1252,7 @@ mod tests {
         // On a 1000 px canvas unscrolled, 64 px a bar: bars 1, 3, ..., 13 at x 120 + 64·(bar − 1),
         // 64 px each. At 24 px a bar (16 ticks a pixel, 96 px a four): fours 1, 3, 5, 7 and 9,
         // from x 120 + 192k.
-        let spans: Vec<(f32, f32)> = shaded_spans(&grid(), 1000.0).collect();
+        let spans: Vec<(f32, f32)> = shaded_spans(&grid(), &common(), 1000.0).collect();
         let expected: Vec<(f32, f32)> = (0..7)
             .map(|k| (120.0 + 128.0 * k as f32, 184.0 + 128.0 * k as f32))
             .collect();
@@ -1112,7 +1261,7 @@ mod tests {
             zoom: 24.0,
             ..grid()
         };
-        let spans: Vec<(f32, f32)> = shaded_spans(&far, 1000.0).collect();
+        let spans: Vec<(f32, f32)> = shaded_spans(&far, &common(), 1000.0).collect();
         let expected: Vec<(f32, f32)> = (0..5)
             .map(|k| (120.0 + 192.0 * k as f32, 216.0 + 192.0 * k as f32))
             .collect();
@@ -1122,7 +1271,10 @@ mod tests {
             scroll: Ticks(192),
             ..grid()
         };
-        assert_eq!(shaded_spans(&scrolled, 1000.0).next(), Some((120.0, 152.0)));
+        assert_eq!(
+            shaded_spans(&scrolled, &common(), 1000.0).next(),
+            Some((120.0, 152.0))
+        );
     }
 
     // Where a scroll comes to rest, by hand. At 256 px a bar beats are drawn, 96 ticks (64 px)
@@ -1137,45 +1289,53 @@ mod tests {
             zoom: 256.0,
             ..grid()
         };
-        assert_eq!(near.cell(), Ticks(96));
-        assert_eq!(near.landed(Ticks(462)), Ticks(480));
-        assert_eq!(near.landed(Ticks(414)), Ticks(384));
-        assert_eq!(near.landed(Ticks(432)), Ticks(480), "halfway goes on");
+        assert_eq!(near.cell(&common(), Ticks(0)), MeterUnit::Beat);
+        assert_eq!(near.landed(&common(), Ticks(462)), Ticks(480));
+        assert_eq!(near.landed(&common(), Ticks(414)), Ticks(384));
+        assert_eq!(
+            near.landed(&common(), Ticks(432)),
+            Ticks(480),
+            "halfway goes on"
+        );
         let far = Grid {
             zoom: 16.0,
             ..grid()
         };
-        assert_eq!(far.cell(), Ticks(384));
-        assert_eq!(far.landed(Ticks(168)), Ticks(0));
-        assert_eq!(far.landed(Ticks(216)), Ticks(384));
+        assert_eq!(far.cell(&common(), Ticks(0)), MeterUnit::Bar);
+        assert_eq!(far.landed(&common(), Ticks(168)), Ticks(0));
+        assert_eq!(far.landed(&common(), Ticks(216)), Ticks(384));
         assert_eq!(
             Grid {
                 zoom: 20.0,
                 ..grid()
             }
-            .cell(),
-            Ticks(384)
+            .cell(&common(), Ticks(0)),
+            MeterUnit::Bar
         );
         assert_eq!(
             Grid {
                 zoom: 21.0,
                 ..grid()
             }
-            .cell(),
-            Ticks(96)
+            .cell(&common(), Ticks(0)),
+            MeterUnit::Beat
         );
-        assert_eq!(near.cell_start(Ticks(470)), Ticks(384));
+        assert_eq!(near.cell_start(&common(), Ticks(470)), Ticks(384));
         // From the beat at 384, a move of 30 ticks either way (under half a beat) still moves a
         // beat: to 480 on, 288 back; from 400 (mid-beat) back to the beat it is in, 384.
         let at = |scroll| Grid {
             scroll: Ticks(scroll),
             ..near
         };
-        assert_eq!(at(384).landed_towards(Ticks(414)), Ticks(480));
-        assert_eq!(at(384).landed_towards(Ticks(354)), Ticks(288));
-        assert_eq!(at(400).landed_towards(Ticks(390)), Ticks(384));
-        assert_eq!(at(384).landed_towards(Ticks(500)), Ticks(480), "nearest");
-        assert_eq!(at(0).landed_towards(Ticks(0)), Ticks(0));
+        assert_eq!(at(384).landed_towards(&common(), Ticks(414)), Ticks(480));
+        assert_eq!(at(384).landed_towards(&common(), Ticks(354)), Ticks(288));
+        assert_eq!(at(400).landed_towards(&common(), Ticks(390)), Ticks(384));
+        assert_eq!(
+            at(384).landed_towards(&common(), Ticks(500)),
+            Ticks(480),
+            "nearest"
+        );
+        assert_eq!(at(0).landed_towards(&common(), Ticks(0)), Ticks(0));
     }
 
     // The value line: 1 at the body's top + 2, 0 at its bottom − 2, and back.

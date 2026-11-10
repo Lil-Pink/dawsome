@@ -119,6 +119,7 @@ pub fn new_document() -> Project {
     let pattern = Pattern {
         name: "Pattern 1".to_owned(),
         length_bars: 1,
+        time_signature: None,
         copied_from: None,
         swing_tenths: STRAIGHT_SWING,
         kind: PatternKind::Pattern,

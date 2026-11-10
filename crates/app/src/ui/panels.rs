@@ -1227,7 +1227,7 @@ mod tests {
 
     // The first start's stack, by hand: the rack, the playlist and the mixer under them (the
     // Library beside, no panel of the stack). Their least heights: the rack with one channel its
-    // header and one row, 24 + 46 = 70 (its content 24 + 70 = 94, `rack_size(1, 16)`: 8 + 38 and
+    // header and one row, 24 + 46 = 70 (its content 24 + 70 = 94, `rack_size(1, 16, 4)`: 8 + 38 and
     // the add row's 24, which scrolls under its header at the least), the playlist 180, the
     // mixer 6 + 229 = 235: 485 px, so a window needs 64 + 485 + 22 = 571 px (toolbar, stack,
     // hint bar) before the stack shows whole (was 64 + 70 + 180 + 22 = 336 without the mixer).
@@ -1237,7 +1237,7 @@ mod tests {
     fn the_first_start_stacks_the_mixer_under_the_playlist() {
         let stacked: Vec<Panel> = Panels::FIRST_START.stacked().collect();
         assert_eq!(stacked, [Panel::Rack, Panel::Playlist, Panel::Mixer]);
-        let rack = RACK_HEADER_HEIGHT + layout::rack_size(1, 16).height;
+        let rack = RACK_HEADER_HEIGHT + layout::rack_size(1, 16, 4).height;
         assert_eq!(rack, 94.0);
         assert_eq!(min_height(Panel::Rack, rack), 70.0);
         assert_eq!(least_total(&stacked, rack), 485.0);

@@ -42,8 +42,9 @@
 //!   [`LATENCY_AFTER_RESTART`] from its next `process`. It also reports
 //!   the transport each block was given, as output changes of its read-only parameters 10
 //!   "Tempo" (BPM), 11 "Beats" (`projectTimeMusic`), 12 "Bar" (`barPositionMusic`), 13
-//!   "Playing" (1 or 0), 14 "Samples" (`projectTimeSamples`) and 15 "Clock"
-//!   (`continousTimeSamples`), each divided by [`READOUT_DIVISOR`] (2^24, exact) so that it is a
+//!   "Playing" (1 or 0), 14 "Samples" (`projectTimeSamples`), 15 "Clock"
+//!   (`continousTimeSamples`), 17 "Numerator" and 18 "Denominator" (`timeSigNumerator`,
+//!   `timeSigDenominator`), each divided by [`READOUT_DIVISOR`] (2^24, exact) so that it is a
 //!   normalized value, which its controller takes back from the host (`setParamNormalized`) and
 //!   gives out: the host's carrying of a processor's own changes to the controller is then
 //!   seen. Its read-only parameter 16 "Wild" reports, on its audio calls 0, 1, 2, 3, ..., the
@@ -165,8 +166,8 @@ pub const WILD: [f64; 3] = [-0.5, 1.5, f64::NAN];
 /// the transport value to the bit.
 pub const READOUT_DIVISOR: f64 = 16_777_216.0;
 /// The Latency class's readouts: the transport (Tempo, Beats, Bar, Playing, Samples, Clock),
-/// then Wild.
-const READOUTS: [ParamID; 7] = [10, 11, 12, 13, 14, 15, 16];
+/// then Wild, then the time signature (Numerator, Denominator).
+const READOUTS: [ParamID; 9] = [10, 11, 12, 13, 14, 15, 16, 17, 18];
 
 const GAIN_PARAM: ParamID = 0;
 /// The sine's: the bend and the wheel its MIDI mapping names, and what it heard of the wheel.
@@ -374,7 +375,7 @@ const GAIN_PARAMS: [Param; 3] = [
     Param::read_only(STEPS_HEARD_PARAM, "Steps heard"),
 ];
 const TICK_PARAMS: [Param; 2] = [GAIN, Param::read_only(TICKS_PARAM, "Ticks")];
-const LATENCY_PARAMS: [Param; 8] = [
+const LATENCY_PARAMS: [Param; 10] = [
     GAIN,
     Param::read_only(10, "Tempo"),
     Param::read_only(11, "Beats"),
@@ -383,6 +384,8 @@ const LATENCY_PARAMS: [Param; 8] = [
     Param::read_only(14, "Samples"),
     Param::read_only(15, "Clock"),
     Param::read_only(16, "Wild"),
+    Param::read_only(17, "Numerator"),
+    Param::read_only(18, "Denominator"),
 ];
 
 /// One parameter as a controller describes it.
@@ -1145,7 +1148,9 @@ unsafe fn report_readouts(data: &ProcessData, call: u64) {
     ]
     .map(|value| value / READOUT_DIVISOR);
     let wild = WILD[(call % WILD.len() as u64) as usize];
-    let values = transport.into_iter().chain([wild]);
+    let signature = [context.timeSigNumerator, context.timeSigDenominator]
+        .map(|value| f64::from(value) / READOUT_DIVISOR);
+    let values = transport.into_iter().chain([wild]).chain(signature);
     for (id, value) in READOUTS.iter().zip(values) {
         let mut index = 0;
         // SAFETY: the live output changes; `id` and `index` are ours.
@@ -1279,7 +1284,7 @@ struct Controller {
     /// The Tick class's timer calls.
     ticks: Arc<AtomicU64>,
     /// The Latency class's readouts, as the host gave them back.
-    readouts: [AtomicU64; 7],
+    readouts: [AtomicU64; 9],
     /// Parameters 1 to 3 as the host set them last (the sine's Bend, Wheel and Wheel heard, the
     /// gain's Steps and Steps heard), else their defaults.
     kept: [AtomicU64; KEPT],

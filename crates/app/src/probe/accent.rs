@@ -139,20 +139,27 @@ fn ac2_the_settings_window_shows_the_users_accent_on_the_swatch_and_the_wheel() 
 
 // The same shot: each theme's key on the Theme page keeps its set's own swatch whatever accent
 // is drawn, its panel square and its accent square (their centres, 4 and 12 px in from the
-// swatch's left, 5 px down: Graphite's at (24, 64) and (32, 64), the keys' row 24 px now,
-// were (24, 63) and (32, 63)) the set's colours, so none the blue; and Graphite's
-// key, the theme shown, on the button's face 3 px in from its right end (97, 64), Slate's on the
-// page's ground there (169, 64).
+// swatch's left, 5 px down: Slate's, the first key, at (24, 64) and (32, 64), Graphite's, the
+// second, at (96, 64) and (104, 64); Graphite's were (24, 64) while it came first, and (24, 63)
+// in the 22 px row) the set's colours, so none the blue; and Graphite's key, the theme shown, on
+// the button's face 3 px in from its right end (169, 64), Slate's on the page's ground there
+// (77, 64).
 #[test]
 #[ignore = "needs a shot of --panels settings --settings-page theme --midi-ports none --accent #3FA7D6 --screenshot-window settings: scripts/ui-check.sh takes one and runs this"]
 fn ac3_the_theme_keys_keep_their_sets_own_colours() {
     use crate::ui::palette::ThemeId;
     use crate::ui::theme_page::{set_swatch, theme_key};
     let shot = read_ui_shot();
+    let first = set_swatch(ThemeId::Slate);
+    assert_eq!(
+        (first.x + 4.0, first.y + 5.0),
+        (24.0, 64.0),
+        "Slate's swatch"
+    );
     let swatch = set_swatch(ThemeId::Graphite);
     assert_eq!(
         (swatch.x + 4.0, swatch.y + 5.0),
-        (24.0, 64.0),
+        (96.0, 64.0),
         "Graphite's swatch"
     );
     let mut wrong = Vec::new();

@@ -26,10 +26,11 @@ Some of the features that I think are kinda nice:
   
 - **Recording in loops.** Hit record in Pattern mode and your notes land in the pattern as it loops. In Song mode a take grows as you play, if you feel like recording in one take. And if you were just noodling and played something good, Capture (Ctrl+Shift+R) turns the last 30 seconds into notes after the fact.
 - **Swing.** Each pattern gets its own swing knob at the top of the channel rack, from straight (50%) up to 75%, and it nudges every second 16th note late for that shuffle feel. What you hear is what you export, WAV, stems and MIDI files included. Quantize in the piano roll has a swing setting too, and it previews where your notes will land before you commit (the originals stay as faint ghosts until you hit Quantize).
+- **Time signatures.** 4/4 isn't the only option anymore: set 3/4, 6/8, 7/8, 12/8 or anything up to 24 beats right next to the tempo, give a single pattern a signature of its own, or change the signature partway through the song from the playlist's ruler. The step grid, the piano roll and playlist grids, the metronome and the count-in all follow it, and MIDI and DAWproject exports carry the changes over.
 - **A mixer.** Right-click a channel, pick "Mixer insert…", and it gets its own strip with a three-band EQ, delay, reverb, a compressor and a saturator ready to go. Its slots also take a filter, distortion, chorus, flanger, phaser, gate and stereo width (thirteen built-in effects in all, counting the limiter on the master).
 - **Native Synth Plugin.** Dawsome Synth sits at the top of the Library's plugins: two oscillators, unison, a filter with its own envelope, an LFO and glide, all as knobs in one window. It comes with eight presets to start from (leads, basses, a pad, a pluck and more), and you can save your own sounds and load them into any project.
 - **Plugins.** CLAP and VST3 instruments and effects both work, their windows open in Dawsome. Plugins without a window of their own get a generated one with every parameter automatable.
-- **Virtual instruments in the box.** A piano, electric piano, three basses, acoustic and electric guitar, organ, two pads, strings, marimba and two drum kits, all made by me or public domain (CC0), plus Surge XT as a bundled synth. Bring your own SFZ instruments and sample folders.
+- **Virtual instruments in the box.** Two upright pianos (Upright Piano and Upright Knight), four electric pianos (Electric Piano, Dreamy EP, Turismo EP and Reed Piano), three basses, acoustic and electric guitar, organ, two pads, strings, marimba and two drum kits, all made by me or public domain (CC0), plus Surge XT as a bundled synth. Bring your own SFZ instruments and sample folders.
 - **Easy to use UI windows** - All UI windows are toggleable and adjustable. Creating an easy to use and easy to digest audio workstation. (Some of this UI is intended to cleaned up in the future, some small things bother me about it) 
 - **Export anywhere.** WAV (16, 24 or 32-bit float), MP3, MIDI, stems, and DAWproject so a song can move to another program if needed.
 - **A nice little Help guide** inside the app (F1) that walks through the entire app, with pictures :)
@@ -47,22 +48,19 @@ The full reference, every panel and setting, is in [docs/manual.md](docs/manual.
 
 ## What's missing (and what's next)
 
-Compared to the paid DAWs, Dawsome still lacks: audio warping or beat detection, a clip launcher, time signatures other than 4/4, take comping, VST2, or a Mac build. Most of that is coming, though probably not MacOS and definitely not VST2 (Steinberg no longer licenses it to anyone).
+Compared to the paid DAWs, Dawsome still lacks: audio warping or beat detection, a clip launcher, take comping, VST2, or a Mac build. Most of that is coming, though probably not MacOS and definitely not VST2 (Steinberg no longer licenses it to anyone).
 
 Roughly in the order I plan to add these features:
 
+1. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.
+2. **Piano roll helpers.** Chord, arpeggiate, strum, and a preset browser for plugin patches.
+3. **Audio warping and tempo detection**, so a dropped loop follows the song on its own.
+4. **Sample chopping** and finer, precision sample editing.
+5. **Take comping.**
+6. **A clip launcher** for playing live.
+7. **macOS**, if I get my hands on a Mac or receive outside help.
 
-
-1. **Time signatures other than 4/4.**
-2. **Meters and a spectrum view** on the master, with loudness so you can check a mix without a plugin.
-3. **Piano roll helpers.** Chord, arpeggiate, strum, and a preset browser for plugin patches.
-4. **Audio warping and tempo detection**, so a dropped loop follows the song on its own.
-5. **Sample chopping** and finer, precision sample editing.
-6. **Take comping.**
-7. **A clip launcher** for playing live.
-8. **macOS**, if I get my hands on a Mac or receive outside help.
-
-`CONTRIBUTING.md` has the build and the one check command that runs everything. Effects would be nice first contributions (an effect is one type implementing one trait, and there are two Airwindows ports to copy from) and anything on the list above. If you find a bug, one line with what you did, what you expected, and what happened is plenty.
+`CONTRIBUTING.md` has the build and the one check command that runs everything. [docs/architecture.md](docs/architecture.md) maps the code: what each crate owns, which crates depend on which, and what each library is for. Effects would be nice first contributions (an effect is one type implementing one trait, and there are two Airwindows ports to copy from) and anything on the list above. If you find a bug, one line with what you did, what you expected, and what happened is plenty.
 
 ## License
 

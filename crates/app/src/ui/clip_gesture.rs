@@ -11,7 +11,7 @@ use dawsome_engine::project::{
     Clip, ClipId, ClipItem, ClipStretch, LoopRange, PatternId, Project, StretchMode, TrackId,
     STRETCH_PITCH_RANGE,
 };
-use dawsome_engine::time::{self, Ticks};
+use dawsome_engine::time::{self, MeterMap, MeterUnit, Ticks};
 
 use crate::ui::note_gesture::{snap_down, snap_nearest};
 use crate::ui::playlist_layout::LoopEdge;
@@ -36,13 +36,48 @@ impl ClipSnap {
         ClipSnap::None,
     ];
 
-    /// The snap unit in ticks at `ppq`: a bar, a beat, a step (a sixteenth) or one tick.
-    pub fn unit(self, ppq: u16) -> Ticks {
+    /// The lines this snaps to in the song's `meter`: its bars or its beats (each change's
+    /// own: a quarter, an eighth or a sixteenth), its steps (sixteenths) or single ticks.
+    pub fn grid(self, meter: &MeterMap) -> SnapGrid<'_> {
         match self {
-            ClipSnap::Bar => time::bars_to_ticks(1, ppq),
-            ClipSnap::Beat => Ticks(i64::from(ppq)),
-            ClipSnap::Step => time::step_to_ticks(1, ppq),
-            ClipSnap::None => Ticks(1),
+            ClipSnap::Bar => SnapGrid::Meter(meter, MeterUnit::Bar),
+            ClipSnap::Beat => SnapGrid::Meter(meter, MeterUnit::Beat),
+            ClipSnap::Step => SnapGrid::Every(time::step_to_ticks(1, meter.ppq())),
+            ClipSnap::None => SnapGrid::Every(Ticks(1)),
+        }
+    }
+}
+
+/// The lines a playlist position snaps to: every so many ticks (a step, a tick), or the bars or
+/// beats of the song's meter map, whose length changes where the signature does.
+#[derive(Debug, Clone, Copy)]
+pub enum SnapGrid<'a> {
+    Every(Ticks),
+    Meter(&'a MeterMap, MeterUnit),
+}
+
+impl SnapGrid<'_> {
+    /// The line at or before `tick`.
+    pub fn down(self, tick: Ticks) -> Ticks {
+        match self {
+            SnapGrid::Every(unit) => snap_down(tick, unit),
+            SnapGrid::Meter(meter, unit) => meter.snap_down(tick, unit),
+        }
+    }
+
+    /// The line after the one at or before `tick`.
+    pub fn next(self, tick: Ticks) -> Ticks {
+        match self {
+            SnapGrid::Every(unit) => Ticks(snap_down(tick, unit).0 + unit.0.max(1)),
+            SnapGrid::Meter(meter, unit) => meter.snap_next(tick, unit),
+        }
+    }
+
+    /// The nearer of the lines either side of `tick`, half way going on.
+    pub fn nearest(self, tick: Ticks) -> Ticks {
+        match self {
+            SnapGrid::Every(unit) => snap_nearest(tick, unit),
+            SnapGrid::Meter(meter, unit) => meter.snap_nearest(tick, unit),
         }
     }
 }
@@ -75,15 +110,15 @@ pub fn place(
     pattern: PatternId,
     index: usize,
     tick: Ticks,
-    unit: Ticks,
+    grid: SnapGrid,
 ) -> Option<Edit> {
     let track = track_at(project, index)?;
-    let bars = project.patterns.get(&pattern)?.length_bars;
-    let start = snap_down(tick, unit);
+    project.patterns.get(&pattern)?;
+    let start = grid.down(tick);
     if start.0 < 0 {
         return None;
     }
-    let length = time::bars_to_ticks(bars, project.ppq);
+    let length = project.pattern_ticks(pattern);
     Some(Edit::PlaceClips {
         first: project.playlist.next_clip_id,
         clips: vec![Clip::of_pattern(pattern, track, start, length)],
@@ -91,15 +126,16 @@ pub fn place(
 }
 
 /// Where a drag of `ticks` and `rows` puts each of `ids`, as (clip, start, track index) in
-/// `ids` order: the tick offset rounded to the nearest whole unit, and both offsets kept so no
-/// clip lands before tick 0 or off the tracks. The group moves as one, so an off-grid clip
-/// stays as far off the grid as it was.
+/// `ids` order: the grid line the earliest clip's line moves to is the one nearest that line
+/// plus the drag (a whole number of units on an even grid), and both offsets kept so no clip
+/// lands before tick 0 or off the tracks. The group moves as one, so an off-grid clip stays as
+/// far off the grid as it was.
 pub fn move_targets(
     project: &Project,
     ids: &[ClipId],
     ticks: Ticks,
     rows: i64,
-    unit: Ticks,
+    grid: SnapGrid,
 ) -> Vec<(ClipId, Ticks, usize)> {
     let clips: Vec<(ClipId, &Clip, usize)> = ids
         .iter()
@@ -115,10 +151,10 @@ pub fn move_targets(
     ) else {
         return Vec::new();
     };
-    let unit = unit.0.max(1);
-    // The furthest left the group can go in whole units: the earliest start rounded down.
-    let lowest = -(earliest.div_euclid(unit) * unit);
-    let ticks = snap_nearest(ticks, Ticks(unit)).0.max(lowest);
+    // The line the earliest clip starts on (or after, off the grid) moves to the line nearest
+    // it plus the drag; the furthest left is that line at tick 0.
+    let line = grid.down(Ticks(earliest)).0;
+    let ticks = (grid.nearest(Ticks(line.saturating_add(ticks.0))).0 - line).max(-line);
     let last = project.playlist.tracks.len().saturating_sub(1);
     let rows = rows.clamp(-(top as i64), last.saturating_sub(bottom) as i64);
     clips
@@ -151,27 +187,26 @@ pub fn moved(project: &Project, targets: &[(ClipId, Ticks, usize)]) -> Option<Ed
 /// to the grid, and at least one grid line past the cell the clip starts in, so the end stays
 /// on the grid even for a clip that starts off it (an on-grid clip stays a unit long). A press
 /// without a drag keeps the length, even for an end off the grid.
-pub fn resized_length(clip: &Clip, ticks: Ticks, unit: Ticks) -> Ticks {
+pub fn resized_length(clip: &Clip, ticks: Ticks, grid: SnapGrid) -> Ticks {
     if ticks.0 == 0 {
         return clip.length;
     }
-    let unit = Ticks(unit.0.max(1));
-    let end = snap_down(Ticks(clip.end().0.saturating_add(ticks.0)), unit);
-    let shortest = snap_down(clip.start, unit).0 + unit.0;
+    let end = grid.down(Ticks(clip.end().0.saturating_add(ticks.0)));
+    let shortest = grid.next(clip.start).0;
     Ticks(end.0.max(shortest) - clip.start.0)
 }
 
 /// The edit for a right-edge drag of `ticks` on clip `id`, or `None` when its length stays.
-pub fn resized(project: &Project, id: ClipId, ticks: Ticks, unit: Ticks) -> Option<Edit> {
+pub fn resized(project: &Project, id: ClipId, ticks: Ticks, grid: SnapGrid) -> Option<Edit> {
     let clip = project.playlist.clips.get(&id)?;
-    let length = resized_length(clip, ticks, unit);
+    let length = resized_length(clip, ticks, grid);
     (length != clip.length).then_some(Edit::ResizeClip { id, length })
 }
 
 /// Where an Alt drag of `ticks` on a clip's right edge puts its end: on the snap line nearest
 /// the dragged end, at least a tick after the start.
-pub fn stretched_end(clip: &Clip, ticks: Ticks, unit: Ticks) -> Ticks {
-    let end = snap_nearest(Ticks(clip.end().0.saturating_add(ticks.0)), unit);
+pub fn stretched_end(clip: &Clip, ticks: Ticks, grid: SnapGrid) -> Ticks {
+    let end = grid.nearest(Ticks(clip.end().0.saturating_add(ticks.0)));
     Ticks(end.0.max(clip.start.0 + 1))
 }
 
@@ -381,10 +416,9 @@ pub fn duplicated(project: &Project, ids: &BTreeSet<ClipId>) -> Option<(Edit, BT
 
 /// A loop range drawn from tick `press` to tick `cursor`: every grid cell from the one pressed
 /// to the one under the cursor, switched on, and at least `step` long so a pass is never empty.
-pub fn drawn_loop(press: Ticks, cursor: Ticks, unit: Ticks, step: Ticks) -> LoopRange {
-    let unit = Ticks(unit.0.max(1));
-    let start = snap_down(Ticks(press.0.min(cursor.0)), unit).0.max(0);
-    let end = snap_down(Ticks(press.0.max(cursor.0)), unit).0 + unit.0;
+pub fn drawn_loop(press: Ticks, cursor: Ticks, grid: SnapGrid, step: Ticks) -> LoopRange {
+    let start = grid.down(Ticks(press.0.min(cursor.0))).0.max(0);
+    let end = grid.next(Ticks(press.0.max(cursor.0))).0;
     LoopRange {
         start: Ticks(start),
         end: Ticks(end.max(start + step.0)),
@@ -398,10 +432,10 @@ pub fn moved_loop_edge(
     range: LoopRange,
     edge: LoopEdge,
     tick: Ticks,
-    unit: Ticks,
+    grid: SnapGrid,
     step: Ticks,
 ) -> LoopRange {
-    let at = snap_nearest(tick, unit).0.max(0);
+    let at = grid.nearest(tick).0.max(0);
     match edge {
         LoopEdge::Start => LoopRange {
             start: Ticks(at.min(range.end.0 - step.0).max(0)),
@@ -649,11 +683,18 @@ mod tests {
         Project::load_json(text).expect("fixture loads")
     }
 
-    const BAR: Ticks = Ticks(384);
+    const BAR_TICKS: Ticks = Ticks(384);
+    /// A bar of 4/4 at 96 ppq as an even grid: what Bar snaps to in a song of one 4/4.
+    const BAR: SnapGrid<'static> = SnapGrid::Every(BAR_TICKS);
 
+    // The line after tick 0 of each snap in a 4/4 song at 96 ppq: a bar, a beat, a step, a tick.
     #[test]
     fn snap_units_follow_the_ppq() {
-        let units: Vec<i64> = ClipSnap::ALL.iter().map(|snap| snap.unit(96).0).collect();
+        let meter = MeterMap::single(dawsome_engine::time::TimeSignature::COMMON, 96);
+        let units: Vec<i64> = ClipSnap::ALL
+            .iter()
+            .map(|snap| snap.grid(&meter).next(Ticks(0)).0)
+            .collect();
         assert_eq!(units, [384, 96, 24, 1]);
         assert_eq!(ClipSnap::default(), ClipSnap::Bar);
         assert_eq!(ClipSnap::Step.to_string(), "Step");
@@ -665,7 +706,7 @@ mod tests {
     fn a_placed_clip_starts_on_the_grid_below_the_cursor() {
         let project = load(P4_TWO_CLIPS);
         let placed = place(&project, PatternId(2), 1, Ticks(1300), BAR);
-        let clip = Clip::of_pattern(PatternId(2), TrackId(2), Ticks(1152), BAR);
+        let clip = Clip::of_pattern(PatternId(2), TrackId(2), Ticks(1152), BAR_TICKS);
         assert_eq!(
             placed,
             Some(Edit::PlaceClips {
@@ -733,7 +774,8 @@ mod tests {
             move_targets(&project, &[ClipId(1)], Ticks(-400), 0, BAR),
             [(ClipId(1), Ticks(37), 0)]
         );
-        let step = ClipSnap::Step.unit(96);
+        let meter = MeterMap::single(dawsome_engine::time::TimeSignature::COMMON, 96);
+        let step = ClipSnap::Step.grid(&meter);
         assert_eq!(
             move_targets(&project, &[ClipId(1)], Ticks(-30), 0, step),
             [(ClipId(1), Ticks(13), 0)],
@@ -757,7 +799,7 @@ mod tests {
         );
         assert_eq!(resized(&project, ClipId(1), Ticks(300), BAR), None);
         let clip = &project.playlist.clips[&ClipId(1)];
-        assert_eq!(resized_length(clip, Ticks(-5000), BAR), BAR);
+        assert_eq!(resized_length(clip, Ticks(-5000), BAR), BAR_TICKS);
         let messy = load(P4_MESSY);
         let off_grid = &messy.playlist.clips[&ClipId(1)];
         assert_eq!(resized_length(off_grid, Ticks(100), BAR), Ticks(347));
@@ -819,7 +861,7 @@ mod tests {
             range(384, 768)
         );
         assert_eq!(
-            drawn_loop(Ticks(100), Ticks(105), Ticks(1), step),
+            drawn_loop(Ticks(100), Ticks(105), SnapGrid::Every(Ticks(1)), step),
             range(100, 124)
         );
         assert_eq!(drawn_loop(Ticks(-50), Ticks(10), BAR, step), range(0, 384));

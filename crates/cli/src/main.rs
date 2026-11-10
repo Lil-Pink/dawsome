@@ -74,7 +74,9 @@ const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--s
   --once         (render, with --channel) play the pattern once: the render is one pass long,
                  so --bars does not go with it
   --block N      frames per processing block (default 512)
-  --bars N       bars to render, counted as played: loop and song-end wraps count (default 1)
+  --bars N       bars to render, counted as played: loop and song-end wraps count (default 1);
+                 bars of the meter that plays: the song's, with its changes, or the pattern's
+                 own
   --bits         WAV sample format: 16 or 24-bit integer, or 32-bit float (default 32f); an .mp3
                  output is 320 kbps
   --no-dither    write 16 bits by plain rounding: without it a 16-bit WAV is dithered (TPDF
@@ -913,7 +915,7 @@ fn render_project(job: RenderJob<'_>) -> Result<(), CliError> {
     let mut midi_out = midi_out_log.and_then(|_| link.take_midi_out());
     let mut sent = Vec::new();
 
-    let frames = dawsome_media::frames_for_bars(&player, bars, project.ppq, encoding)
+    let frames = dawsome_media::frames_for_bars(&player, bars, encoding)
         .ok_or(CliError::TooLong { bars })?;
     let mut failures = (!hosts.is_empty()).then(|| RenderPump::of(hosts.boxed(), project));
     for note in failures.iter().flat_map(RenderPump::latencies) {

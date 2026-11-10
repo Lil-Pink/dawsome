@@ -192,7 +192,68 @@ pub(super) fn key_event(
     Some(Message::Key(input))
 }
 
+/// Where the key of `scancode` (as a plugin window passes it on) lies, as the main window's keys
+/// are placed: winit's `from_scancode` for this platform, then the toolkit's conversion, the
+/// two steps a key the main window hears goes through. None for a key the toolkit has no place
+/// for.
+pub(super) fn plugin_key_code(scancode: u32) -> Option<key::Code> {
+    use iced_winit::winit::keyboard::PhysicalKey;
+    use iced_winit::winit::platform::scancode::PhysicalKeyExtScancode;
+    match iced_winit::conversion::physical_key(PhysicalKey::from_scancode(scancode)) {
+        key::Physical::Code(code) => Some(code),
+        key::Physical::Unidentified(_) => None,
+    }
+}
+
 impl App {
+    /// A key a plugin window passed on (a plugin's window had the keyboard focus): while the
+    /// keyboard plays notes, what the same key does in the main window's typing keyboard (its
+    /// note, octave, velocity, sustain or all notes off), through [`App::key_message`] typed in
+    /// a window of its own with no modifier held (a chord's press never comes) and nothing it
+    /// types (no shortcut is run from a plugin's window, and its keys are no label). Esc
+    /// pressed is nothing (it is the plugin's); every release is the keyboard's. With the
+    /// keyboard off, nothing.
+    pub(super) fn plugin_key(&mut self, scancode: u32, pressed: bool, repeat: bool) {
+        let code = plugin_key_code(scancode);
+        if self.host.key_monitor {
+            let what = match (pressed, repeat) {
+                (true, true) => "repeated",
+                (true, false) => "pressed",
+                (false, _) => "released",
+            };
+            println!("key-monitor: a plugin window's key {scancode} ({code:?}) {what}");
+        }
+        if !self.typing.on || (pressed && code == Some(key::Code::Escape)) {
+            return;
+        }
+        let input = KeyInput {
+            window: self.plugin_keys,
+            key: Key::Unidentified,
+            code,
+            modifiers: Modifiers::empty(),
+            pressed,
+            repeat,
+        };
+        // Nothing but the typing keyboard's message comes of a key that types nothing.
+        if let Some(Message::TypingKey {
+            code,
+            pressed,
+            repeat,
+        }) = self.key_message(input)
+        {
+            self.typing_key(code, pressed, repeat);
+        }
+    }
+
+    /// A plugin window lost the keyboard focus: while the keyboard plays notes, every note it
+    /// holds ends, as when the main window loses the keys (a key held now goes up where the app
+    /// never hears it).
+    pub(super) fn plugin_keys_lost(&mut self) {
+        if self.typing.on {
+            self.end_typed_notes();
+        }
+    }
+
     /// What `input` does now: the message it stands for, or none.
     pub(super) fn key_message(&mut self, input: KeyInput) -> Option<Message> {
         if let (Some(code), Key::Character(typed)) = (input.code, &input.key) {
@@ -318,6 +379,7 @@ impl App {
     /// channel's, an insert's or a track's name being typed. Each takes the keys as it opens.
     fn text_box_open(&self) -> bool {
         self.tempo_edit.is_some()
+            || self.signature_edit.is_some()
             || self.patterns.rename.is_some()
             || self.channel_rename.is_some()
             || self.mixer.rename.is_some()
@@ -617,6 +679,77 @@ mod tests {
         let sent = app.session.controls_sent().len();
         let _ = app.update(Message::WindowUnfocused);
         assert_eq!(app.session.controls_sent()[sent..], [Control::LiveNotesOff]);
+    }
+
+    // A plugin window's keys, by their scancodes as winit's from_scancode takes them: 30 is A
+    // (Linux's evdev KEY_A, input-event-codes.h; the PC scan code 0x1E on Windows), 44 is Z
+    // (KEY_Z, 0x2C), 1 is Esc (KEY_ESC, 0x01): the same numbers on both platforms. The piano
+    // row's table (keys/notes.rs) has A 0 semitones above its first note, 60 (C5, the toolbar's
+    // first octave), and Z one octave down. So A plays 60 and lets go of it; a repeat plays
+    // nothing; Z then moves the octave and A plays 48; Esc plays nothing and runs no Esc; a key
+    // pressed in the main window and let go of in the plugin's ends its note; the plugin
+    // window's keys losing the focus end what it holds; with the keyboard off nothing plays.
+    #[test]
+    fn a_plugin_windows_keys_play_the_typing_keyboard() {
+        let (mut app, _player) = app_on(Path::new(F1));
+        assert!(app.typing.on);
+        let velocity = super::super::typing::VELOCITY;
+        let sent = app.session.controls_sent().len();
+        app.plugin_key(30, true, false);
+        app.plugin_key(30, true, true);
+        app.plugin_key(30, false, false);
+        assert_eq!(
+            notes_from(&app, sent),
+            [
+                Control::LiveNoteOn { key: 60, velocity },
+                Control::LiveNoteOff { key: 60 }
+            ]
+        );
+        let sent = app.session.controls_sent().len();
+        app.plugin_key(44, true, false);
+        app.plugin_key(44, false, false);
+        app.plugin_key(30, true, false);
+        app.plugin_key(30, false, false);
+        assert_eq!(
+            notes_from(&app, sent),
+            [
+                Control::LiveNoteOn { key: 48, velocity },
+                Control::LiveNoteOff { key: 48 }
+            ]
+        );
+        let (mut app, _player) = app_on(Path::new(F1));
+        let _ = app.update(Message::OpenPicker(
+            crate::ui::picker::PickerTarget::AddInstrument,
+        ));
+        let sent = app.session.controls_sent().len();
+        app.plugin_key(1, true, false);
+        app.plugin_key(1, false, false);
+        assert!(notes_from(&app, sent).is_empty(), "Esc plays nothing");
+        assert!(app.picker.is_some(), "and is no Esc of the app's");
+        let _ = app.update(Message::Key(input(
+            letter("a"),
+            Code::KeyA,
+            Modifiers::empty(),
+            true,
+        )));
+        app.plugin_key(30, false, false);
+        assert_eq!(
+            notes_from(&app, sent),
+            [
+                Control::LiveNoteOn { key: 60, velocity },
+                Control::LiveNoteOff { key: 60 }
+            ],
+            "pressed in the main window, let go of in the plugin's"
+        );
+        app.plugin_key(30, true, false);
+        let sent = app.session.controls_sent().len();
+        app.plugin_keys_lost();
+        assert_eq!(app.session.controls_sent()[sent..], [Control::LiveNotesOff]);
+        let _ = app.update(Message::ToggleTyping);
+        let sent = app.session.controls_sent().len();
+        app.plugin_key(30, true, false);
+        app.plugin_key(30, false, false);
+        assert!(notes_from(&app, sent).is_empty(), "the keyboard off");
     }
 
     // A key is named by what the user's keyboard types on it: a French keyboard types q on the

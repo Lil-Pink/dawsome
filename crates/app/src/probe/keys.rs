@@ -123,7 +123,7 @@ fn k6_the_playlist_reaches_the_hint_bar() {
     );
     let hints = height - HINT_BAR_HEIGHT;
     let foot = hints - TIME_BAR_HEIGHT;
-    let rack = RACK_HEADER_HEIGHT + rack_size(2, 16).height;
+    let rack = RACK_HEADER_HEIGHT + rack_size(2, 16, 4).height;
     let top = TOOLBAR_HEIGHT
         + rack
         + crate::ui::panels::DIVIDER_BAND

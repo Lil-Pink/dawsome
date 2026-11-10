@@ -458,65 +458,65 @@
   },
   "gilt": {
    "colors": {
-    "bg": "15241C",
-    "panel": "1B2D23",
-    "raised": "23382C",
-    "hover": "2E4738",
-    "active": "395545",
-    "text": "E9E2C8",
-    "text_secondary": "9FA98F",
-    "accent": "F2BE4C",
-    "line_strong": "8C7230",
-    "line_soft": "2A3F33",
-    "text_disabled": "636D55",
-    "unlit_0": "243F30",
-    "unlit_1": "1D3527",
-    "audio_clip_body": "43544C"
+    "bg": "251812",
+    "panel": "2E201B",
+    "raised": "382A24",
+    "hover": "473832",
+    "active": "54453F",
+    "text": "D7C1B3",
+    "text_secondary": "B89E8D",
+    "accent": "F4BC7F",
+    "line_strong": "9C7854",
+    "line_soft": "3F312B",
+    "text_disabled": "7A6353",
+    "unlit_0": "40322C",
+    "unlit_1": "372923",
+    "audio_clip_body": "3C4D45"
    },
    "ratios": {
-    "text/bg": 12.43,
-    "text_secondary/bg": 6.57,
-    "text/panel": 11.19,
-    "text_secondary/panel": 5.91,
-    "text/raised": 9.67,
-    "text_secondary/raised": 5.11,
-    "text/hover": 7.8,
-    "text/active": 6.32,
-    "accent/bg": 9.41,
-    "accent/panel": 8.47,
-    "accent/raised": 7.32,
-    "channel_1/raised": 3.37,
-    "channel_2/raised": 4.56,
-    "channel_3/raised": 5.65,
-    "channel_4/raised": 6.2,
-    "channel_5/raised": 3.5,
-    "channel_6/raised": 5.66,
-    "channel_7/raised": 4.49,
-    "channel_8/raised": 4.76,
-    "CLIP_BODY/raised": 3.01,
-    "AUDIO_TITLE/raised": 2.06,
-    "AUTOMATION_TITLE/raised": 1.72,
-    "LED_ON/raised": 6.91,
-    "RECORD_ARMED/raised": 3.37,
-    "channel_1/unlit_0": 3.08,
-    "channel_1/unlit_1": 3.54,
-    "channel_2/unlit_0": 4.17,
-    "channel_2/unlit_1": 4.8,
-    "channel_3/unlit_0": 5.17,
-    "channel_3/unlit_1": 5.94,
-    "channel_4/unlit_0": 5.68,
-    "channel_4/unlit_1": 6.52,
-    "channel_5/unlit_0": 3.2,
-    "channel_5/unlit_1": 3.68,
-    "channel_6/unlit_0": 5.18,
-    "channel_6/unlit_1": 5.95,
-    "channel_7/unlit_0": 4.11,
-    "channel_7/unlit_1": 4.73,
-    "channel_8/unlit_0": 4.36,
-    "channel_8/unlit_1": 5.01,
-    "line_strong/panel": 3.16,
+    "text/bg": 9.99,
+    "text_secondary/bg": 6.83,
+    "text/panel": 9.09,
+    "text_secondary/panel": 6.21,
+    "text/raised": 7.98,
+    "text_secondary/raised": 5.45,
+    "text/hover": 6.47,
+    "text/active": 5.29,
+    "accent/bg": 10.14,
+    "accent/panel": 9.22,
+    "accent/raised": 8.1,
+    "channel_1/raised": 3.7,
+    "channel_2/raised": 5.0,
+    "channel_3/raised": 6.2,
+    "channel_4/raised": 6.81,
+    "channel_5/raised": 3.84,
+    "channel_6/raised": 6.21,
+    "channel_7/raised": 4.93,
+    "channel_8/raised": 5.23,
+    "CLIP_BODY/raised": 3.3,
+    "AUDIO_TITLE/raised": 2.26,
+    "AUTOMATION_TITLE/raised": 1.89,
+    "LED_ON/raised": 7.58,
+    "RECORD_ARMED/raised": 3.7,
+    "channel_1/unlit_0": 3.29,
+    "channel_1/unlit_1": 3.75,
+    "channel_2/unlit_0": 4.46,
+    "channel_2/unlit_1": 5.07,
+    "channel_3/unlit_0": 5.53,
+    "channel_3/unlit_1": 6.29,
+    "channel_4/unlit_0": 6.07,
+    "channel_4/unlit_1": 6.9,
+    "channel_5/unlit_0": 3.42,
+    "channel_5/unlit_1": 3.9,
+    "channel_6/unlit_0": 5.53,
+    "channel_6/unlit_1": 6.29,
+    "channel_7/unlit_0": 4.4,
+    "channel_7/unlit_1": 5.0,
+    "channel_8/unlit_0": 4.66,
+    "channel_8/unlit_1": 5.3,
+    "line_strong/panel": 3.91,
     "line_soft/raised": 1.11,
-    "audio_clip_body/raised": 1.56
+    "audio_clip_body/raised": 1.53
    },
    "failing": [
     "AUDIO_TITLE/raised",
@@ -689,8 +689,8 @@
     "derived": []
    },
    "gilt": {
-    "text_secondary": "9FA98F",
-    "text_disabled": "636D55",
+    "text_secondary": "B89E8D",
+    "text_disabled": "7A6353",
     "derived": [
      "text_disabled"
     ]
@@ -744,12 +744,12 @@
    },
    "gilt": {
     "before": [
-     "3B5747",
-     "2E4738"
+     "564741",
+     "473832"
     ],
     "after": [
-     "243F30",
-     "1D3527"
+     "40322C",
+     "372923"
     ]
    },
    "garnet": {
@@ -788,8 +788,8 @@
     "shaded": "B4B9BF"
    },
    "gilt": {
-    "designed": "E8DCB4",
-    "shaded": "CCC19A"
+    "designed": "D7C1B3",
+    "shaded": "BEA99B"
    },
    "garnet": {
     "designed": "E8D6D2",
@@ -815,8 +815,8 @@
     "lightness": null
    },
    "gilt": {
-    "body": "43544C",
-    "lightness": 34
+    "body": "3C4D45",
+    "lightness": 31
    },
    "garnet": {
     "body": "23332C",

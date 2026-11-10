@@ -535,6 +535,7 @@ fn grid_project() -> Project {
         Pattern {
             name: "Pattern 1".into(),
             length_bars: 1,
+            time_signature: None,
             copied_from: None,
             swing_tenths: STRAIGHT_SWING,
             kind: PatternKind::Pattern,
@@ -824,8 +825,11 @@ fn a_live_value_does_not_stick_while_automation_governs() {
     assert_eq!(out[0], [0.5; 2], "the stored volume, not the dragged one");
 }
 
-// The preview plays its file from frame 0 at unity through the master, also while stopped, and
-// StopPreview ends it.
+// The preview plays its file from frame 0 through the master, also while stopped, at the level a
+// new channel's step plays it (pin moved: it played at unity, 2.28 times louder than the rack):
+// each frame × 9/16 (a new channel's volume) × 100/128 (a step's velocity) = 225/512. By hand:
+// the ramp's frame k is (k + 1)/1024, so it plays (k + 1) · 225 / 2^19, exact in f32 (225 · 700
+// < 2^24). StopPreview ends it.
 #[test]
 fn a_preview_plays_through_the_master_while_stopped() {
     let project = fixture("p8_trim.json");
@@ -836,7 +840,11 @@ fn a_preview_plays_through_the_master_while_stopped() {
     assert!(link.preview(source).is_ok());
     let out = render(&mut player, 1000, 256);
     for (frame, value) in out.iter().enumerate() {
-        let want = tone.get(frame).copied().unwrap_or(0.0);
+        let want = if frame < 700 {
+            (frame as f32 + 1.0) * 225.0 / 524_288.0
+        } else {
+            0.0
+        };
         assert_eq!(*value, [want; 2], "frame {frame}");
     }
     assert!(
@@ -849,6 +857,62 @@ fn a_preview_plays_through_the_master_while_stopped() {
     link.send(Control::StopPreview).expect("room");
     let after = render(&mut player, 100, 100);
     assert!(after.iter().all(|frame| *frame == [0.0; 2]), "stopped");
+}
+
+// The preview's level by hand: a stereo file of 8 frames of [1.0, 1.0] previewed while stopped
+// plays [225/512, 225/512] = [0.439453125; 2] for 8 frames (9/16 · 25/32), then silence, and a
+// frame of [0.5, −0.25] plays [0.2197265625, −0.10986328125] (each side × 225/512, exact).
+// Mutation check: a gain of 9/16 alone gives 0.5625 and fails here.
+#[test]
+fn a_preview_plays_at_a_new_channels_step_level() {
+    let project = fixture("p8_trim.json");
+    let plan = compiled(&mut Compiler::new(), &project, PlayMode::Song, &[0.0]);
+    let (mut link, mut player) = realtime::link(plan, project.tempo);
+    let ones = SampleBuffer::stereo(vec![1.0; 16]);
+    assert!(link.preview(Box::new(MemorySource::new(ones))).is_ok());
+    let out = render(&mut player, 12, 12);
+    for (frame, value) in out.iter().enumerate() {
+        // 225/512 = 0.439453125, exact in f32.
+        let want = if frame < 8 { 225.0 / 512.0 } else { 0.0 };
+        assert_eq!(*value, [want; 2], "frame {frame}");
+    }
+    let mixed = SampleBuffer::stereo(vec![0.5, -0.25]);
+    assert!(link.preview(Box::new(MemorySource::new(mixed))).is_ok());
+    let out = render(&mut player, 1, 1);
+    // 0.5 · 225/512 = 225/1024 = 0.2197265625; −0.25 · 225/512 = −225/2048 = −0.10986328125.
+    assert_eq!(out[0], [225.0 / 1024.0, -225.0 / 2048.0]);
+}
+
+// The preview equals the rack: F1 with its channel at a new channel's volume (9/16) and its hits
+// at a step's velocity (100/128), its file a run of 1.0, plays its first hit's first frame at
+// what the same file previewed raw plays on its first frame: 225/512 both, both sides.
+#[test]
+fn a_preview_plays_as_loud_as_a_step_on_a_new_channel() {
+    let mut project = fixture("f1_four_on_floor.json");
+    let channel = project.channels.get_mut(&ChannelId(1)).expect("the kick");
+    channel.volume = 0.5625;
+    let pattern = project.patterns.get_mut(&PatternId(1)).expect("pattern 1");
+    for note in &mut pattern.notes {
+        note.velocity = 100.0 / 128.0;
+    }
+    project.validate().expect("valid");
+    let file = vec![1.0; 64];
+    let plan = compiled(
+        &mut Compiler::new(),
+        &project,
+        PlayMode::Pattern(PatternId(1)),
+        &file,
+    );
+    let (mut link, mut player) = realtime::link(plan, project.tempo);
+    link.send(Control::Play).expect("room");
+    let step = render(&mut player, 1, 1)[0];
+    let plan = compiled(&mut Compiler::new(), &project, PlayMode::Nothing, &file);
+    let (mut link, mut player) = realtime::link(plan, project.tempo);
+    let source = Box::new(MemorySource::new(SampleBuffer::from(file.clone())));
+    assert!(link.preview(source).is_ok());
+    let previewed = render(&mut player, 1, 1)[0];
+    assert_eq!(step, [225.0 / 512.0; 2], "the rack's step");
+    assert_eq!(previewed, step, "the preview");
 }
 
 // Known answer 8 in the engine: Record with a count-in plays one bar of bursts (0.25, then
