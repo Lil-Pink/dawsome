@@ -1,6 +1,6 @@
 # Dawsome
 
-The reference for Dawsome 0.1.4: every panel, gesture and setting. The README is the short introduction.
+The reference for Dawsome 0.1.5: every panel, gesture and setting. The README is the short introduction.
 
 Dawsome is a pattern-based digital audio workstation for Linux and Windows. Program beats in the
 channel rack, write melodies in the piano roll, arrange patterns, audio and automation in the
@@ -94,8 +94,10 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
     has the keys. Loop is kept for the next start.
 - **Playlist**: tracks holding pattern clips, audio clips (trim, gain, waveform, time-stretch or
   resample with pitch shift) and automation clips (linear, hold, smooth and exponential segments);
-  a pattern clip draws each note as a bar from its start to its end, as the piano roll does, one
-  row per pitch, a step hit as a short mark, a note running past the clip's end cut there;
+  a pattern clip draws each note as a bar from its start to just before its end, as the
+  piano roll does, by pitch over at least an octave where the lane has room (so a chord shows
+  its intervals) and a row a key where not, a drum's step hit as a block a step wide, the rows a compact block in the clip's middle with a gap
+  between them, softer notes paler, a note running past the clip's end cut there;
   pattern and song mode; a loop range; the timeline's scroll bar under the tracks, across the
   whole panel (under the track names too, so at the song's start its thumb begins at the
   panel's left edge). The lanes fit the panel, squeezing down to 32 px as tracks are added, then
@@ -639,19 +641,20 @@ programs are given shows the windows a little softer.
   no line over it to drag. In the panel's own window the button is not there: close the window,
   or press the panel's key or toolbar button in it, to put the panel back.
 - **Settings** (6 or F10, or the cog among the toolbar's panel buttons) opens a window of its
-  own beside the main one, with three pages, chosen by the tabs along its top: **General** (MIDI
+  own beside the main one, with four pages, chosen by the tabs along its top: **General** (MIDI
   input, the typing keyboard's octave, the hints, the zoom, the audio output and input, the
-  input latency), **Keys** (the note layout and every shortcut) and **Theme** (the theme, the
-  accent and the piano roll's notes' colour). It opens at a fixed size, about half the main
+  input latency), **Keys** (the note layout and every shortcut), **Theme** (the theme, the
+  accent and the piano roll's notes' colour) and **Music** (the project's key: a root, or "No
+  key", and a scale; one undo step each, saved with the project). It opens at a fixed size, about half the main
   window's width and two thirds of its height as the main window is at that moment, and cannot
   be resized; it opens again where it was last. In a wide window the General page uses the
   width: two columns from 800 pixels (the audio input and the input latency on the right),
   three from 1200 (the audio output in the middle). Its pages scroll, and Esc, its close button
   or the same key closes it from any page; it opens again on the page shown last.
 - **Reset to defaults**, at the foot of Settings → General, puts the looks and the layout back as
-  a first start has them: the zoom, the theme, the accent and the notes' colour, the open panels
-  (the Library, the channel rack, the playlist and the mixer, none in a window of its own), the
-  heights the
+  a first start has them: the zoom, the theme, the accent and its Lock, the notes' colour, the
+  open panels (the Library, the channel rack, the playlist and the mixer, none in a window of
+  its own), the heights the
   lines between panels were dragged to, the playlist's and the piano roll's zoom, the playlist's
   lane height, the piano roll's Follow, the Library's folded groups and the hint bar. Your MIDI
   inputs, audio devices, input latency, keys, the piano roll's Loop and the other windows'
@@ -675,11 +678,13 @@ programs are given shows the windows a little softer.
 - **Theme** (Settings → Theme) sets the colours of every window as one set, one of five, their
   keys in one row, each with a swatch of its set (its panel and its accent, two small squares,
   edged in the theme's light edge colour so a dark swatch shows on a dark page) before its name:
-  **Slate**, the default, darker and cooler than Graphite, its text brighter; **Graphite**, the
-  look Dawsome had first; **Gilt**, gold leaf on deep chocolate (the accent, the lit edges, the
-  knob rings and the fader caps in gold; an audio clip's body a shade lighter than elsewhere, so
-  it reads apart from the brown lanes); **Garnet**, rose gold on deep plum; **Fjord**, ice blue on deep navy. A theme changes the panels, the text, the lines, the piano keys and the
-  accent. Every theme writes labels of live information ("Bars", "Snap", group names, hints) in
+  **Slate**, the default, darker and cooler than Graphite, its text brighter, its accent a
+  violet; **Graphite**, the look Dawsome had first, its accent an orange; **Gilt**, gold leaf
+  on deep chocolate (the lit edges, the knob rings and the fader caps in gold, its accent a
+  teal; an audio clip's body a shade lighter than elsewhere, so it reads apart from the brown
+  lanes); **Garnet**, rose gold on deep plum, its accent a gold; **Fjord**, ice blue on deep
+  navy, its accent an amber. A theme changes the panels, the text, the lines, the piano keys and
+  the accent. Every theme writes labels of live information ("Bars", "Snap", group names, hints) in
   a grey that reads at 4.5:1 or more on its panels, and what cannot be used now (a button with
   nothing to do, an unplugged device) in a dimmer one; the channel colours, the clips,
   the notes, the lights, Record and the meters keep their colours in every theme, so what they
@@ -689,13 +694,17 @@ programs are given shows the windows a little softer.
 - **Colours** (Settings → Theme, under the theme's keys): a menu over one colour wheel chooses
   what the wheel sets, **Accent** (as it opens) or **Piano roll notes**.
 - **Accent** (Settings → Theme → Colours, the menu on Accent) makes the accent, the colour
-  of what is lit and selected (lit buttons, ticked boxes, the playhead, selections, slider fills), any
-  colour you like, in every theme. Drag round the ring of the colour wheel for the hue, and in
-  the square inside it for how strong (to the right) and how bright (up) it is; every window
+  of what is lit and selected (lit buttons, ticked boxes, the playhead, selections, slider
+  fills), any colour you like. Drag round the ring of the colour wheel for the hue, and in the
+  square inside it for how strong (to the right) and how bright (up) it is; every window
   follows as you drag, and the colour is kept when you let go. Or type a colour as #RRGGBB in the
   box beside the wheel and press Enter; anything else is refused, and the line under the row says
   how to write one. The swatch left of the wheel shows the accent drawn now. **Theme's own** puts
-  each theme's accent back (its key is lit while it shows). A colour that is hard to see on the
+  each theme's accent back (its key is lit while it shows). Choosing another theme (or a theme
+  on the command line) gives that theme's own accent in place of yours, unless **Lock**, beside
+  the menu while it is on Accent, is on (its word lit in the accent): then your colour stays over
+  every theme you choose. The lock changes no colour by itself, **Theme's own** leaves it as it
+  is, and **Reset to defaults** turns it off with the accent. A colour that is hard to see on the
   theme's panels, under 3:1 contrast, gets the note "Low contrast on this theme's panels" under
   the row, and is still yours to keep. The channel colours, the clips, the notes, the lights,
   Record, the loop range and the meters keep their colours whatever the accent.
@@ -774,6 +783,117 @@ song's, across its changes, with `--song`, a pattern's own otherwise (a 3/4 bar 
 top-left corner there, in the desktop's logical pixels (on another monitor, say), on X11 and
 Windows only; on Wayland, where the compositor places every window, it is ignored with a line
 saying so.
+
+## Jam
+
+A Jam writes a pattern for the instruments on the rack: drums, a bass line, chords and a melody,
+in the project's key, from a genre's rules and a seed. The same seed writes the same pattern, on
+any machine, in the app and on the command line. The chords, bass and melody move by octaves
+into the keys their instrument plays (in the app, the keys an instrument set's zones cover; on the
+command line, `--range`), and a note that no octave of fits there is left out; drums never move.
+A melody on a set of keys (an organ among them), pads or strings is held, each note lasting to
+the next one in its bar, since those sounds hold rather than die away; leads, plucks, bells and
+every other sound play the genre's rests and short notes (on the command line, `--sustained N`
+holds channel N's melody).
+
+In the app:
+
+- **Start a Jam**, at the right end of the channel rack's header, opens a prompt over the window
+  that lists the rack's channels in order, each with a tick and the part it plays, found from its
+  instrument: a drum set drums (the General MIDI keys; the kit's electronic drums its own: kick
+  28, snare 38, closed hat 56, open hat 46; its acoustic drums General MIDI's without the clap),
+  a bass set the bass, keys, pads, guitars and strings the chords, a synth set, mallets and
+  Dawsome Synth the melody, and a sampler playing a starter-kit drum (by its sound's name, else
+  the channel's) that one voice at the sound's own pitch: Kick… the kick, Snare, Clap, Hat
+  closed, Hat open, and Tom…, Rim, Cowbell and Crash the perc. A channel with no part found is
+  unticked and says "pick a role"; one that plays no notes (an audio or input channel) is listed
+  dim. The menu changes a part, and picking one ticks the channel. Next opens the Jam window on
+  the channels ticked; Cancel or Esc closes the prompt. The button is greyed, its tip saying why,
+  while the project is not in 4/4, its PPQ is not a multiple of 8, or the rack is empty.
+- **The Jam window** is a window of its own, as Settings is, 600 by 560 at a zoom of 100 % (it
+  grows with the zoom), which you cannot resize; on a screen with less room than that (its
+  height less 80 for the title bar and a desktop panel) it opens smaller, down to 420 by 400,
+  and its channel table scrolls. On X11 (and Windows) it opens over the Library's column at the
+  main window's left edge, under the toolbar with room for its own title bar; on Wayland the
+  window manager places it, as it places every window there. At its top, the settings in two
+  columns: **Genre** (Lo-fi, Boom bap, Trap, Drill, EDM / house, Phonk, Afrobeats), **Tempo**
+  (the genre's while **Auto** is ticked; unticked, the tempo typed, starting at the project's)
+  and **Bars** (4 or 8) on the left; **Key** (a root, C to B, and its scale: the project's key
+  when it has one, else A minor), **Swing** (the genre's, 50 % to 75 %) and **Seed** (with a die
+  beside it that puts a fresh seed in the field for the next roll, rolling nothing) on the
+  right. Under them the **Roll** button across the window, with a line under it saying what a
+  roll does now. Then the channel table, a row per channel in the rack's order: its instrument
+  (a menu), its part (a menu: Drums, Bass, Chords, Melody), **Lock**, its own die and **×**; and
+  last **+ Add instrument…**, a menu of the rack's channels not in the Jam, each with the part
+  it would play (the one found for it, else Melody). At the foot: **Send to playlist**,
+  **Accept** and **Close**.
+- **Changing the instruments**: picking another channel in a row's instrument menu moves that
+  row's part to it at once (the Jam pattern written again, one undo step): the same notes,
+  moved by octaves into the keys the new instrument plays, a melody held or cut back as the new
+  instrument holds notes or not, drums on its own drum keys (a voice it has no key for drops
+  out); nothing is drawn again, so the part is the one the seed writes for that channel. **×**
+  takes a channel out of the Jam and its part out of the pattern at once, one undo step. A
+  channel added, or a row's part changed, plays from the next roll: until then its row says
+  "roll to hear". Before the first roll, and after Accept, these change only the rows.
+- **Roll** writes the Jam as one undo step: the first roll adds a new pattern "Jam N" and
+  selects it in the pattern box, each roll after that replaces that same pattern, and **Accept**
+  keeps it, so the next roll adds the next new pattern. A roll sets the project's key and tempo
+  (with Auto ticked, one drawn inside the genre's range; else the one typed) and the pattern's
+  swing, and plays nothing by itself: press Play. Each genre has a few ways of playing each part
+  (kick patterns, hats, chord rhythms, bass shapes, melodies) and six chord progressions a mode,
+  and a roll picks one of each, so two rolls can sound far apart. Each roll takes a fresh seed
+  from the clock, shown in the **Seed** field; type a seed there and Roll writes
+  that roll again, as `dawsome jam --seed N` does with the same genre, key, bars and roles. **Send to playlist**, beside Accept, places a clip of the Jam
+  pattern on the playlist from the bar line at or before the song position (the playhead while
+  the song plays, else where it plays from), on the first track free there, else on a new track,
+  as one undo step. **Close**, Esc or the window's close button leave what was rolled, a
+  pattern like any other.
+- **Lock** keeps a channel's notes: a roll writes every part from the new seed, then puts the
+  locked channels' notes back from the roll before (repeated or cut to the bars). A channel's
+  die rolls that channel alone, keeping every other one the same way. While a kept channel plays
+  chords, bass or melody, the roll passes over seeds until one picks the chord progression the
+  kept part was written over (within 64 seeds), so the parts fit.
+- **The piano roll** shades the keys outside the project's key, rows and keyboard both, while its
+  own Scale chooser is off; with a scale chosen there, that scale's shading shows instead. A
+  project without a key shades nothing.
+
+```sh
+dawsome jam song.json out.json --genre lofi --key A --scale minor --seed 1 \
+    --role 1=drums --role 2=bass --role 3=chords --role 4=melody --auto-tempo
+```
+
+- **The pattern**: a new pattern named "Jam 1" (the next number no pattern has) after the
+  others, 4 or 8 bars (`--bars`, 4 by default), with the genre's swing. The other patterns stay
+  as they are. The project must be in 4/4, and its ticks per quarter note (`ppq` in the file)
+  a multiple of 8, so a hat roll's 32nd notes fall on whole ticks (every new project has 96).
+- **Genres**: `lofi`, `boombap`, `trap`, `drill`, `house` (or `edm`), `phonk` and `afrobeats`.
+  `--auto-tempo` also sets the project's tempo to one the seed draws inside the genre's range:
+  lo-fi 65 to 95 BPM, boom bap 80 to 100, trap 130 to 160, drill 138 to 146, house 120 to 130,
+  phonk 130 to 150, afrobeats 98 to 112.
+- **Key and scale**: `--key` takes a root (`C`, `F#`, `Bb`) and `--scale` one of `major`,
+  `minor`, `dorian`, `mixolydian`, `harmonic-minor`, `pentatonic-major` and `pentatonic-minor`.
+  The key is saved in the project; without the two flags the Jam writes in the key the project
+  already has. Chords stack thirds of the scale (a pentatonic key's chords come from its major or
+  minor scale), the bass plays their roots and fifths, and the melody keeps to the key's
+  pentatonic.
+- **Roles**: `--role N=ROLE` gives the channel whose `id` is N in the project file a part to
+  play: `drums` (the General MIDI keys: kick 36, snare 38, clap 39, closed hat 42, open hat 46,
+  perc 37), `drums:kick=24,snare=31,chat=40` (only the voices named, on those keys; the voices
+  are `kick`, `snare`, `clap`, `chat`, `ohat` and `perc`), one voice alone for a sample channel
+  (`kick`, `snare` … `perc`, played at the sample's own pitch), `bass`, `chords` or `melody`. A
+  channel without a role plays nothing in the Jam. The channels play in rack order whatever
+  order the flags come in, so a seed writes the same pattern however they are typed.
+  `--range N=LO-HI` gives channel N's instrument its keys, LO to HI (0 to 127, the lower first).
+- **The seed**: `--seed N`, any whole number (1 by default). Another seed is another roll.
+- **`--print`** writes the pattern as JSON to standard output: the genre, key, bars and seed,
+  the chords' scale degrees, the tempo drawn, the genre's swing, which variant of each part
+  played (counted from 1, in the order `crates/engine/src/jam/genres.json` lists them), and each
+  channel's notes (tick, length,
+  key, velocity from 0 to 1; a drum hit has length 0) with how many its range left out
+  (`dropped`).
+
+A project with a key is saved as format version 11, which versions before 0.1.5 refuse to open
+rather than drop the key; a project without one saves as before.
 
 ## Taking a song to another program
 

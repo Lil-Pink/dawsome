@@ -1571,6 +1571,7 @@ mod tests {
             ppq: 96,
             time_signature: crate::time::TimeSignature::COMMON,
             signature_changes: Vec::new(),
+            key: None,
             next_channel_id: ChannelId(8),
             channels: BTreeMap::from([
                 (ChannelId(7), channel("snare", 0.5)),

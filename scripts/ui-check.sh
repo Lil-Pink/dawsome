@@ -215,6 +215,13 @@
 #    the well's ground, the foot line, and the first section's picture drawn on the page, read
 #    from assets/help as a run from the build folder finds it (positions from
 #    crates/app/src/ui/help_window.rs).
+# 16b. The Jam on p36_band (Drums, Bass, Keys, Lead): its prompt over the main window (--show
+#    jam), the Jam window opened from it (--show jam-window, shot alone with --screenshot-window
+#    jam, at its fixed 600 x 560: its settings in two columns, the dice, the channel table and the
+#    buttons) and Settings' Music page with p36_keyed's key (D dorian,
+#    --settings-page music): each layout dumped and checked by tests/scripts/layout_bounds.py
+#    (no text cut short, no text over text, nothing outside the window but what scrolls). No
+#    pixel is probed: the shots are kept to look at.
 # 17. VST3 plugin windows (crates/host-vst3/tests/windows.rs, known answers gen_p29_expected.py):
 #    the test module's View class opens its editor embedded in a window of ours, resizes it
 #    from inside its own call, is held by its constraint when the window is resized, is
@@ -1084,6 +1091,19 @@ env -u DAWSOME_HELP_DIR cargo run -q -p dawsome-app -- --theme graphite \
     --screenshot "$shot" --screenshot-after 1200 --quit-after 4500
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::help::h1_the_help_window_shows_its_contents_its_page_and_a_picture --nocapture
+
+for stage in "j1_jam_prompt p36_band --show jam" \
+    "j1_jam_window p36_band --show jam-window --screenshot-window jam" \
+    "j1_music_page p36_keyed --panels settings --settings-page music --screenshot-window settings"; do
+    read -r name project flags <<<"$stage"
+    shot="$out_dir/$name.png"
+    dump="$out_dir/$name.json"
+    rm -f -- "$shot" "$dump"
+    cargo run -q -p dawsome-app -- --theme graphite --load "tests/fixtures/$project.json" \
+        --null-output --midi-ports none --window-size 1000x560 $flags \
+        --screenshot "$shot" --screenshot-after 1200 --quit-after 4000 --dump-layout "$dump"
+    scripts/python.sh -I -B tests/scripts/layout_bounds.py "$dump"
+done
 
 # 21. The zoom: F1 with the Library, the rack and the playlist at 100,
 # 125, 150 and 200 %, each 1920 x 1080 device pixels (the window's own size given, which the system's pixels

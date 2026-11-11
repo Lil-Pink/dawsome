@@ -37,6 +37,11 @@
    "args": ["--window-size", "1000x560", "--open-sample-editor", "clip:1", "--sample-editor-select", "14000-38000"],
    "window": "sample-editor"
   },
+  "jam": {
+   "project": "guide-song.json",
+   "args": ["--window-size", "1000x600", "--show", "jam-window"],
+   "window": "jam"
+  },
   "settings": {
    "project": "guide-song.json",
    "args": ["--panels", "settings", "--window-size", "680x440", "--hints", "on"],
@@ -61,6 +66,7 @@
   {"file": "synth-window.png", "shot": "synth", "crop": [0, 0, 924, 516], "width": 680, "rings": [[604, 301, 907, 357]]},
   {"file": "sample-editor.png", "shot": "editor", "crop": [0, 0, 900, 440], "width": 680},
   {"file": "mixer.png", "shot": "mixer", "crop": [0, 64, 680, 480], "rings": [[351, 95, 549, 185]]},
-  {"file": "settings-midi.png", "shot": "settings", "crop": [0, 0, 680, 230], "rings": [[6, 32, 230, 126]]}
+  {"file": "settings-midi.png", "shot": "settings", "crop": [0, 0, 680, 230], "rings": [[6, 32, 230, 126]]},
+  {"file": "jam.png", "shot": "jam", "crop": [0, 0, 600, 560]}
  ]
 }

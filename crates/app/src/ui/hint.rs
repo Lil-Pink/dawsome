@@ -2091,6 +2091,10 @@ fn setting_parts(hit: SettingHit, keys: &Keys) -> [Option<String>; 3] {
             &format!("{target} as hex"),
             "type a colour as #RRGGBB and press Enter",
         ),
+        SettingHit::AccentLock => three(
+            "Lock",
+            "keeps this accent when the theme changes; off, each theme brings its own",
+        ),
         SettingHit::OwnColor(ColorTarget::Accent) => {
             three("Theme's own", "the theme's own accent in place of yours")
         }
@@ -2646,9 +2650,9 @@ mod tests {
             .count();
         assert_eq!(
             others,
-            1 + 2 * 4,
-            "the menu, and for each target the wheel's two parts, the hex box and its own key: \
-             {kinds:?}"
+            1 + 1 + 2 * 4,
+            "the menu, the accent's Lock, and for each target the wheel's two parts, the hex box \
+             and its own key: {kinds:?}"
         );
         assert_eq!(
             themes.len(),

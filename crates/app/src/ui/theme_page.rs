@@ -2,7 +2,9 @@
 //! set (its panel and its own accent, two squares, [`ThemeId::swatch`]) beside its name, the
 //! theme drawn now on a button's face; and under them the colours' section: a menu choosing
 //! what the one colour wheel edits ([`ColorTarget`]: the accent, or the piano roll's notes),
-//! then the colour's row: the swatch of the colour drawn now, its colour wheel ([`Wheel`]), and
+//! with the Lock beside it while it is on the accent (the accent kept through a theme chosen;
+//! the notes' colour has no theme to follow), then the colour's row: the swatch of the colour
+//! drawn now, its colour wheel ([`Wheel`]), and
 //! beside the wheel its hex box over the key giving the colour back to the theme ("Theme's
 //! own") or the channels ("Channel's own"), with a line under the row for a note on it (low
 //! contrast, a hex refused). They were rows of the General page's Display section, between the
@@ -18,14 +20,15 @@
 
 use std::fmt;
 
+use iced::alignment::Horizontal;
 use iced::widget::canvas::{self, Event, Frame, Geometry};
-use iced::widget::{pick_list, pin, stack, text_input};
+use iced::widget::{button, pick_list, pin, stack, text_input};
 use iced::{mouse, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 use crate::app::Message;
 use crate::ui::color_wheel::{self, Hsv, Wheel, WheelPart};
 use crate::ui::fonts::size;
-use crate::ui::hint::Hover;
+use crate::ui::hint::{with_tip, Hover};
 use crate::ui::palette::{ThemeId, ACCENT_LEAST_CONTRAST};
 use crate::ui::settings_layout::{
     title_at, Hit, BOX_HEIGHT, HEADER_HEIGHT, INSET, LABEL_X, ROW_HEIGHT, SECTION_GAP,
@@ -126,6 +129,11 @@ pub const OWN_COLOR_WIDTH: f32 = 104.0;
 /// The menu over the row choosing what the wheel edits: its longest row ("Piano roll notes",
 /// 87.41 px) with the menu's padding and arrow (30 px), rounded up to 4 px.
 pub const TARGET_BOX_WIDTH: f32 = 120.0;
+/// The Lock beside the menu: the Jam window's Lock, its word and width (its word with 4 px
+/// either side), as tall as the menu.
+pub const LOCK_WIDTH: f32 = 48.0;
+const LOCK_WORD: &str = "Lock";
+const LOCK_TIP: &str = "Keep this accent when the theme changes";
 /// The colour's row is the wheel's height and 2 px above and below it. Why the wheel is 160 px
 /// here (120 on the General page): the row and the menu over it fit the page's least room, the
 /// Settings window's least height less its header and its foot line (240 − 24 − 22 = 194), so
@@ -198,6 +206,15 @@ pub fn target_box() -> Rectangle {
     )
 }
 
+/// The Lock, the row's gap right of the menu, as tall as it.
+pub fn lock_box() -> Rectangle {
+    let menu = target_box();
+    Rectangle::new(
+        Point::new(menu.x + menu.width + ACCENT_GAP, menu.y),
+        Size::new(LOCK_WIDTH, menu.height),
+    )
+}
+
 /// The colour's row, a row under the menu.
 pub fn color_row() -> Rectangle {
     Rectangle::new(
@@ -257,8 +274,8 @@ pub fn content_height() -> f32 {
 }
 
 /// What a press at `point` lands on while the wheel edits `target`: a theme's key, the key
-/// giving the colour back, the hex box or the menu (named for the hint line; each takes its own
-/// presses) or a part of the wheel.
+/// giving the colour back, the hex box, the menu or the accent's Lock (named for the hint line;
+/// each takes its own presses) or a part of the wheel.
 pub fn hit(point: Point, target: ColorTarget) -> Option<Hit> {
     if let Some(theme) = ThemeId::ALL
         .into_iter()
@@ -268,6 +285,9 @@ pub fn hit(point: Point, target: ColorTarget) -> Option<Hit> {
     }
     if target_box().contains(point) {
         return Some(Hit::ColorChoice);
+    }
+    if target == ColorTarget::Accent && lock_box().contains(point) {
+        return Some(Hit::AccentLock);
     }
     if own_color_key().contains(point) {
         return Some(Hit::OwnColor(target));
@@ -293,6 +313,8 @@ pub struct ThemePage {
     pub hex: String,
     /// Why the hex typed last was refused, until the colour next changes or more is typed.
     pub hex_refused: Option<String>,
+    /// Whether the Lock keeps the accent through a theme chosen.
+    pub locked: bool,
 }
 
 /// What the page's canvas keeps between events: what the cursor was over last, and the part of
@@ -305,7 +327,8 @@ pub struct PageState {
 
 impl ThemePage {
     /// The page under the header (which stays over it while it scrolls): a canvas as tall as its
-    /// content, the menu choosing what the wheel edits and the colour's hex box over it.
+    /// content, the menu choosing what the wheel edits, the accent's Lock beside it (its word lit
+    /// in the accent while on, as the Jam window's) and the colour's hex box over it.
     pub fn view<'a>(self) -> Element<'a, Message> {
         let height = content_height() - HEADER_HEIGHT;
         let choice = target_box();
@@ -328,12 +351,31 @@ impl ThemePage {
             .padding([(hex.height - HEX_LINE_HEIGHT) / 2.0, 4.0])
             .width(hex.width)
             .style(style::hex_box);
+        let lock = (self.target == ColorTarget::Accent).then(|| -> Element<'a, Message> {
+            let at = lock_box();
+            let word = iced::widget::text(LOCK_WORD)
+                .size(size::LABEL)
+                .line_height(iced::Pixels(HEX_LINE_HEIGHT))
+                .width(Fill)
+                .align_x(Horizontal::Center);
+            let toggle = button(word)
+                .width(at.width)
+                .height(at.height)
+                .padding([(at.height - HEX_LINE_HEIGHT) / 2.0, 4.0])
+                .style(style::tool_button(self.locked))
+                .on_press(Message::Settings(SettingsMessage::AccentLockToggled));
+            pin(with_tip(toggle, LOCK_TIP))
+                .x(at.x)
+                .y(at.y - HEADER_HEIGHT)
+                .into()
+        });
         let page = canvas::Canvas::new(self).width(Fill).height(height);
         stack![
             page,
             pin(menu).x(choice.x).y(choice.y - HEADER_HEIGHT),
             pin(input).x(hex.x).y(hex.y - HEADER_HEIGHT)
         ]
+        .extend(lock)
         .width(Fill)
         .height(height)
         .into()
@@ -658,6 +700,28 @@ mod tests {
         }
     }
 
+    // By hand: the Lock 12 px (the row's gap) right of the menu (12..132 by 107..125), 144..192
+    // (48 px, the Jam window's Lock) by 107..125, the menu's height and line, inside the row's
+    // text box. A press on it (168, 116) is the lock while the menu is on Accent and nothing on
+    // Piano roll notes, which has no Lock; one in the gap between the menu and it (138, 116)
+    // nothing.
+    #[test]
+    fn the_lock_stands_right_of_the_menu() {
+        assert_eq!(
+            lock_box(),
+            Rectangle::new(Point::new(144.0, 107.0), Size::new(48.0, 18.0))
+        );
+        let menu = target_box();
+        assert_eq!((lock_box().y, lock_box().height), (menu.y, menu.height));
+        assert!(lock_box().x + lock_box().width <= LABEL_X + TEXT_WIDTH);
+        let at = Point::new(168.0, 116.0);
+        assert_eq!(hit(at, ColorTarget::Accent), Some(Hit::AccentLock));
+        assert_eq!(hit(at, ColorTarget::Notes), None);
+        for target in ColorTarget::ALL {
+            assert_eq!(hit(Point::new(138.0, 116.0), target), None, "{target}");
+        }
+    }
+
     // The menu and the colour's row (24 + 164 = 188 px) fit the page's least room, the Settings
     // window's least height less its header and its foot line, 240 − 24 − 22 = 194, so a least
     // window scrolls the menu and the whole wheel into view.
@@ -673,7 +737,8 @@ mod tests {
     // The hex box holds any colour's "#RRGGBB" with 4 px either side, the key giving the colour
     // back its words with 8 px either side ("Theme's own" 76.76 px, "Channel's own" 84.09 at
     // 12 px), the menu its longest row with its 30 px of padding and arrow ("Piano roll notes"
-    // 87.41) and the note's line either note (209.54 px at most), in the app's font: each hex
+    // 87.41), the Lock its word with 4 px either side as the Jam window's, and the note's line
+    // either note (209.54 px at most), in the app's font: each hex
     // digit six times over, so the widest digit's six (ASCII is shaped without kerning) fit too.
     #[test]
     fn the_colours_words_fit_their_boxes() {
@@ -694,6 +759,8 @@ mod tests {
             let note = text_width(target.low_contrast(), size::LABEL);
             assert!(note <= TEXT_WIDTH, "{note}");
         }
+        let lock = text_width(LOCK_WORD, size::LABEL);
+        assert!(lock + 8.0 <= LOCK_WIDTH, "{lock}");
     }
 
     // The low-contrast note's rule by hand (tests/fixtures/gen_accent_expected.py's pairs):

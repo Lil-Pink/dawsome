@@ -128,7 +128,6 @@ pub const ADD_TRACK_HEIGHT: f32 = add_words::HEIGHT;
 
 /// A clip's title strip, over its body.
 pub const TITLE_HEIGHT: f32 = 10.0;
-pub const NOTE_MARK_WIDTH: f32 = 2.0;
 pub const SELECTED_OUTLINE: f32 = 2.0;
 
 /// A press this close to a clip's right edge resizes the clip (an audio clip's left edge too:

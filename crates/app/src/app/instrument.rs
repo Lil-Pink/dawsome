@@ -223,7 +223,7 @@ impl App {
 
     /// An instrument set's zones from its file, read as the Library reads sets; none for any
     /// other channel.
-    fn zones_of(&self, channel: &Channel) -> Vec<ZoneInfo> {
+    pub(super) fn zones_of(&self, channel: &Channel) -> Vec<ZoneInfo> {
         if channel.kind != ChannelKind::Instrument {
             return Vec::new();
         }
@@ -234,7 +234,7 @@ impl App {
     }
 
     /// The main file of an instrument channel's set on disk.
-    fn set_file(&self, channel: &Channel) -> std::path::PathBuf {
+    pub(super) fn set_file(&self, channel: &Channel) -> std::path::PathBuf {
         let roots = dawsome_media::ShippedRoots {
             user: dawsome_media::shipped_root(),
             installed: self.host.installed_instruments.clone(),

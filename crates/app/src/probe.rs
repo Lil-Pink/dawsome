@@ -926,10 +926,10 @@ mod tests {
         }
         // Each clip's start line (#1A1C1F) at its first pixel, x 120 and 248, and the mark of
         // Pattern 1's tick-0 note (#DDE6F0) right of it, never over it: on the line it read as
-        // a note outside the clip. The mark's row: one key in a 50 px lane, so the body under the
-        // 10 px title less 2 px padding each side is 36 px, the mark 4 px high in its middle, y
-        // 28..32 in the lane, 146 at its middle in the window (the lane's 22 is 138). (Pins
-        // moved: 33 px in the 47 px lane, the mark at 144.5; 50 px in a 64 px one, at 153.)
+        // a note outside the clip. The mark's row: one key in a 50 px lane, so the marks' room
+        // under the 10 px title, 4 px clear of it and of the lane's foot, is 32 px, its 6 px drum
+        // row centred in it from y 27, the mark 5 px high, y 28..33 in the lane, 146 its third
+        // row in the window (the lane's 22 is 138).
         let mark_y = lane_center(0, 30.0);
         assert_eq!(tracks(0.0, mark_y).y, 146.0);
         for (clip, start) in [(1, bar_x(0)), (2, bar_x(2))] {

@@ -70,7 +70,15 @@ impl App {
         self.settings.set_zoom(zoom);
         self.save_settings();
         self.rezoom(was, zoom);
-        Task::batch([due, self.pop_out_least_sizes(), self.window_sizes()])
+        // The Jam window keeps its fixed size at the new zoom, cut to its monitor again.
+        let jam = self.jam.window.map_or_else(Task::none, |id| {
+            window::monitor_size(id).map(move |monitor| Message::PopOutMonitor {
+                window: id,
+                size: crate::ui::jam::WINDOW_SIZE,
+                monitor,
+            })
+        });
+        Task::batch([due, self.pop_out_least_sizes(), self.window_sizes(), jam])
     }
 
     /// Every size the app holds in a window's own pixels, from zoom `was` to `now`: the main
@@ -100,6 +108,7 @@ impl App {
             (self.instrument_window, PopOut::Instrument),
             (self.settings_window, PopOut::Settings),
             (self.help.window, PopOut::Help),
+            (self.jam.window, PopOut::Jam),
             (self.params.window, PopOut::Params),
             (self.editor.window, PopOut::SampleEditor),
         ]
@@ -113,9 +122,11 @@ impl App {
     /// size in its pixels at the time it is asked (opening, it takes it in the system's, which
     /// `desktop::pop_out_settings` multiplies by the zoom).
     fn pop_out_least_sizes(&self) -> Task<Message> {
+        // The Jam window's least size is its fixed one, which `App::fit_jam_window` sets.
         Task::batch(
             self.open_pop_outs()
                 .into_iter()
+                .filter(|&(_, window)| window != PopOut::Jam)
                 .map(|(id, window)| window::set_min_size(id, Some(window.least_size()))),
         )
     }

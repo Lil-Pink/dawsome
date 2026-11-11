@@ -88,6 +88,8 @@ pub enum ShotWindow {
     Params,
     /// The sample editor.
     SampleEditor,
+    /// The Jam window.
+    Jam,
     /// A stacked panel's own window, popped out of the stack.
     Panel(crate::ui::panels::Panel),
 }
@@ -103,6 +105,8 @@ pub struct Windows {
     pub settings: Option<window::Id>,
     /// The Help window, while it is open.
     pub help: Option<window::Id>,
+    /// The Jam window, while it is open.
+    pub jam: Option<window::Id>,
     /// The parameter window, while it is open.
     pub params: Option<window::Id>,
     /// The sample editor's window, while it is open.
@@ -226,6 +230,10 @@ impl Runner {
                         None => {
                             return self.fail("there is no Help window to take a screenshot of")
                         }
+                    },
+                    (ShotWindow::Jam, _) => match windows.jam {
+                        Some(id) => Task::done(Some(id)),
+                        None => return self.fail("there is no Jam window to take a screenshot of"),
                     },
                     (ShotWindow::Params, _) => match windows.params {
                         Some(id) => Task::done(Some(id)),

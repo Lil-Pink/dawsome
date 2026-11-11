@@ -74,7 +74,7 @@ PROBE = "3FA7D6"
 PANEL = {"graphite": "2B2E33"}
 BG = {"graphite": "1F2125", "slate": "15171B", "gilt": "251812", "garnet": "26161D",
       "fjord": "092237"}
-THEME_ACCENT = {"slate": "F29A2E", "gilt": "F4BC7F", "garnet": "F0B39B", "fjord": "95DDEF"}
+THEME_ACCENT = {"slate": "BD00FF", "gilt": "3FD6C8", "garnet": "FFC63F", "fjord": "FFB347"}
 LEAST = 3.0
 # Hand-picked greys either side of 3:1 on Graphite's panel.
 CONTRAST_PAIR = {"below": "767676", "above": "777777"}

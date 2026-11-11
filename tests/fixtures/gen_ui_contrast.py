@@ -27,7 +27,9 @@ Expected values come from these inputs and the WCAG formula, never from app code
                 unlit step tones (a lit step reads apart from an unlit one); line_strong >= 2.5
                 on panel; line_soft from 1.1 to 1.6 on raised (decorative); audio_clip_body
                 >= 1.5 on raised (an audio clip's body reads apart from the lane it lies on)
-  failing       the rules a theme's ratios miss, in the rules' order
+  failing       the rules a theme's ratios miss, in the rules' order; Slate's accent, the violet
+                BD00FF, misses the accent's three (3.94 on bg, 3.63 on panel, 3.16 on raised),
+                over the 3:1 floor of a control's parts that Settings' low-contrast note holds
   ceiling       for a content colour that misses its rule, the most luminance a darker raised
                 could have and pass, (L + 0.05) / 3 - 0.05; below 0 no dark surface passes
   white keys    a shade down in every theme: the design's Graphite pair, CFD3D8 to B4B9BF,
@@ -74,22 +76,22 @@ THEMES = {
     "slate": {
         "bg": "15171B", "panel": "1C1F24", "raised": "262A30", "hover": "30353C",
         "active": "3A4048", "text": "DCE0E5", "text_secondary": "ACB2BA",
-        "text_disabled": "6B7179", "accent": "F29A2E", "line_strong": "7A818B",
+        "text_disabled": "6B7179", "accent": "BD00FF", "line_strong": "7A818B",
         "line_soft": "2F343B",
     },
     "gilt": {
         "bg": "251812", "panel": "2E201B", "raised": "382A24", "hover": "473832",
-        "active": "54453F", "text": "D7C1B3", "text_secondary": "B89E8D", "accent": "F4BC7F",
+        "active": "54453F", "text": "D7C1B3", "text_secondary": "B89E8D", "accent": "3FD6C8",
         "line_strong": "9C7854", "line_soft": "3F312B",
     },
     "garnet": {
         "bg": "26161D", "panel": "301B25", "raised": "3B222E", "hover": "492E3A",
-        "active": "583947", "text": "F3DEDB", "text_secondary": "BB9FA8", "accent": "F0B39B",
+        "active": "583947", "text": "F3DEDB", "text_secondary": "BB9FA8", "accent": "FFC63F",
         "line_strong": "9F6A5A", "line_soft": "422A35",
     },
     "fjord": {
         "bg": "092237", "panel": "0E2B43", "raised": "123652", "hover": "1E4465",
-        "active": "2C5275", "text": "D9E4EA", "text_secondary": "96A8B6", "accent": "95DDEF",
+        "active": "2C5275", "text": "D9E4EA", "text_secondary": "96A8B6", "accent": "FFB347",
         "line_strong": "578296", "line_soft": "1E3D58",
     },
 }

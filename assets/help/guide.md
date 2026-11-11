@@ -54,8 +54,8 @@ Each panel has a key that opens it, and the same key hides it again:
 - **Piano roll** (**3** or **F7**): a grid of notes, for melodies, bass lines and chords.
 - **Mixer** (**4** or **F9**): where you balance your sounds and add effects.
 - **Settings** (**6** or **F10**, or **Edit → Settings…**): a window of its own, for your
-  speakers, your MIDI keyboard, the keys and the colours, on three pages: **General**, **Keys**
-  and **Theme**.
+  speakers, your MIDI keyboard, the keys, the colours and the project's key, on four pages:
+  **General**, **Keys**, **Theme** and **Music**.
 
 The six small buttons near the right end of the toolbar open and close the panels too. The lit
 ones are open.
@@ -118,8 +118,10 @@ on each show its colours. Every window changes at once. Your clips, notes, light
 keep their colours in every theme.
 Under them, **Colours** has one colour wheel and a menu over it. On **Accent** it sets the
 colour of what is lit and selected to any colour you like: drag on the wheel, or type one such as
-#3FA7D6 and press Enter; **Theme's own** puts it back. On **Piano roll notes** it sets the colour
-of the notes in the piano roll; **Channel's own** gives each channel its colour back.
+#3FA7D6 and press Enter; **Theme's own** puts it back. Choosing another theme brings that
+theme's own accent; to keep yours on every theme, turn on **Lock** beside the menu. On **Piano
+roll notes** it sets the colour of the notes in the piano roll; **Channel's own** gives each
+channel its colour back.
 
 ## Speakers or headphones
 To choose where the sound goes, open Settings (**6**) and look under **Audio output**. It lists
@@ -362,6 +364,30 @@ straight on the grid; you hear the swing.
 
 A good habit: give each part of your song its own pattern, such as "Beat", "Bass" and "Chords".
 Then each part can have its own track, and you can bring it in or leave it out wherever you like.
+
+## A Jam
+**Start a Jam**, at the right end of the Channel rack's top strip, writes a pattern for the
+instruments on your rack: drums, a bass line, chords and a melody, in a genre you pick. First it
+lists your channels with the part each one plays, worked out from its instrument. Untick a channel
+to leave it out, or pick another part from its menu; a channel Dawsome can't place says "pick a
+role". **Next** opens the Jam window, which stands over the Library so you still see the rack and
+the Playlist.
+
+![The Jam window: the genre, tempo, bars, key, swing and seed, the Roll button, and a row for each channel](jam.png)
+
+Press **Roll**: a new pattern named "Jam 1" appears in the pattern box. Press **Play** to hear
+it. Roll again until you like it; each roll replaces Jam 1, and **Undo** takes a roll back.
+**Lock** keeps a channel's notes while the others change, and the small die beside it rolls that
+channel alone. **Accept** keeps the pattern, and the next roll starts "Jam 2". The genre sets the
+tempo while **Auto** is ticked; untick it to type your own. A Jam needs a project in 4/4.
+
+To play a part on another instrument, pick it in that row's instrument menu: you hear the change
+at once. **×** takes a channel out of the Jam, also at once. **+ Add instrument…** at the foot of
+the table brings in another channel from the rack; it says "roll to hear" until your next roll
+writes its part, and so does a row whose part you change.
+
+The key you roll in becomes the project's key, which you can also set on the **Music** page of
+Settings. The piano roll shades the keys outside it.
 
 ## Pattern mode and song mode
 **Pat** plays the pattern in the pattern box over and over, so you can work on it. **Song** plays

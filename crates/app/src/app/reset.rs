@@ -146,12 +146,14 @@ mod tests {
     }
 
     // "Reset to defaults", end to end through the General page: with the looks and the layout
-    // made by hand (zoom 150 %, Gilt, an accent and a notes' colour of the user's own, the piano
+    // made by hand (zoom 150 %, Gilt, an accent of the user's own with its Lock on and a notes'
+    // colour of the user's own, the piano
     // roll and the mixer open with the mixer popped out, a divider height kept, the views
     // zoomed, the playlist's lanes a height of their own, the roll's Follow off, a Library group
     // folded, the hints off) and a MIDI input and the playlist's Follow set, a first press only
     // arms the button (the page's button reads "Press again to reset"; nothing changes); a
-    // second resets, at once and in the file: zoom 100 %, Slate and its own accent, each
+    // second resets, at once and in the file: zoom 100 %, Slate and its own accent, the Lock
+    // off, each
     // channel's colour, the first start's panels (the Library, the rack, the playlist, the
     // mixer) with none popped and no height kept, the views at 64 px a bar and 16 px a step, the lanes fitting,
     // Follow on, nothing folded, the hints shown; the MIDI input and the playlist's Follow kept.
@@ -164,6 +166,8 @@ mod tests {
         app.set_theme(ThemeId::Gilt);
         app.set_color(ColorTarget::Accent, Some(Rgb([0x3F, 0xA7, 0xD6])));
         app.set_color(ColorTarget::Notes, Some(Rgb([0xE8, 0xF0, 0x4A])));
+        let _ = app.update(Message::Settings(SettingsMessage::AccentLockToggled));
+        assert!(app.settings.accent_lock());
         for panel in [Panel::PianoRoll, Panel::Mixer] {
             let _ = app.update(Message::TogglePanel(panel));
         }
@@ -200,6 +204,7 @@ mod tests {
             assert_eq!(settings.zoom(), Zoom::DEFAULT);
             assert_eq!(settings.theme(), ThemeId::Slate);
             assert_eq!((settings.accent(), settings.note_color()), (None, None));
+            assert!(!settings.accent_lock(), "the lock off");
             assert_eq!(settings.kept_heights(), Kept::default());
             assert_eq!(
                 (settings.roll_zoom(), settings.playlist_zoom()),

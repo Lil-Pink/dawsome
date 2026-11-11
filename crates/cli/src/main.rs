@@ -21,6 +21,11 @@
 //!   <out.dawproject>` packs it as a DAWproject file (Bitwig Studio, Studio One, Cubase). Each
 //!   export writes a report beside what it wrote (`<file>.report.txt`, printed too) naming what
 //!   did not carry over.
+//! - `dawsome jam <project> <out> --genre G [--key K --scale S] [--bars 4|8] [--seed N] --role
+//!   N=ROLE.. [--range N=LO-HI].. [--auto-tempo] [--print]` writes a Jam for the channels given
+//!   roles into a new pattern (a ranged channel's part fitted to its keys) and saves the project
+//!   with it (and the key, and with `--auto-tempo` a tempo in the genre's range); `--print`
+//!   writes the pattern as JSON to stdout.
 // No unsafe code here, and none may come: the plugin hosts hold the unsafe boundary.
 #![forbid(unsafe_code)]
 
@@ -34,12 +39,17 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use dawsome_engine::compile::{CompileError, Compiler, MixerError};
-use dawsome_engine::edit::{self, EditError, Touched};
+use dawsome_engine::edit::{self, Edit, EditError, Touched};
 use dawsome_engine::input::InputFeeds;
+use dawsome_engine::jam::{
+    self, Articulation, DrumMap, Genre, JamChannel, JamPattern, JamRequest, Role, Voice,
+};
 use dawsome_engine::midi_out;
 use dawsome_engine::plan::PlayMode;
 use dawsome_engine::processor::Registry;
-use dawsome_engine::project::{ChannelId, ChannelKind, LoadError, PatternId, Project};
+use dawsome_engine::project::{
+    ChannelId, ChannelKind, KeySignature, LoadError, PatternId, PitchClass, Project, Scale, MAX_KEY,
+};
 use dawsome_engine::realtime::{self, ControlRingFull, BLOCK_FRAMES};
 use dawsome_engine::smf::{self, SmfError};
 use dawsome_engine::transport::Control;
@@ -65,6 +75,9 @@ const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--s
        dawsome export-stems <project.json> <dir> [--bits 16|24|32f] [--no-dither]
                             [--plugin-path DIR].. [--cache FILE] [--cache-dir DIR]
        dawsome export-dawproject <project.json> <out.dawproject>
+       dawsome jam <project.json> <out.json> --genre GENRE [--key ROOT --scale SCALE]
+                   [--bars 4|8] [--seed N] --role N=ROLE.. [--range N=LO-HI]..
+                   [--sustained N].. [--auto-tempo] [--print]
        dawsome --version
   --song         play the playlist from tick 0 instead of looping pattern 1
   --pattern NAME  (render) loop the pattern of this name instead of pattern 1
@@ -106,6 +119,25 @@ const USAGE: &str = "usage: dawsome render <project.json> <out.wav|out.mp3> [--s
   --force        scan every plugin file again, also unchanged ones
   --pattern, --channel  (smf-import, smf-export) the pattern and channel a MIDI file is read
                  into or written from, by id (default: the first of each)
+  --genre        (jam) lofi, boombap, trap, drill, house (or edm), phonk or afrobeats
+  --key, --scale (jam) the key to write in, set on the project too: a root (C, F#, Bb) and
+                 major, minor, dorian, mixolydian, harmonic-minor, pentatonic-major or
+                 pentatonic-minor; both or neither (then the project's own key)
+  --bars         (jam) 4 or 8 (default 4)
+  --seed         (jam) the dice: the same seed writes the same pattern (default 1)
+  --role N=ROLE  (jam) channel N (by id) plays ROLE: drums (General MIDI keys: kick 36, snare
+                 38, clap 39, closed hat 42, open hat 46, perc 37), drums:VOICE=KEY,.. (only
+                 those voices, on those keys), one voice alone on key 60 (kick, snare, clap,
+                 chat, ohat, perc: a sample channel), bass, chords or melody (repeatable;
+                 channels play in rack order)
+  --sustained N  (jam) channel N's instrument holds its notes (keys, pads, strings): its
+                 melody's notes last to the next one; without it a channel plays the melody as
+                 written, for leads, plucks and bells (repeatable)
+  --range N=LO-HI  (jam) the keys channel N's instrument plays, LO to HI (0 to 127): its
+                 chords, bass or melody move by octaves into them, a note no octave fits left
+                 out; drums never move (repeatable)
+  --auto-tempo   (jam) set the project's tempo to one the seed draws inside the genre's range
+  --print        (jam) write the pattern as JSON to stdout
 render writes pattern 1 (with --song, the playlist; with --channel, that channel's notes
 alone) as a WAV or MP3 file, the same audio the app plays; scan finds the CLAP and VST3 plugins and writes the plugin catalogue; smf-import
 puts a MIDI file's notes on one channel of a pattern, and smf-export writes them out as a MIDI
@@ -115,6 +147,9 @@ export-midi writes the song as one MIDI file, a track per channel; export-stems 
 clips muted) and master.wav, every one the song's whole bars; export-dawproject packs the
 project as a DAWproject file, a track per channel. Each export writes a report beside what it
 wrote (<file>.report.txt) naming what did not carry over, and prints it.
+jam writes a pattern for the channels given roles, from the genre, the key and the seed, into a
+new pattern \"Jam N\" (the project must be in 4/4, its PPQ a multiple of 8), and saves the
+project to <out.json>.
 A sound's edits play as the project holds them, applied before a render starts; a long edited
 sound is kept in dawsome/edited in the user's cache folder. The user's cache folder is
 $DAWSOME_CACHE_HOME, else $XDG_CACHE_HOME or ~/.cache on Linux and %LOCALAPPDATA% on Windows.
@@ -157,6 +192,21 @@ struct SmfArgs {
     paths: Vec<PathBuf>,
     pattern: Option<PatternId>,
     channel: Option<ChannelId>,
+}
+
+/// The arguments of `dawsome jam`.
+struct JamArgs {
+    project: PathBuf,
+    out: PathBuf,
+    genre: Genre,
+    /// The key to write in; `None`: the project's own.
+    key: Option<KeySignature>,
+    bars: u32,
+    seed: u64,
+    /// The channels that play, their roles and ranges, in rack order.
+    channels: Vec<JamChannel>,
+    auto_tempo: bool,
+    print: bool,
 }
 
 /// The arguments of an export: the project and where the export goes.
@@ -285,6 +335,22 @@ enum CliError {
     Smf { path: PathBuf, source: SmfError },
     #[error("the import was refused: {0}")]
     Edit(#[from] EditError),
+    #[error("the Jam was refused: {0}")]
+    Jam(EditError),
+    #[error("project {}: a Jam writes 4/4 patterns and this project is in {signature}", .path.display())]
+    JamMeter { path: PathBuf, signature: String },
+    #[error("project {}: a Jam needs a PPQ that is a multiple of 8, and this project's is {ppq}", .path.display())]
+    JamPpq { path: PathBuf, ppq: u16 },
+    #[error("project {} has no key: give --key and --scale", .path.display())]
+    NoKey { path: PathBuf },
+    #[error("project {} has no channel {id}", .path.display())]
+    NoChannel { path: PathBuf, id: u32 },
+    #[error("project {}: channel {id} ({name}) plays no notes, so it takes no role", .path.display())]
+    PlaysNoNotes {
+        path: PathBuf,
+        id: u32,
+        name: String,
+    },
     #[error("project {}: it has no pattern or no channel", .path.display())]
     NothingToTarget { path: PathBuf },
     #[error("project {}: the song is empty: no clip on the playlist", .path.display())]
@@ -326,6 +392,7 @@ fn main() -> ExitCode {
         Some(command) if command == "export-dawproject" => {
             parse_export_args(args, "export-dawproject").and_then(|args| export_dawproject(&args))
         }
+        Some(command) if command == "jam" => parse_jam_args(args).and_then(|args| run_jam(&args)),
         Some(command) if command == "scan" => {
             let mut args = args.peekable();
             if args.next_if(|arg| arg == "--child").is_some() {
@@ -557,6 +624,189 @@ fn parse_export_args(
         ))
     })?;
     Ok(ExportArgs { project, out })
+}
+
+fn parse_jam_args(mut args: impl Iterator<Item = OsString>) -> Result<JamArgs, CliError> {
+    let mut paths = Vec::new();
+    let (mut genre, mut root, mut scale) = (None, None, None);
+    let (mut bars, mut seed) = (4, 1);
+    let mut roles: Vec<(ChannelId, Role)> = Vec::new();
+    let mut ranges: Vec<(ChannelId, (u8, u8))> = Vec::new();
+    let mut sustained: Vec<ChannelId> = Vec::new();
+    let (mut auto_tempo, mut print) = (false, false);
+    while let Some(arg) = args.next() {
+        let mut value = |flag: &str| {
+            args.next()
+                .map(|value| value.to_string_lossy().into_owned())
+                .ok_or_else(|| usage(&format!("{flag} needs a value")))
+        };
+        if arg == "--genre" {
+            let word = value("--genre")?;
+            genre = Some(word.parse::<Genre>().map_err(|e| usage(&e.to_string()))?);
+        } else if arg == "--key" {
+            let word = value("--key")?;
+            root = Some(
+                word.parse::<PitchClass>()
+                    .map_err(|e| usage(&e.to_string()))?,
+            );
+        } else if arg == "--scale" {
+            let word = value("--scale")?;
+            scale = Some(word.parse::<Scale>().map_err(|e| usage(&e.to_string()))?);
+        } else if arg == "--bars" {
+            bars = positive::<u32>("--bars", args.next())?;
+            if bars != 4 && bars != 8 {
+                return Err(usage("--bars is 4 or 8"));
+            }
+        } else if arg == "--seed" {
+            seed = whole::<u64>("--seed", args.next())?;
+        } else if arg == "--role" {
+            let (id, role) = parse_role(&value("--role")?)?;
+            if roles.iter().any(|(given, _)| *given == id) {
+                return Err(usage(&format!("channel {} was given two roles", id.0)));
+            }
+            roles.push((id, role));
+        } else if arg == "--range" {
+            let (id, range) = parse_range(&value("--range")?)?;
+            if ranges.iter().any(|(given, _)| *given == id) {
+                return Err(usage(&format!("channel {} was given two ranges", id.0)));
+            }
+            ranges.push((id, range));
+        } else if arg == "--sustained" {
+            sustained.push(ChannelId(positive::<u32>("--sustained", args.next())?));
+        } else if arg == "--auto-tempo" {
+            auto_tempo = true;
+        } else if arg == "--print" {
+            print = true;
+        } else if arg.to_string_lossy().starts_with('-') {
+            return Err(usage(&format!(
+                "unknown option '{}'",
+                arg.to_string_lossy()
+            )));
+        } else {
+            paths.push(PathBuf::from(arg));
+        }
+    }
+    let [project, out] = <[PathBuf; 2]>::try_from(paths).map_err(|paths| {
+        usage(&format!(
+            "jam takes 2 paths (project, output), got {}",
+            paths.len()
+        ))
+    })?;
+    let genre = genre.ok_or_else(|| usage("jam needs --genre"))?;
+    let key = match (root, scale) {
+        (Some(root), Some(scale)) => Some(KeySignature { root, scale }),
+        (None, None) => None,
+        _ => return Err(usage("--key and --scale go together")),
+    };
+    if roles.is_empty() {
+        return Err(usage("jam needs at least one --role"));
+    }
+    if let Some(id) = sustained
+        .iter()
+        .find(|id| roles.iter().all(|(given, _)| given != *id))
+    {
+        return Err(usage(&format!(
+            "--sustained names channel {}, which has no --role",
+            id.0
+        )));
+    }
+    if let Some((id, _)) = ranges
+        .iter()
+        .find(|(id, _)| roles.iter().all(|(given, _)| given != id))
+    {
+        return Err(usage(&format!(
+            "--range names channel {}, which has no --role",
+            id.0
+        )));
+    }
+    // Rack order, as the app gives them, so one seed writes the same pattern from either.
+    roles.sort_by_key(|(id, _)| *id);
+    let channels = roles
+        .into_iter()
+        .map(|(channel, role)| JamChannel {
+            channel,
+            role,
+            range: ranges
+                .iter()
+                .find(|(id, _)| *id == channel)
+                .map(|&(_, range)| range),
+            articulation: if sustained.contains(&channel) {
+                Articulation::Sustained
+            } else {
+                Articulation::Plucked
+            },
+        })
+        .collect();
+    Ok(JamArgs {
+        project,
+        out,
+        genre,
+        key,
+        bars,
+        seed,
+        channels,
+        auto_tempo,
+        print,
+    })
+}
+
+/// A `--range` value: `N=LO-HI`, keys 0 to 127 with LO at most HI.
+fn parse_range(text: &str) -> Result<(ChannelId, (u8, u8)), CliError> {
+    let refused = || {
+        usage(&format!(
+            "--range {text}: expected N=LO-HI, two keys from 0 to 127, the lower first (2=26-45)"
+        ))
+    };
+    let (channel, keys) = text.split_once('=').ok_or_else(refused)?;
+    let (low, high) = keys.split_once('-').ok_or_else(refused)?;
+    let id = channel.parse::<u32>().map_err(|_| refused())?;
+    let key = |text: &str| {
+        text.parse::<u8>()
+            .ok()
+            .filter(|&key| key <= MAX_KEY)
+            .ok_or_else(refused)
+    };
+    let (low, high) = (key(low)?, key(high)?);
+    if low > high {
+        return Err(refused());
+    }
+    Ok((ChannelId(id), (low, high)))
+}
+
+/// A `--role` value: `N=drums`, `N=drums:VOICE=KEY,..`, `N=VOICE` (one voice on key 60),
+/// `N=bass`, `N=chords` or `N=melody`.
+fn parse_role(text: &str) -> Result<(ChannelId, Role), CliError> {
+    let refused = || {
+        usage(&format!(
+            "--role {text}: expected N=drums, N=drums:kick=36,snare=38,.., N=kick (or snare, clap, chat, ohat, perc), N=bass, N=chords or N=melody"
+        ))
+    };
+    let (channel, what) = text.split_once('=').ok_or_else(refused)?;
+    let id = channel.parse::<u32>().map_err(|_| refused())?;
+    let role = match what {
+        "drums" => Role::Drums(DrumMap::GM),
+        "bass" => Role::Bass,
+        "chords" => Role::Chords,
+        "melody" => Role::Melody,
+        _ => match what.strip_prefix("drums:") {
+            Some(pairs) => {
+                let mut map = DrumMap::default();
+                for pair in pairs.split(',') {
+                    let (voice, key) = pair.split_once('=').ok_or_else(refused)?;
+                    let voice = Voice::from_id(voice).ok_or_else(refused)?;
+                    let key = key
+                        .parse::<u8>()
+                        .ok()
+                        .filter(|&key| key <= MAX_KEY)
+                        .ok_or_else(refused)?;
+                    map = map.with(voice, Some(key));
+                }
+                Role::Drums(map)
+            }
+            None => Role::Drums(DrumMap::single(Voice::from_id(what).ok_or_else(refused)?)),
+        },
+    };
+    Ok((ChannelId(id), role))
 }
 
 fn parse_stems_args(mut args: impl Iterator<Item = OsString>) -> Result<StemsArgs, CliError> {
@@ -1059,6 +1309,137 @@ fn smf_import(args: &SmfArgs) -> Result<(), CliError> {
     write_file(out, json.as_bytes())?;
     eprintln!("{}", imported.report.summary());
     Ok(())
+}
+
+fn run_jam(args: &JamArgs) -> Result<(), CliError> {
+    let mut project = load_project(&args.project)?;
+    if !project.time_signature.is_common() {
+        return Err(CliError::JamMeter {
+            path: args.project.clone(),
+            signature: project.time_signature.to_string(),
+        });
+    }
+    if !project.ppq.is_multiple_of(jam::PPQ_MULTIPLE) {
+        return Err(CliError::JamPpq {
+            path: args.project.clone(),
+            ppq: project.ppq,
+        });
+    }
+    let key = args.key.or(project.key).ok_or_else(|| CliError::NoKey {
+        path: args.project.clone(),
+    })?;
+    for &JamChannel { channel: id, .. } in &args.channels {
+        let channel = project
+            .channels
+            .get(&id)
+            .ok_or_else(|| CliError::NoChannel {
+                path: args.project.clone(),
+                id: id.0,
+            })?;
+        if !channel.plays_notes() {
+            return Err(CliError::PlaysNoNotes {
+                path: args.project.clone(),
+                id: id.0,
+                name: channel.name.clone(),
+            });
+        }
+    }
+    let base = args.project.parent().unwrap_or(Path::new(""));
+    if let Some(path) =
+        dawsome_media::overwritten_input(&args.out, dawsome_media::input_files(&project, base))
+    {
+        return Err(CliError::OutputIsInput { path });
+    }
+    let request = JamRequest {
+        genre: args.genre,
+        key,
+        bars: args.bars,
+        seed: args.seed,
+        ppq: project.ppq,
+        channels: args.channels.clone(),
+    };
+    let pattern = jam::write(&request);
+    let printed = args.print.then(|| jam_json(&request, &pattern));
+    let name = jam::pattern_name(&project);
+    let summary = format!(
+        "{name}: {} in {key}, {} bars, seed {}, chords on degrees {:?}",
+        args.genre.name(),
+        args.bars,
+        args.seed,
+        pattern.progression
+    );
+    let edit = Edit::Jam {
+        pattern_name: name,
+        replace: None,
+        pattern,
+        set_tempo: args.auto_tempo,
+        key,
+    };
+    edit::apply(&mut project, edit).map_err(CliError::Jam)?;
+    dawsome_media::rebase_samples(
+        &mut project,
+        base,
+        args.out.parent().unwrap_or(Path::new("")),
+    );
+    let mut json = project.to_json().map_err(|error| CliError::WriteFile {
+        path: args.out.clone(),
+        source: io::Error::other(error),
+    })?;
+    json.push('\n');
+    write_file(&args.out, json.as_bytes())?;
+    if let Some(text) = printed {
+        println!("{text}");
+    }
+    eprintln!("{summary}");
+    Ok(())
+}
+
+/// The Jam `pattern` written for `request`, as `--print` writes it: the request's genre, key,
+/// bars and seed, the chords' degrees, the tempo drawn, the genre's swing, each part's variant
+/// (from 1), and each channel's notes
+/// (velocity 0 to 1) with how many its range left out.
+fn jam_json(request: &JamRequest, pattern: &JamPattern) -> String {
+    let channels: Vec<serde_json::Value> = pattern
+        .parts
+        .iter()
+        .map(|part| {
+            let notes: Vec<serde_json::Value> = part
+                .notes
+                .iter()
+                .map(|note| {
+                    serde_json::json!({
+                        "tick": note.tick.0,
+                        "length": note.length.0,
+                        "key": note.key,
+                        "velocity": f64::from(note.velocity) / 100.0,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "channel": part.channel.0,
+                "role": part.role.id(),
+                "notes": notes,
+                "dropped": part.dropped,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "genre": request.genre.id(),
+        "key": request.key,
+        "bars": request.bars,
+        "seed": request.seed,
+        "progression": pattern.progression,
+        "tempo_mbpm": pattern.tempo.0,
+        "swing_tenths": pattern.swing_tenths,
+        // Each part's variant counted from 1, as genres.json lists them.
+        "variants": jam::PARTS
+            .iter()
+            .zip(pattern.variants)
+            .map(|(part, picked)| ((*part).to_owned(), serde_json::json!(picked + 1)))
+            .collect::<serde_json::Map<String, serde_json::Value>>(),
+        "channels": channels,
+    })
+    .to_string()
 }
 
 fn smf_export(args: &SmfArgs) -> Result<(), CliError> {

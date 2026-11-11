@@ -1,0 +1,1237 @@
+{
+  "_about": "Every genre's numbers for Jam, in one place: the engine reads this file (crates/engine/src/jam.rs) and so does the known-answer generator (tests/fixtures/gen_p36_expected.py). To tune a genre: change a number here, run scripts/python.sh -I tests/fixtures/gen_p36_expected.py --write tests/fixtures, look at what moved in p36_expected.json, then run scripts/check.sh. A hit: step 0 to 15, half (half a step later), length in steps (chords, bass), pitch (bass only: root, fifth, octave_up, octave_down, next_degree), chance or unless in per cent (neither: always), and base (a velocity in hundredths, less the part's jitter) or exact (no jitter). A part: hits, either (one chance a bar picks then or otherwise) or last_bar, with jitter (how far below its base a velocity may fall, 16 hundredths unless given). Each voice, the chords, the bass and the melody are lists of variants: a roll draws one of each (none when there is one), and a variant's _note says in plain words how it goes. A drum, chord or bass variant is a list of parts, drawn in order; a melody variant has its own count, starts and late chance, the band its notes walk in (low and high keys, an octave or more apart) and the most steps a note lasts (max_length).",
+  "genres": {
+    "lofi": {
+      "name": "Lo-fi",
+      "tempo_bpm": 78,
+      "tempo_range": [65, 95],
+      "swing_tenths": 580,
+      "sevenths": true,
+      "minor_progressions": [[1, 6, 3, 7], [1, 4, 6, 5], [1, 7, 6, 7], [1, 4, 7, 3], [1, 6, 4, 5], [2, 5, 1, 1]],
+      "major_progressions": [[1, 6, 4, 5], [2, 5, 1, 6], [1, 4, 6, 5], [1, 3, 6, 4], [4, 5, 3, 6], [1, 2, 4, 5]],
+      "kick": [
+        {"_note": "laid back: beat 1 and the and of 3, a pickup on the a of 2 or the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 10, "base": 90},
+              {"step": 7, "chance": 40, "base": 70},
+              {"step": 13, "chance": 25, "base": 65}
+            ]}
+          ]},
+        {"_note": "sparse: beat 1 and a late kick on the a of 3, a soft one before the next bar now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 11, "base": 85},
+              {"step": 15, "chance": 30, "base": 60}
+            ]}
+          ]},
+        {"_note": "boom bap: beat 1, the a of 2 into beat 3, a pickup before the next bar", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 7, "base": 75},
+              {"step": 8, "chance": 50, "base": 85},
+              {"step": 14, "chance": 40, "base": 65}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "backbeat on 2 and 4, soft ghosts after 3 and before the bar's end, a fill on the last bar", "parts": [
+            {"hits": [
+              {"step": 4, "base": 85},
+              {"step": 12, "base": 85},
+              {"step": 9, "chance": 30, "exact": 35},
+              {"step": 15, "chance": 20, "exact": 35}
+            ]},
+            {"last_bar": [
+              {"step": 14, "chance": 50, "base": 50},
+              {"step": 15, "chance": 50, "base": 60}
+            ]}
+          ]},
+        {"_note": "soft backbeat with more ghosts around it, a light run into the next loop", "parts": [
+            {"hits": [
+              {"step": 4, "base": 70},
+              {"step": 12, "base": 70},
+              {"step": 6, "chance": 30, "exact": 30},
+              {"step": 10, "chance": 25, "exact": 30},
+              {"step": 14, "chance": 30, "exact": 30}
+            ]},
+            {"last_bar": [
+              {"step": 13, "chance": 40, "base": 45},
+              {"step": 14, "chance": 40, "base": 50},
+              {"step": 15, "chance": 50, "base": 55}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "no clap", "parts": []}
+      ],
+      "closed_hat": [
+        {"_note": "8ths, a few dropped, soft 16ths between now and then", "parts": [
+            {"hits": [
+              {"step": 0, "unless": 10, "base": 60},
+              {"step": 2, "unless": 10, "base": 45},
+              {"step": 4, "unless": 10, "base": 60},
+              {"step": 6, "unless": 10, "base": 45},
+              {"step": 8, "unless": 10, "base": 60},
+              {"step": 10, "unless": 10, "base": 45},
+              {"step": 12, "unless": 10, "base": 60},
+              {"step": 14, "unless": 10, "base": 45}
+            ]},
+            {"hits": [
+              {"step": 1, "chance": 20, "exact": 35},
+              {"step": 3, "chance": 20, "exact": 35},
+              {"step": 5, "chance": 20, "exact": 35},
+              {"step": 7, "chance": 20, "exact": 35},
+              {"step": 9, "chance": 20, "exact": 35},
+              {"step": 11, "chance": 20, "exact": 35},
+              {"step": 13, "chance": 20, "exact": 35},
+              {"step": 15, "chance": 20, "exact": 35}
+            ]}
+          ]},
+        {"_note": "soft 16ths, the beats louder, some of the in-between ones left out", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 1, "unless": 15, "base": 35},
+              {"step": 2, "base": 45},
+              {"step": 3, "unless": 15, "base": 35},
+              {"step": 4, "base": 55},
+              {"step": 5, "unless": 15, "base": 35},
+              {"step": 6, "base": 45},
+              {"step": 7, "unless": 15, "base": 35},
+              {"step": 8, "base": 55},
+              {"step": 9, "unless": 15, "base": 35},
+              {"step": 10, "base": 45},
+              {"step": 11, "unless": 15, "base": 35},
+              {"step": 12, "base": 55},
+              {"step": 13, "unless": 15, "base": 35},
+              {"step": 14, "base": 45},
+              {"step": 15, "unless": 15, "base": 35}
+            ]}
+          ]},
+        {"_note": "quarter notes, an 8th between now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 4, "base": 55},
+              {"step": 8, "base": 55},
+              {"step": 12, "base": 55},
+              {"step": 2, "chance": 40, "base": 40},
+              {"step": 6, "chance": 40, "base": 40},
+              {"step": 10, "chance": 40, "base": 40},
+              {"step": 14, "chance": 40, "base": 40}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "an open hat on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 14, "chance": 35, "base": 50}
+            ]}
+          ]},
+        {"_note": "an open hat on the and of 2 or the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 6, "chance": 30, "base": 45},
+              {"step": 14, "chance": 30, "base": 45}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "no percussion", "parts": []}
+      ],
+      "chords": [
+        {"_note": "a chord a bar, now and then split in two halves", "parts": [
+            {"either": 35, "then": [
+              {"step": 0, "length": 8, "base": 60},
+              {"step": 8, "length": 8, "base": 60}
+            ], "otherwise": [
+              {"step": 0, "length": 16, "base": 60}
+            ]}
+          ]},
+        {"_note": "comping: on beat 1, a push on the a of 2 now and then, again on the and of 3", "parts": [
+            {"hits": [
+              {"step": 0, "length": 6, "base": 55},
+              {"step": 7, "length": 3, "chance": 50, "base": 50},
+              {"step": 10, "length": 6, "base": 55}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "root on 1, again on 3 most bars, the fifth before beat 4 now and then", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 6, "base": 80},
+              {"step": 8, "length": 4, "chance": 60, "base": 70},
+              {"step": 11, "length": 3, "pitch": "fifth", "chance": 30, "base": 60}
+            ]}
+          ]},
+        {"_note": "walking: root, fifth, the octave above now and then, root again", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 4, "base": 80},
+              {"step": 4, "length": 4, "pitch": "fifth", "base": 65},
+              {"step": 8, "length": 3, "pitch": "octave_up", "chance": 50, "base": 65},
+              {"step": 12, "length": 4, "base": 70}
+            ]}
+          ]},
+        {"_note": "sparse: one long root, a fifth picking up into the next bar now and then", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 12, "base": 80},
+              {"step": 14, "length": 2, "pitch": "fifth", "chance": 50, "base": 60}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "two to four notes a bar on 8ths and a few off-beats, often only two", "count": {"drawn": {"least": 2, "spread": 3, "rest_light": {"chance": 60, "cap": 2}}}, "starts": [0, 2, 3, 4, 6, 8, 10, 12, 14], "low": 60, "high": 72, "max_length": 12},
+        {"_note": "off-beat phrases: two or three notes between the beats", "count": {"drawn": {"least": 2, "spread": 2, "rest_light": {"chance": 50, "cap": 2}}}, "starts": [2, 6, 7, 10, 14], "low": 60, "high": 72, "max_length": 12},
+        {"_note": "long notes on the beats: one to three a bar", "count": {"drawn": {"least": 1, "spread": 3}}, "starts": [0, 4, 8, 12], "low": 60, "high": 72, "max_length": 12}
+      ]
+    },
+    "boombap": {
+      "name": "Boom bap",
+      "tempo_bpm": 90,
+      "tempo_range": [80, 100],
+      "swing_tenths": 560,
+      "sevenths": true,
+      "minor_progressions": [[1, 6, 3, 7], [1, 4, 6, 5], [1, 7, 6, 7], [1, 6, 2, 5], [1, 4, 1, 5], [4, 1, 7, 1]],
+      "major_progressions": [[1, 6, 4, 5], [2, 5, 1, 6], [1, 4, 6, 5], [2, 5, 1, 1], [1, 6, 2, 5], [4, 4, 1, 1]],
+      "kick": [
+        {"_note": "beat 1 and the and of 3, pickups on the a of 2 and before beat 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 10, "base": 90},
+              {"step": 7, "chance": 40, "base": 90},
+              {"step": 11, "chance": 25, "base": 90}
+            ]}
+          ]},
+        {"_note": "double kick: beat 1 and the a of 1, the and of 3, a pickup before the next bar now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 3, "base": 75},
+              {"step": 10, "base": 90},
+              {"step": 15, "chance": 40, "base": 65}
+            ]}
+          ]},
+        {"_note": "beats 1 and 3 with a skip on the and of 2 and the a of 3 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 6, "chance": 60, "base": 80},
+              {"step": 8, "base": 90},
+              {"step": 11, "chance": 30, "base": 70}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "backbeat on 2 and 4 with soft ghosts after 3 and before the bar's end", "parts": [
+            {"hits": [
+              {"step": 4, "base": 85},
+              {"step": 12, "base": 85},
+              {"step": 9, "chance": 35, "exact": 35},
+              {"step": 15, "chance": 25, "exact": 35}
+            ]}
+          ]},
+        {"_note": "hard backbeat, no ghosts, a flam-like pickup before the next bar now and then", "parts": [
+            {"hits": [
+              {"step": 4, "base": 90},
+              {"step": 12, "base": 90},
+              {"step": 15, "chance": 40, "base": 50}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "no clap", "parts": []},
+        {"_note": "a soft clap doubling the backbeat", "parts": [
+            {"hits": [
+              {"step": 4, "base": 60},
+              {"step": 12, "base": 60}
+            ]}
+          ]}
+      ],
+      "closed_hat": [
+        {"_note": "8ths, a few dropped, soft 16ths between now and then", "parts": [
+            {"hits": [
+              {"step": 0, "unless": 10, "base": 60},
+              {"step": 2, "unless": 10, "base": 45},
+              {"step": 4, "unless": 10, "base": 60},
+              {"step": 6, "unless": 10, "base": 45},
+              {"step": 8, "unless": 10, "base": 60},
+              {"step": 10, "unless": 10, "base": 45},
+              {"step": 12, "unless": 10, "base": 60},
+              {"step": 14, "unless": 10, "base": 45}
+            ]},
+            {"hits": [
+              {"step": 1, "chance": 20, "exact": 35},
+              {"step": 3, "chance": 20, "exact": 35},
+              {"step": 5, "chance": 20, "exact": 35},
+              {"step": 7, "chance": 20, "exact": 35},
+              {"step": 9, "chance": 20, "exact": 35},
+              {"step": 11, "chance": 20, "exact": 35},
+              {"step": 13, "chance": 20, "exact": 35},
+              {"step": 15, "chance": 20, "exact": 35}
+            ]}
+          ]},
+        {"_note": "straight 8ths, the off-beats louder", "parts": [
+            {"hits": [
+              {"step": 0, "base": 45},
+              {"step": 2, "base": 60},
+              {"step": 4, "base": 45},
+              {"step": 6, "base": 60},
+              {"step": 8, "base": 45},
+              {"step": 10, "base": 60},
+              {"step": 12, "base": 45},
+              {"step": 14, "base": 60}
+            ]}
+          ]},
+        {"_note": "16ths with a shuffle's lean: the beats loud, the rest soft", "parts": [
+            {"hits": [
+              {"step": 0, "base": 50},
+              {"step": 1, "base": 35},
+              {"step": 2, "base": 35},
+              {"step": 3, "base": 35},
+              {"step": 4, "base": 50},
+              {"step": 5, "base": 35},
+              {"step": 6, "base": 35},
+              {"step": 7, "base": 35},
+              {"step": 8, "base": 50},
+              {"step": 9, "base": 35},
+              {"step": 10, "base": 35},
+              {"step": 11, "base": 35},
+              {"step": 12, "base": 50},
+              {"step": 13, "base": 35},
+              {"step": 14, "base": 35},
+              {"step": 15, "base": 35}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "an open hat on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 14, "chance": 35, "base": 50}
+            ]}
+          ]},
+        {"_note": "an open hat on the and of 4 every bar, on the and of 2 now and then", "parts": [
+            {"hits": [
+              {"step": 6, "chance": 30, "base": 45},
+              {"step": 14, "base": 50}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "no percussion", "parts": []}
+      ],
+      "chords": [
+        {"_note": "a chord a bar, now and then split in two halves", "parts": [
+            {"either": 35, "then": [
+              {"step": 0, "length": 8, "base": 60},
+              {"step": 8, "length": 8, "base": 60}
+            ], "otherwise": [
+              {"step": 0, "length": 16, "base": 60}
+            ]}
+          ]},
+        {"_note": "sample chops: stabs on 1 and the and of 2, a longer one on beat 4 most bars", "parts": [
+            {"hits": [
+              {"step": 0, "length": 3, "base": 65},
+              {"step": 6, "length": 2, "base": 60},
+              {"step": 12, "length": 4, "chance": 70, "base": 60}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "root on 1, again on 3 most bars, the fifth before beat 4 now and then", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 6, "base": 80},
+              {"step": 8, "length": 4, "chance": 60, "base": 70},
+              {"step": 11, "length": 3, "pitch": "fifth", "chance": 30, "base": 60}
+            ]}
+          ]},
+        {"_note": "following the kick: root on 1, a fifth on the a of 1 now and then, root on the and of 3", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 3, "base": 85},
+              {"step": 3, "length": 2, "pitch": "fifth", "chance": 50, "base": 65},
+              {"step": 10, "length": 4, "base": 80},
+              {"step": 14, "length": 2, "pitch": "octave_up", "chance": 30, "base": 60}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "two to four notes a bar on 8ths and a few off-beats, often only two", "count": {"drawn": {"least": 2, "spread": 3, "rest_light": {"chance": 60, "cap": 2}}}, "starts": [0, 2, 3, 4, 6, 8, 10, 12, 14], "low": 60, "high": 72, "max_length": 8},
+        {"_note": "call and answer: short notes on beat 1, the a of 1, beat 3 and the a of 3", "count": {"drawn": {"least": 2, "spread": 3}}, "starts": [0, 3, 8, 11], "low": 60, "high": 72, "max_length": 8}
+      ]
+    },
+    "trap": {
+      "name": "Trap",
+      "tempo_bpm": 140,
+      "tempo_range": [130, 160],
+      "swing_tenths": 500,
+      "sevenths": false,
+      "minor_progressions": [[1, 6, 7, 1], [1, 1, 6, 7], [1, 6, 4, 5], [1, 4, 6, 1], [6, 4, 1, 7], [1, 7, 6, 5]],
+      "major_progressions": [[1, 5, 6, 4], [6, 4, 1, 5], [1, 4, 6, 5], [4, 1, 5, 6], [1, 6, 4, 5], [6, 5, 4, 5]],
+      "kick": [
+        {"_note": "beat 1, then kicks on the and of 2, the and of 3 and the a of 4 by chance", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 6, "chance": 50, "base": 90},
+              {"step": 10, "chance": 60, "base": 90},
+              {"step": 13, "chance": 35, "base": 90}
+            ]}
+          ]},
+        {"_note": "sparse: beat 1 and the a of 2 most bars, the a of 3 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 95},
+              {"step": 7, "chance": 70, "base": 85},
+              {"step": 11, "chance": 40, "base": 80}
+            ]}
+          ]},
+        {"_note": "bouncy: beat 1, the a of 1 often, the and of 3, a pickup after it now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 95},
+              {"step": 3, "chance": 60, "base": 80},
+              {"step": 10, "base": 90},
+              {"step": 11, "chance": 50, "base": 75}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "one snare on beat 3", "parts": [
+            {"hits": [
+              {"step": 8, "base": 90}
+            ]}
+          ]},
+        {"_note": "snare on beat 3, a roll into the next loop on the last bar", "parts": [
+            {"hits": [
+              {"step": 8, "base": 90}
+            ]},
+            {"last_bar": [
+              {"step": 13, "chance": 50, "base": 55},
+              {"step": 14, "chance": 60, "base": 60},
+              {"step": 15, "chance": 70, "base": 70}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "a clap with the snare on beat 3", "parts": [
+            {"hits": [
+              {"step": 8, "base": 80}
+            ]}
+          ]},
+        {"_note": "a clap on beat 3 and a late one on the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 8, "base": 80},
+              {"step": 15, "chance": 30, "base": 60}
+            ]}
+          ]}
+      ],
+      "closed_hat": [
+        {"_note": "16ths, the beats louder, a 32nd roll over beat 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 1, "base": 40},
+              {"step": 2, "base": 40},
+              {"step": 3, "base": 40},
+              {"step": 4, "base": 55},
+              {"step": 5, "base": 40},
+              {"step": 6, "base": 40},
+              {"step": 7, "base": 40},
+              {"step": 8, "base": 55},
+              {"step": 9, "base": 40},
+              {"step": 10, "base": 40},
+              {"step": 11, "base": 40},
+              {"step": 12, "base": 55},
+              {"step": 13, "base": 40},
+              {"step": 14, "base": 40},
+              {"step": 15, "base": 40}
+            ]},
+            {"either": 30, "then": [
+              {"step": 12, "half": true, "exact": 35},
+              {"step": 13, "half": true, "exact": 35},
+              {"step": 14, "half": true, "exact": 35},
+              {"step": 15, "half": true, "exact": 35}
+            ], "otherwise": []}
+          ]},
+        {"_note": "8ths with 32nd rolls over beat 2 or beat 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 2, "base": 45},
+              {"step": 4, "base": 55},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 55},
+              {"step": 10, "base": 45},
+              {"step": 12, "base": 55},
+              {"step": 14, "base": 45}
+            ]},
+            {"either": 40, "then": [
+              {"step": 4, "half": true, "exact": 35},
+              {"step": 5, "half": true, "exact": 35},
+              {"step": 6, "half": true, "exact": 35},
+              {"step": 7, "half": true, "exact": 35}
+            ], "otherwise": []},
+            {"either": 40, "then": [
+              {"step": 12, "half": true, "exact": 35},
+              {"step": 13, "half": true, "exact": 35},
+              {"step": 14, "half": true, "exact": 35},
+              {"step": 15, "half": true, "exact": 35}
+            ], "otherwise": []}
+          ]},
+        {"_note": "16ths with a 32nd stutter after the a of 2 and at the bar's end, half the time each", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 1, "base": 40},
+              {"step": 2, "base": 40},
+              {"step": 3, "base": 40},
+              {"step": 4, "base": 55},
+              {"step": 5, "base": 40},
+              {"step": 6, "base": 40},
+              {"step": 7, "base": 40},
+              {"step": 8, "base": 55},
+              {"step": 9, "base": 40},
+              {"step": 10, "base": 40},
+              {"step": 11, "base": 40},
+              {"step": 12, "base": 55},
+              {"step": 13, "base": 40},
+              {"step": 14, "base": 40},
+              {"step": 15, "base": 40},
+              {"step": 7, "half": true, "chance": 50, "exact": 35},
+              {"step": 15, "half": true, "chance": 60, "exact": 35}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "an open hat on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 14, "chance": 20, "base": 50}
+            ]}
+          ]},
+        {"_note": "an open hat on the and of 3 now and then", "parts": [
+            {"hits": [
+              {"step": 10, "chance": 40, "base": 50}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "no percussion", "parts": []}
+      ],
+      "chords": [
+        {"_note": "one long chord a bar", "parts": [
+            {"hits": [
+              {"step": 0, "length": 16, "base": 55}
+            ]}
+          ]},
+        {"_note": "two half-bar chords, the second softer", "parts": [
+            {"hits": [
+              {"step": 0, "length": 8, "base": 55},
+              {"step": 8, "length": 8, "base": 50}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "a long 808 root, a short one on the and of 3, an octave drop on beat 4 by chance", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 8, "base": 90},
+              {"step": 10, "length": 2, "chance": 50, "base": 80},
+              {"step": 12, "length": 4, "pitch": "octave_down", "chance": 40, "base": 80}
+            ]}
+          ]},
+        {"_note": "808 slides: long root, an octave drop on the and of 2, root on the a of 3, a slide up at the end", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 6, "base": 90},
+              {"step": 6, "length": 4, "pitch": "octave_down", "chance": 60, "base": 80},
+              {"step": 11, "length": 3, "chance": 50, "base": 80},
+              {"step": 14, "length": 2, "pitch": "next_degree", "chance": 40, "base": 75}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "one or two notes a bar, often only one", "count": {"drawn": {"least": 1, "spread": 2, "rest_light": {"chance": 60, "cap": 2}}}, "starts": [0, 2, 3, 4, 6, 8, 10, 12, 14], "low": 60, "high": 72, "max_length": 8},
+        {"_note": "triplet-feel bells: two or three notes on a 3-3-2 grid", "count": {"drawn": {"least": 2, "spread": 2}}, "starts": [0, 3, 6, 8, 11, 14], "low": 60, "high": 72, "max_length": 8}
+      ]
+    },
+    "drill": {
+      "name": "Drill",
+      "tempo_bpm": 142,
+      "tempo_range": [138, 146],
+      "swing_tenths": 500,
+      "sevenths": false,
+      "minor_progressions": [[1, 6, 7, 1], [1, 4, 1, 7], [1, 6, 3, 7], [1, 1, 6, 5], [6, 7, 1, 1], [1, 4, 6, 7]],
+      "major_progressions": [[6, 4, 1, 5], [1, 5, 6, 4], [6, 5, 4, 5], [1, 6, 4, 5], [4, 5, 6, 6], [1, 4, 5, 1]],
+      "kick": [
+        {"_note": "beat 1 and the a of 3, the and of 2 and the and of 4 by chance", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 11, "base": 90},
+              {"step": 6, "chance": 50, "base": 90},
+              {"step": 14, "chance": 30, "base": 90}
+            ]}
+          ]},
+        {"_note": "syncopated: the and of 1 and the a of 3, beat 1 now and then, the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 2, "base": 90},
+              {"step": 11, "base": 90},
+              {"step": 0, "chance": 50, "base": 85},
+              {"step": 14, "chance": 30, "base": 80}
+            ]}
+          ]},
+        {"_note": "half-time: beat 1 and the and of 3, a ghost on the a of 2 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 10, "base": 90},
+              {"step": 7, "chance": 40, "base": 70}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "snare on beat 3, a soft one on the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 8, "base": 85},
+              {"step": 13, "chance": 40, "base": 50}
+            ]}
+          ]},
+        {"_note": "snare on beat 3, a ghost after beat 2 and on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 8, "base": 85},
+              {"step": 5, "chance": 30, "exact": 35},
+              {"step": 14, "chance": 50, "base": 45}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "no clap", "parts": []},
+        {"_note": "a clap layered on the snare on beat 3", "parts": [
+            {"hits": [
+              {"step": 8, "base": 75}
+            ]}
+          ]}
+      ],
+      "closed_hat": [
+        {"_note": "8ths, half the bars with a triplet feel (the and of 1 and 3 pushed a 16th late)", "parts": [
+            {"either": 50, "then": [
+              {"step": 0, "base": 60},
+              {"step": 3, "base": 40},
+              {"step": 4, "base": 60},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 60},
+              {"step": 11, "base": 40},
+              {"step": 12, "base": 60},
+              {"step": 14, "base": 45}
+            ], "otherwise": [
+              {"step": 0, "base": 60},
+              {"step": 2, "base": 45},
+              {"step": 4, "base": 60},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 60},
+              {"step": 10, "base": 45},
+              {"step": 12, "base": 60},
+              {"step": 14, "base": 45}
+            ]}
+          ]},
+        {"_note": "triplet hats on a 3-3-2 grid, a 32nd after the last now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 60},
+              {"step": 3, "base": 45},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 60},
+              {"step": 11, "base": 45},
+              {"step": 14, "base": 45},
+              {"step": 14, "half": true, "chance": 40, "exact": 35}
+            ]}
+          ]},
+        {"_note": "8ths with 32nd stutters after the and of 2 and at the bar's end now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 2, "base": 45},
+              {"step": 4, "base": 55},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 55},
+              {"step": 10, "base": 45},
+              {"step": 12, "base": 55},
+              {"step": 14, "base": 45},
+              {"step": 6, "half": true, "chance": 40, "exact": 35},
+              {"step": 15, "half": true, "chance": 40, "exact": 35}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "no open hat", "parts": []},
+        {"_note": "an open hat on the a of 2 now and then", "parts": [
+            {"hits": [
+              {"step": 7, "chance": 30, "base": 45}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "no percussion", "parts": []}
+      ],
+      "chords": [
+        {"_note": "one long chord a bar", "parts": [
+            {"hits": [
+              {"step": 0, "length": 16, "base": 55}
+            ]}
+          ]},
+        {"_note": "dark stabs on beat 1 and the and of 2", "parts": [
+            {"hits": [
+              {"step": 0, "length": 4, "base": 60},
+              {"step": 6, "length": 6, "base": 55}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "root on 1, short roots on the and of 2 and the a of 3, a slide up at the end by chance", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 4, "base": 80},
+              {"step": 6, "length": 2, "chance": 60, "base": 80},
+              {"step": 11, "length": 3, "chance": 60, "base": 80},
+              {"step": 14, "length": 2, "pitch": "next_degree", "chance": 50, "base": 80}
+            ]}
+          ]},
+        {"_note": "sliding 808: root, a slide up on the and of 2, root on 3, an octave drop on the a of 3", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 6, "base": 85},
+              {"step": 6, "length": 2, "pitch": "next_degree", "chance": 60, "base": 75},
+              {"step": 8, "length": 3, "base": 80},
+              {"step": 11, "length": 5, "pitch": "octave_down", "chance": 60, "base": 80}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "one or two notes a bar, often only one", "count": {"drawn": {"least": 1, "spread": 2, "rest_light": {"chance": 60, "cap": 2}}}, "starts": [0, 2, 3, 4, 6, 8, 10, 12, 14], "low": 60, "high": 72, "max_length": 8},
+        {"_note": "dark piano: two or three notes off the beat", "count": {"drawn": {"least": 2, "spread": 2, "rest_light": {"chance": 50, "cap": 2}}}, "starts": [2, 5, 8, 10, 13], "low": 60, "high": 72, "max_length": 8}
+      ]
+    },
+    "house": {
+      "name": "EDM / house",
+      "tempo_bpm": 126,
+      "tempo_range": [120, 130],
+      "swing_tenths": 500,
+      "sevenths": false,
+      "minor_progressions": [[1, 6, 3, 7], [6, 7, 1, 1], [1, 7, 6, 7], [1, 4, 6, 5], [6, 4, 1, 5], [1, 1, 4, 4]],
+      "major_progressions": [[1, 5, 6, 4], [6, 4, 1, 5], [1, 4, 5, 4], [2, 5, 1, 6], [4, 1, 5, 6], [1, 6, 2, 5]],
+      "kick": [
+        {"_note": "four on the floor", "parts": [
+            {"hits": [
+              {"step": 0, "base": 95},
+              {"step": 4, "base": 95},
+              {"step": 8, "base": 95},
+              {"step": 12, "base": 95}
+            ]}
+          ]},
+        {"_note": "four on the floor with a pickup on the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 95},
+              {"step": 4, "base": 95},
+              {"step": 8, "base": 95},
+              {"step": 12, "base": 95},
+              {"step": 15, "chance": 30, "base": 70}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "snare on 2 and 4", "parts": [
+            {"hits": [
+              {"step": 4, "base": 85},
+              {"step": 12, "base": 85}
+            ]}
+          ]},
+        {"_note": "snare on 2 and 4, a roll into the next loop on the last bar", "parts": [
+            {"hits": [
+              {"step": 4, "base": 80},
+              {"step": 12, "base": 80}
+            ]},
+            {"last_bar": [
+              {"step": 13, "chance": 50, "base": 55},
+              {"step": 14, "chance": 60, "base": 60},
+              {"step": 15, "chance": 70, "base": 70}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "a clap on 2 and 4", "parts": [
+            {"hits": [
+              {"step": 4, "base": 70},
+              {"step": 12, "base": 70}
+            ]}
+          ]},
+        {"_note": "a clap on 2 and 4, an off-beat one on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 4, "base": 70},
+              {"step": 12, "base": 70},
+              {"step": 14, "chance": 30, "base": 55}
+            ]}
+          ]}
+      ],
+      "closed_hat": [
+        {"_note": "8ths, even", "parts": [
+            {"hits": [
+              {"step": 0, "base": 50},
+              {"step": 2, "base": 50},
+              {"step": 4, "base": 50},
+              {"step": 6, "base": 50},
+              {"step": 8, "base": 50},
+              {"step": 10, "base": 50},
+              {"step": 12, "base": 50},
+              {"step": 14, "base": 50}
+            ]}
+          ]},
+        {"_note": "16ths, the off-beats loudest", "parts": [
+            {"hits": [
+              {"step": 0, "base": 40},
+              {"step": 1, "base": 35},
+              {"step": 2, "base": 55},
+              {"step": 3, "base": 35},
+              {"step": 4, "base": 40},
+              {"step": 5, "base": 35},
+              {"step": 6, "base": 55},
+              {"step": 7, "base": 35},
+              {"step": 8, "base": 40},
+              {"step": 9, "base": 35},
+              {"step": 10, "base": 55},
+              {"step": 11, "base": 35},
+              {"step": 12, "base": 40},
+              {"step": 13, "base": 35},
+              {"step": 14, "base": 55},
+              {"step": 15, "base": 35}
+            ]}
+          ]},
+        {"_note": "off-beat closed hats only", "parts": [
+            {"hits": [
+              {"step": 2, "base": 60},
+              {"step": 6, "base": 60},
+              {"step": 10, "base": 60},
+              {"step": 14, "base": 60}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "an open hat on every off-beat", "parts": [
+            {"hits": [
+              {"step": 2, "base": 60},
+              {"step": 6, "base": 60},
+              {"step": 10, "base": 60},
+              {"step": 14, "base": 60}
+            ]}
+          ]},
+        {"_note": "off-beat open hats, one skipped now and then", "parts": [
+            {"hits": [
+              {"step": 2, "unless": 20, "base": 55},
+              {"step": 6, "unless": 20, "base": 55},
+              {"step": 10, "unless": 20, "base": 55},
+              {"step": 14, "unless": 20, "base": 55}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "no percussion", "parts": []}
+      ],
+      "chords": [
+        {"_note": "short stabs on the off-beats, one on beat 1 half the time", "parts": [
+            {"hits": [
+              {"step": 0, "length": 2, "chance": 50, "base": 70},
+              {"step": 2, "length": 2, "base": 70},
+              {"step": 6, "length": 2, "base": 70},
+              {"step": 10, "length": 2, "base": 70},
+              {"step": 14, "length": 2, "base": 70}
+            ]}
+          ]},
+        {"_note": "long pads, two a bar", "parts": [
+            {"hits": [
+              {"step": 0, "length": 8, "base": 60},
+              {"step": 8, "length": 8, "base": 60}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "8ths, root and the octave above in turn", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 2, "base": 75},
+              {"step": 2, "length": 2, "pitch": "octave_up", "base": 75},
+              {"step": 4, "length": 2, "base": 75},
+              {"step": 6, "length": 2, "pitch": "octave_up", "base": 75},
+              {"step": 8, "length": 2, "base": 75},
+              {"step": 10, "length": 2, "pitch": "octave_up", "base": 75},
+              {"step": 12, "length": 2, "base": 75},
+              {"step": 14, "length": 2, "pitch": "octave_up", "base": 75}
+            ]}
+          ]},
+        {"_note": "off-beat bass: roots on the ands, the fifth on the last now and then", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 2, "length": 2, "base": 80},
+              {"step": 6, "length": 2, "base": 80},
+              {"step": 10, "length": 2, "base": 80},
+              {"step": 14, "length": 2, "pitch": "fifth", "chance": 50, "base": 70}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "four notes a bar on the beats, some a 16th late", "count": "every", "starts": [0, 4, 8, 12], "late": 30, "low": 60, "high": 72, "max_length": 4},
+        {"_note": "off-beat stabs, some a 16th late", "count": "every", "starts": [2, 6, 10, 13], "late": 20, "low": 60, "high": 72, "max_length": 4}
+      ]
+    },
+    "phonk": {
+      "name": "Phonk",
+      "tempo_bpm": 140,
+      "tempo_range": [130, 150],
+      "swing_tenths": 500,
+      "sevenths": false,
+      "minor_progressions": [[1, 6, 7, 1], [1, 1, 6, 7], [1, 4, 1, 5], [1, 7, 6, 5], [6, 7, 1, 1], [1, 4, 6, 5]],
+      "major_progressions": [[6, 4, 1, 5], [1, 5, 6, 4], [1, 4, 5, 1], [6, 5, 4, 5], [4, 5, 6, 1], [1, 6, 4, 5]],
+      "kick": [
+        {"_note": "beat 1 and the and of 3, the a of 2 half the time", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 10, "base": 90},
+              {"step": 7, "chance": 50, "base": 90}
+            ]}
+          ]},
+        {"_note": "heavy: beat 1, the a of 1, the and of 3, a pickup on the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 95},
+              {"step": 3, "base": 85},
+              {"step": 10, "base": 90},
+              {"step": 13, "chance": 30, "base": 75}
+            ]}
+          ]},
+        {"_note": "beats 1 and 3 with skips on the and of 2 and the and of 4 by chance", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 6, "chance": 60, "base": 80},
+              {"step": 8, "base": 90},
+              {"step": 14, "chance": 40, "base": 75}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "snare on 2 and 4, a late one on the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 4, "base": 85},
+              {"step": 12, "base": 85},
+              {"step": 15, "chance": 30, "base": 85}
+            ]}
+          ]},
+        {"_note": "half-time snare on beat 3, a late one on the a of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 8, "base": 90},
+              {"step": 15, "chance": 30, "base": 60}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "a clap on 2 and 4", "parts": [
+            {"hits": [
+              {"step": 4, "base": 75},
+              {"step": 12, "base": 75}
+            ]}
+          ]},
+        {"_note": "a half-time clap on beat 3", "parts": [
+            {"hits": [
+              {"step": 8, "base": 80}
+            ]}
+          ]}
+      ],
+      "closed_hat": [
+        {"_note": "16ths, the beats louder", "parts": [
+            {"hits": [
+              {"step": 0, "base": 50},
+              {"step": 1, "base": 35},
+              {"step": 2, "base": 35},
+              {"step": 3, "base": 35},
+              {"step": 4, "base": 50},
+              {"step": 5, "base": 35},
+              {"step": 6, "base": 35},
+              {"step": 7, "base": 35},
+              {"step": 8, "base": 50},
+              {"step": 9, "base": 35},
+              {"step": 10, "base": 35},
+              {"step": 11, "base": 35},
+              {"step": 12, "base": 50},
+              {"step": 13, "base": 35},
+              {"step": 14, "base": 35},
+              {"step": 15, "base": 35}
+            ]}
+          ]},
+        {"_note": "8ths, the beats louder", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 2, "base": 45},
+              {"step": 4, "base": 55},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 55},
+              {"step": 10, "base": 45},
+              {"step": 12, "base": 55},
+              {"step": 14, "base": 45}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "an open hat on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 14, "chance": 30, "base": 50}
+            ]}
+          ]},
+        {"_note": "an open hat on every and of 2, on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 6, "base": 45},
+              {"step": 14, "chance": 30, "base": 45}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "cowbell on the a of every beat", "parts": [
+            {"hits": [
+              {"step": 3, "base": 60},
+              {"step": 7, "base": 60},
+              {"step": 11, "base": 60},
+              {"step": 15, "base": 60}
+            ]}
+          ]},
+        {"_note": "a cowbell line: beat 1, the a of 1, the and of 2, the and of 3, beat 4 most bars", "parts": [
+            {"hits": [
+              {"step": 0, "base": 60},
+              {"step": 3, "base": 55},
+              {"step": 6, "base": 55},
+              {"step": 10, "base": 60},
+              {"step": 12, "chance": 50, "base": 50}
+            ]}
+          ]},
+        {"_note": "a running cowbell on a triplet-like grid", "parts": [
+            {"hits": [
+              {"step": 0, "base": 60},
+              {"step": 2, "base": 50},
+              {"step": 5, "base": 55},
+              {"step": 8, "base": 60},
+              {"step": 10, "base": 50},
+              {"step": 13, "base": 55}
+            ]}
+          ]}
+      ],
+      "chords": [
+        {"_note": "one long chord a bar", "parts": [
+            {"hits": [
+              {"step": 0, "length": 16, "base": 55}
+            ]}
+          ]},
+        {"_note": "stabs on beat 1 and the a of 2", "parts": [
+            {"hits": [
+              {"step": 0, "length": 3, "base": 60},
+              {"step": 7, "length": 5, "base": 55}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "a long 808 root, a short one on the and of 3, an octave drop on beat 4 by chance", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 8, "base": 90},
+              {"step": 10, "length": 2, "chance": 50, "base": 80},
+              {"step": 12, "length": 4, "pitch": "octave_down", "chance": 40, "base": 80}
+            ]}
+          ]},
+        {"_note": "808 with a drop: root on 1, an octave down on beat 2 half the time, a long root from the and of 3", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 4, "base": 90},
+              {"step": 4, "length": 4, "pitch": "octave_down", "chance": 50, "base": 80},
+              {"step": 10, "length": 6, "base": 85}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "two to four notes a bar on 8ths and a few off-beats, often only two", "count": {"drawn": {"least": 2, "spread": 3, "rest_light": {"chance": 60, "cap": 2}}}, "starts": [0, 2, 3, 4, 6, 8, 10, 12, 14], "low": 60, "high": 72, "max_length": 8},
+        {"_note": "a busy line on the 8ths: three or four notes a bar", "count": {"drawn": {"least": 3, "spread": 2}}, "starts": [0, 2, 4, 6, 8, 10, 12, 14], "low": 60, "high": 72, "max_length": 8}
+      ]
+    },
+    "afrobeats": {
+      "name": "Afrobeats",
+      "tempo_bpm": 105,
+      "tempo_range": [98, 112],
+      "swing_tenths": 540,
+      "sevenths": true,
+      "minor_progressions": [[1, 7, 6, 7], [1, 4, 6, 5], [1, 6, 4, 5], [6, 7, 1, 1], [4, 5, 1, 1], [1, 3, 4, 5]],
+      "major_progressions": [[1, 5, 6, 4], [1, 4, 5, 4], [4, 5, 1, 1], [1, 6, 4, 5], [2, 5, 1, 1], [1, 3, 4, 5]],
+      "kick": [
+        {"_note": "beat 1, the a of 2 and the and of 3, the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 7, "base": 90},
+              {"step": 10, "base": 90},
+              {"step": 14, "chance": 40, "base": 90}
+            ]}
+          ]},
+        {"_note": "3+3+2: kicks on beat 1, the a of 1 and the and of 2, again from beat 3", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 3, "base": 80},
+              {"step": 6, "base": 85},
+              {"step": 8, "base": 90},
+              {"step": 11, "chance": 60, "base": 75},
+              {"step": 14, "chance": 60, "base": 80}
+            ]}
+          ]},
+        {"_note": "afro-house: four on the floor", "parts": [
+            {"hits": [
+              {"step": 0, "base": 90},
+              {"step": 4, "base": 90},
+              {"step": 8, "base": 90},
+              {"step": 12, "base": 90}
+            ]}
+          ]}
+      ],
+      "snare": [
+        {"_note": "snare on 2, a softer one on 4", "parts": [
+            {"hits": [
+              {"step": 4, "base": 85},
+              {"step": 12, "base": 60}
+            ]}
+          ]},
+        {"_note": "a rim on the a of 2 and a snare on 4", "parts": [
+            {"hits": [
+              {"step": 7, "base": 55},
+              {"step": 12, "base": 75}
+            ]}
+          ]}
+      ],
+      "clap": [
+        {"_note": "a clap on 4", "parts": [
+            {"hits": [
+              {"step": 12, "base": 70}
+            ]}
+          ]},
+        {"_note": "claps on 2 and 4, one on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 4, "base": 65},
+              {"step": 12, "base": 70},
+              {"step": 14, "chance": 30, "base": 55}
+            ]}
+          ]}
+      ],
+      "closed_hat": [
+        {"_note": "8ths, with extra hats on the a of 1 and the a of 3 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 50},
+              {"step": 2, "base": 50},
+              {"step": 4, "base": 50},
+              {"step": 6, "base": 50},
+              {"step": 8, "base": 50},
+              {"step": 10, "base": 50},
+              {"step": 12, "base": 50},
+              {"step": 14, "base": 50}
+            ]},
+            {"hits": [
+              {"step": 3, "chance": 40, "base": 40},
+              {"step": 11, "chance": 40, "base": 40}
+            ]}
+          ]},
+        {"_note": "16ths accented on a 3-3-2 grid", "parts": [
+            {"hits": [
+              {"step": 0, "base": 55},
+              {"step": 1, "base": 35},
+              {"step": 2, "base": 35},
+              {"step": 3, "base": 55},
+              {"step": 4, "base": 35},
+              {"step": 5, "base": 35},
+              {"step": 6, "base": 55},
+              {"step": 7, "base": 35},
+              {"step": 8, "base": 55},
+              {"step": 9, "base": 35},
+              {"step": 10, "base": 35},
+              {"step": 11, "base": 55},
+              {"step": 12, "base": 35},
+              {"step": 13, "base": 35},
+              {"step": 14, "base": 55},
+              {"step": 15, "base": 35}
+            ]}
+          ]}
+      ],
+      "open_hat": [
+        {"_note": "open hats on the and of 2 and the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 6, "chance": 40, "base": 50},
+              {"step": 14, "chance": 40, "base": 50}
+            ]}
+          ]},
+        {"_note": "an open hat on the and of 4 every bar", "parts": [
+            {"hits": [
+              {"step": 14, "base": 50}
+            ]}
+          ]}
+      ],
+      "perc": [
+        {"_note": "shaker on the a of 1, the and of 2, the a of 3 and the and of 4", "parts": [
+            {"hits": [
+              {"step": 3, "base": 55},
+              {"step": 6, "base": 55},
+              {"step": 11, "base": 55},
+              {"step": 14, "base": 55}
+            ]}
+          ]},
+        {"_note": "shaker 16ths, the off-beats loudest, some in-between ones left out", "parts": [
+            {"hits": [
+              {"step": 0, "base": 35},
+              {"step": 1, "unless": 20, "base": 35},
+              {"step": 2, "base": 55},
+              {"step": 3, "unless": 20, "base": 35},
+              {"step": 4, "base": 35},
+              {"step": 5, "unless": 20, "base": 35},
+              {"step": 6, "base": 55},
+              {"step": 7, "unless": 20, "base": 35},
+              {"step": 8, "base": 35},
+              {"step": 9, "unless": 20, "base": 35},
+              {"step": 10, "base": 55},
+              {"step": 11, "unless": 20, "base": 35},
+              {"step": 12, "base": 35},
+              {"step": 13, "unless": 20, "base": 35},
+              {"step": 14, "base": 55},
+              {"step": 15, "unless": 20, "base": 35}
+            ]}
+          ]},
+        {"_note": "shaker 8ths with a 3-3-2 push on the a of 1 and the a of 3 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "base": 45},
+              {"step": 2, "base": 45},
+              {"step": 4, "base": 45},
+              {"step": 6, "base": 45},
+              {"step": 8, "base": 45},
+              {"step": 10, "base": 45},
+              {"step": 12, "base": 45},
+              {"step": 14, "base": 45},
+              {"step": 3, "chance": 50, "base": 50},
+              {"step": 11, "chance": 50, "base": 50}
+            ]}
+          ]}
+      ],
+      "chords": [
+        {"_note": "chords on beat 1 and beat 3, a short one on the and of 4 now and then", "parts": [
+            {"hits": [
+              {"step": 0, "length": 6, "base": 60},
+              {"step": 8, "length": 6, "base": 60},
+              {"step": 14, "length": 2, "chance": 40, "base": 60}
+            ]}
+          ]},
+        {"_note": "guitar-like skank on the off-beats, the last now and then", "parts": [
+            {"hits": [
+              {"step": 2, "length": 2, "base": 55},
+              {"step": 6, "length": 2, "base": 55},
+              {"step": 10, "length": 2, "base": 55},
+              {"step": 14, "length": 2, "chance": 60, "base": 50}
+            ]}
+          ]}
+      ],
+      "bass": [
+        {"_note": "root, fifth on the a of 1, root on the a of 2, octave and fifth by chance", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 3, "base": 80},
+              {"step": 3, "length": 3, "pitch": "fifth", "base": 70},
+              {"step": 7, "length": 3, "base": 80},
+              {"step": 10, "length": 2, "pitch": "octave_up", "chance": 60, "base": 80},
+              {"step": 14, "length": 2, "pitch": "fifth", "chance": 50, "base": 80}
+            ]}
+          ]},
+        {"_note": "3+3+2 bass: root, root, fifth, then root, octave and fifth by chance", "parts": [
+            {"jitter": 8, "hits": [
+              {"step": 0, "length": 3, "base": 80},
+              {"step": 3, "length": 3, "base": 75},
+              {"step": 6, "length": 2, "pitch": "fifth", "base": 70},
+              {"step": 8, "length": 3, "base": 80},
+              {"step": 11, "length": 3, "pitch": "octave_up", "chance": 60, "base": 70},
+              {"step": 14, "length": 2, "pitch": "fifth", "chance": 50, "base": 70}
+            ]}
+          ]}
+      ],
+      "melody": [
+        {"_note": "three or four notes a bar on a 3-3-2 grid", "count": {"drawn": {"least": 3, "spread": 2}}, "starts": [0, 3, 6, 8, 11, 14], "low": 60, "high": 72, "max_length": 6},
+        {"_note": "a call on the beat, an answer off it: three or four notes", "count": {"drawn": {"least": 3, "spread": 2}}, "starts": [0, 2, 8, 10, 12], "low": 60, "high": 72, "max_length": 6}
+      ]
+    }
+  }
+}

@@ -23,6 +23,9 @@ mod input_channels;
 mod inputs;
 mod instrument;
 mod interchange;
+mod jam;
+#[cfg(test)]
+mod jam_playing;
 mod key_input;
 mod landing;
 mod latency;
@@ -343,6 +346,8 @@ pub enum Message {
     ToggleHelp,
     /// Something the Help window reported.
     Help(crate::ui::help_window::HelpMessage),
+    /// Something the Jam's prompt, its window or Settings' Music page reported.
+    Jam(crate::ui::jam::JamMessage),
     /// The system's display scale for the main window, its device pixels per the system's
     /// logical pixel (without the app's zoom, which the toolkit multiplies on top of it).
     ScaleFactor(f32),
@@ -740,6 +745,8 @@ pub struct App {
     settings_place: crate::settings::WindowPlace,
     /// The Help window: whether it is open, its section, its own window and its pictures.
     help: help_window::Help,
+    /// The Jam: its prompt over the main window and its own window.
+    jam: jam::Jam,
     /// The parameter window's own window, its place and size.
     params: param_window::ParamWindow,
     /// The stacked panels' own windows, while they are popped out of the stack, and their
@@ -943,7 +950,9 @@ impl App {
             settings.set_zoom(zoom);
         }
         // Its theme (`--theme`), accent (`--accent`) and notes' colour (`--note-color`)
-        // likewise; every window draws in them from the first frame.
+        // likewise; every window draws in them from the first frame. The theme first: as a
+        // theme's key does, it drops an accent of the user's own the Lock does not keep, and
+        // `--accent` is drawn whatever the lock.
         if let Some(theme) = script.theme {
             settings.set_theme(theme);
         }
@@ -1043,6 +1052,7 @@ impl App {
             settings_window: None,
             settings_place,
             help: help_window::Help::new(kept(settings.help_window), crate::help::folder()),
+            jam: jam::Jam::new(),
             params: param_window::ParamWindow::new(kept(settings.params_window)),
             panel_windows: panel_windows::PanelWindows::new(&settings, zoom),
             sample_editor: None,
@@ -1240,6 +1250,8 @@ impl App {
             self.settings_window_view()
         } else if self.help.window == Some(id) {
             self.help_window_view()
+        } else if self.jam.window == Some(id) {
+            self.jam_window_view()
         } else if self.params.window == Some(id) {
             self.param_window_view()
         } else if self.editor.window == Some(id) {
@@ -1260,6 +1272,8 @@ impl App {
             self.settings_title()
         } else if self.help.window == Some(id) {
             self.help_title()
+        } else if self.jam.window == Some(id) {
+            self.jam_title()
         } else if self.params.window == Some(id) {
             self.param_title()
         } else if self.editor.window == Some(id) {
@@ -1275,6 +1289,7 @@ impl App {
         self.instrument_window != Some(id)
             && self.settings_window != Some(id)
             && self.help.window != Some(id)
+            && self.jam.window != Some(id)
             && self.params.window != Some(id)
             && self.editor.window != Some(id)
             && self.panel_windows.panel_of(id).is_none()
@@ -1310,6 +1325,7 @@ impl App {
         let help = self.help.window;
         let params = self.params.window;
         let editor = self.editor.window;
+        let jam = self.jam.window;
         match message {
             // Either window's keyboard focus: the instrument window floats above the main one
             // while the app has it. A window losing it ends the typed notes, as ever.
@@ -1364,6 +1380,15 @@ impl App {
                 if editor == Some(id) =>
             {
                 self.sample_editor_window_message(&message);
+                None
+            }
+            Message::Windowed(id, _)
+            | Message::WindowCloseRequested(id)
+            | Message::WindowClosed(id)
+            | Message::Escape(id)
+                if jam == Some(id) =>
+            {
+                self.jam_window_message(&message);
                 None
             }
             Message::Windowed(id, change) if self.is_main_window(id) => match change {
@@ -1460,7 +1485,7 @@ impl App {
             // A file dropped on a popped panel's window lands nowhere: a drop lands by where
             // the pointer is over the main window.
             Message::FileDroppedOn(id, _)
-                if [instrument, settings, help, params, editor].contains(&Some(id))
+                if [instrument, settings, help, params, editor, jam].contains(&Some(id))
                     || self.panel_windows.panel_of(id).is_some() =>
             {
                 None
@@ -1508,6 +1533,9 @@ impl App {
             }
             if self.files.modal.is_some() {
                 return self.escape_dialog();
+            }
+            if self.escape_jam_prompt() {
+                return Task::none();
             }
             if self.files.menu {
                 self.files.menu = false;
@@ -1901,6 +1929,7 @@ impl App {
             }
             Message::ToggleHelp => self.toggle_help(),
             Message::Help(message) => return self.help_message(message),
+            Message::Jam(message) => return self.jam_message(message),
             Message::ScaleFactor(factor) => self.os_scale = factor,
             Message::Zoom(step) => return self.zoom_by(step),
             Message::ResetArmedDue => self.reset_armed_due(),
@@ -1912,6 +1941,9 @@ impl App {
                     self.zoom_notice = None;
                 }
             }
+            Message::PopOutMonitor {
+                window, monitor, ..
+            } if self.jam.window == Some(window) => return self.fit_jam_window(window, monitor),
             Message::PopOutMonitor {
                 window,
                 size,
@@ -1936,6 +1968,7 @@ impl App {
                     instrument: self.instrument_window,
                     settings: self.settings_window,
                     help: self.help.window,
+                    jam: self.jam.window,
                     params: self.params.window,
                     sample_editor: self.editor.window,
                     panels: self.panel_windows.ids(),
@@ -2302,6 +2335,7 @@ impl App {
                 self.quantize_merges(),
             )));
         }
+        layers.extend(self.jam_prompt_view());
         if let Some(content) = self.dialog_view() {
             layers.push(dialog::overlay(content));
         }
@@ -2689,17 +2723,24 @@ impl App {
         let header = canvas(self.rack_header())
             .width(Fill)
             .height(layout::RACK_HEADER_HEIGHT);
-        // Docked, the header ends with the pop-out button, on the header's own ground with the
-        // strips' side padding after it.
-        let header: Element<'_, Message> = if self.panels.popped.has(Panel::Rack) {
-            header.into()
+        // "Start a Jam" at the header's right end; docked, the pop-out button after it, on the
+        // header's own ground with the strips' side padding after them.
+        let start_jam = crate::ui::jam::start_button(self.jam_refusal());
+        let header = if self.panels.popped.has(Panel::Rack) {
+            row![header, start_jam]
         } else {
-            container(row![header, crate::ui::pop_out::button(Panel::Rack)].align_y(iced::Center))
-                .padding(iced::Padding::ZERO.right(crate::ui::pop_out::STRIP_RIGHT))
-                .height(layout::RACK_HEADER_HEIGHT)
-                .style(style::strip)
-                .into()
+            row![
+                header,
+                start_jam,
+                space().width(8),
+                crate::ui::pop_out::button(Panel::Rack)
+            ]
         };
+        let header: Element<'_, Message> = container(header.align_y(iced::Center))
+            .padding(iced::Padding::ZERO.right(crate::ui::pop_out::STRIP_RIGHT))
+            .height(layout::RACK_HEADER_HEIGHT)
+            .style(style::strip)
+            .into();
         let rack = mouse_area(column![header, self.rack_view()])
             .on_enter(Message::Media(MediaMessage::RackHover(true)))
             .on_exit(Message::Media(MediaMessage::RackHover(false)));

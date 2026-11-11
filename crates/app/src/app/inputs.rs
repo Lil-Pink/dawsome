@@ -491,6 +491,10 @@ impl App {
                 self.hex_entered();
                 return Task::none();
             }
+            SettingsMessage::AccentLockToggled => {
+                self.toggle_accent_lock();
+                return Task::none();
+            }
         };
         if let Some(page) = crate::ui::settings_layout::tab_at(at) {
             self.show_settings_page(page);
@@ -502,7 +506,7 @@ impl App {
                 self.theme_page_pressed(at);
                 return Task::none();
             }
-            SettingsPage::Keys => return Task::none(),
+            SettingsPage::Keys | SettingsPage::Music => return Task::none(),
         }
         if let Some(index) = self.settings_panel().audio_layout().hit(at) {
             self.choose_output(index);
@@ -558,6 +562,7 @@ impl App {
                 | Hit::Wheel(..)
                 | Hit::Hex(_)
                 | Hit::OwnColor(_)
+                | Hit::AccentLock
                 | Hit::Measure
                 | Hit::LatencyDown
                 | Hit::LatencyUp

@@ -265,6 +265,7 @@ impl super::App {
             ShotWindow::Instrument => self.instrument_window,
             ShotWindow::Settings => self.settings_window,
             ShotWindow::Help => self.help.window,
+            ShotWindow::Jam => self.jam.window,
             ShotWindow::Params => self.params.window,
             ShotWindow::SampleEditor => self.editor.window,
             ShotWindow::Panel(panel) => self.panel_windows.window(panel),

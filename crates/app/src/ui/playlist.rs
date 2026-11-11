@@ -6,6 +6,7 @@
 //! cleared by the app whenever that changes, and draws the song position and a held drag's
 //! outlines over it every frame.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -39,8 +40,8 @@ use crate::ui::palette;
 use crate::ui::panels::{Panel, TITLE_GAP};
 use crate::ui::playlist_layout::{
     self, ClipPart, Grid, HeaderHit, Lanes, ARM_CENTER_X, ARM_RADIUS, AUTOMATION_LINE,
-    HANDLE_RADIUS, HEADER_HEIGHT, LED_RADIUS, MARKER_WIDTH, NAME_X, NOTE_MARK_WIDTH, POINT_RADIUS,
-    RULER_HEIGHT, SELECTED_OUTLINE, TIME_BAR_HEIGHT, TITLE_HEIGHT, TRACK_HEADER_WIDTH, ZOOM,
+    HANDLE_RADIUS, HEADER_HEIGHT, LED_RADIUS, MARKER_WIDTH, NAME_X, POINT_RADIUS, RULER_HEIGHT,
+    SELECTED_OUTLINE, TIME_BAR_HEIGHT, TITLE_HEIGHT, TRACK_HEADER_WIDTH, ZOOM,
 };
 use crate::ui::pop_out;
 use crate::ui::rack::draw_mute_light;
@@ -72,9 +73,27 @@ pub const LINK_CELL_WIDTH: f32 = LINK_ICON + 12.0;
 const DOUBLE_PRESS_TIME: Duration = Duration::from_millis(400);
 const DOUBLE_PRESS_DISTANCE: f32 = 6.0;
 
-/// The tallest note mark in a clip, and the padding around the marks.
-const NOTE_MARK_MAX_HEIGHT: f32 = 4.0;
-const MARK_PADDING: f32 = 2.0;
+/// The note marks' layout in a pattern clip ([`mark_rows`]): the room they keep clear under the
+/// title and above the lane's foot (2 px of padding and a 2 px margin), a row's greatest pitch
+/// (a drum's, or a key's in even rows), a semitone's, the least device pixels a semitone must
+/// have for keys to stand by pitch, the least span a pitched channel spreads its keys over, the
+/// marks' least and greatest heights (px), and a pitched mark's height in semitones. Why: marks
+/// 1 to 2 px tall read as too thin, rows reaching the title and the clip's foot read as
+/// clinging to its edges, and a two-key channel spread over the whole body hid its interval;
+/// bars that grow with the lane, a least pitch span and margins read as notes.
+const MARK_PADDING: f32 = 4.0;
+const DRUM_ROW_MOST: f32 = 6.0;
+const SEMITONE_MOST: f32 = 3.0;
+const SEMITONE_LEAST_PITCH: f32 = 1.5;
+const PITCH_SPAN_LEAST: u8 = 12;
+const DRUM_MARK: (f32, f32) = (2.0, 6.0);
+const PITCHED_MARK: (f32, f32) = (2.0, 4.0);
+const PITCHED_MARK_SEMITONES: f32 = 1.2;
+/// The least widths of a note's mark and of a step hit's block, device pixels.
+const NOTE_LEAST_WIDTH: f32 = 1.0;
+const HIT_LEAST_WIDTH: f32 = 2.0;
+/// A velocity-0 note's mark alpha; a full one's is 1.
+const NOTE_MARK_SOFTEST: f32 = 0.55;
 
 /// What the playlist shows.
 pub struct Playlist<'a> {
@@ -779,27 +798,170 @@ pub fn automation_handles(
         .collect()
 }
 
-/// Where a note mark for a note at `x` starts so that all of it lies in its clip's `body` (from
-/// right of the clip's start line to where the next clip's start line begins).
+/// Where the mark of a note from `x` to `end_x` lies, its left edge and width, on whole device
+/// pixels at `scale_factor`: a bar from the note's start to one device pixel before its end, at
+/// least `least` device pixels wide (a step hit's end one step on: a block a step wide);
+/// starting inside the clip's `body` (from right of the clip's start line to where the next
+/// clip's start line begins), cut at the body's end (a note running past the clip's end, on any
+/// pass) and to the visible `span`; none when nothing of it shows.
 ///
-/// Why: a note on a pattern's first tick lies on the clip's start line, and one on its last
-/// steps reaches past the clip's end once zoomed out; drawn there, the line being near the
-/// lane's color, the mark read as a note outside the clip, or as the end of the clip before.
-fn mark_left(x: f32, body: (f32, f32)) -> f32 {
-    x.min(body.1 - NOTE_MARK_WIDTH).max(body.0)
+/// Why bars: a mark at each note's start alone made a recorded take read as scattered dots, not
+/// the notes played as the piano roll shows them. Why a pixel short of the end: notes played
+/// legato, each ending where the next starts, fused into one bar. Why inside the body: a note
+/// on a pattern's first tick lies on the clip's start line, and one on its last steps reaches
+/// past the clip's end once zoomed out; drawn there, the line being near the lane's color, the
+/// mark read as a note outside the clip, or as the end of the clip before. Why device pixels: a
+/// mark edge between two pixels is blended into the clip's body, so the one-pixel gap between
+/// two notes would be two half-lit pixels.
+fn mark_span(
+    x: f32,
+    end_x: f32,
+    least: f32,
+    body: (f32, f32),
+    span: (f32, f32),
+    scale_factor: f32,
+) -> Option<(f32, f32)> {
+    let scale = if scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    // The body's edges lie on device pixels already (`device_line`), the view's near enough.
+    let device = |x: f32| (x * scale).round();
+    let (start, end) = (device(body.0), device(body.1));
+    let left = (x * scale).floor().min(end - least).max(start);
+    let right = ((end_x * scale).floor() - 1.0).min(end).max(left + least);
+    let (left, right) = (left.max(device(span.0)), right.min(device(span.1)));
+    (left < right).then_some((left / scale, (right - left) / scale))
 }
 
-/// Where the mark of a note from `x` to `end_x` lies, its left edge and width: a bar from the
-/// note's start to its end, at least [`NOTE_MARK_WIDTH`] wide (a step hit's, or a note shorter
-/// than that at the zoom), starting where [`mark_left`] puts it, cut at the clip's `body` end
-/// (a note running past the clip's end, on any pass) and to the visible `span`; none when
-/// nothing of it shows. Why bars: a mark at each note's start alone made a recorded take read
-/// as scattered dots, not the notes played as the piano roll shows them.
-fn mark_span(x: f32, end_x: f32, body: (f32, f32), span: (f32, f32)) -> Option<(f32, f32)> {
-    let left = mark_left(x, body);
-    let right = end_x.min(body.1).max(left + NOTE_MARK_WIDTH);
-    let (left, right) = (left.max(span.0), right.min(span.1));
-    (left < right).then_some((left, right - left))
+/// A note's mark colour: the marks' colour, its alpha from [`NOTE_MARK_SOFTEST`] at velocity 0
+/// to 1 at full, so accents and ghost notes read apart in a clip as in the piano roll.
+fn note_mark_color(velocity: f32) -> Color {
+    Color {
+        a: NOTE_MARK_SOFTEST + (1.0 - NOTE_MARK_SOFTEST) * velocity.clamp(0.0, 1.0),
+        ..style::CLIP_NOTE
+    }
+}
+
+/// One channel's rows in a pattern clip: the keys it uses, highest first, and whether they are
+/// drum rows (one key, or step hits alone), stacked a row a key rather than placed by pitch.
+#[derive(Debug, Clone, PartialEq)]
+struct MarkBand {
+    keys: Vec<u8>,
+    drum: bool,
+}
+
+impl MarkBand {
+    /// The semitones a pitched band spreads its keys over: theirs, at least
+    /// [`PITCH_SPAN_LEAST`], centred on them.
+    fn span(&self) -> f32 {
+        f32::from(self.used().max(PITCH_SPAN_LEAST))
+    }
+
+    fn used(&self) -> u8 {
+        match (self.keys.first(), self.keys.last()) {
+            (Some(&high), Some(&low)) => high.saturating_sub(low),
+            _ => 0,
+        }
+    }
+
+    /// The band's height at its fullest (px): by pitch, the span at [`SEMITONE_MOST`] a semitone
+    /// and the tallest mark's room and a pixel, so its top and bottom keys' marks stay inside it,
+    /// clear of the next band's; in even rows (a drum's), [`DRUM_ROW_MOST`] a key.
+    fn fullest(&self, by_pitch: bool) -> f32 {
+        if by_pitch {
+            self.span() * SEMITONE_MOST + PITCHED_MARK.1 + 1.0
+        } else {
+            self.keys.len() as f32 * DRUM_ROW_MOST
+        }
+    }
+}
+
+/// Every note mark row of a pattern clip in a lane from `lane_top`, `lane` tall, at
+/// `scale_factor`: for each key of each of `bands` (the channels in rack order), in that order,
+/// its mark's top and height (px), on whole device pixels.
+///
+/// The marks keep [`MARK_PADDING`] clear under the title and above the lane's foot, always.
+/// Each band takes its fullest height while that room holds all of them, the whole stack
+/// centred, so a clip of few rows is a compact block in the middle, not spread from edge to
+/// edge; with less room every band shrinks by one factor. A drum's rows stack evenly, a mark
+/// its row's pitch less a pixel ([`DRUM_MARK`]). A pitched channel's keys stand by semitone over
+/// its span, so a chord shows its intervals and a melody its contour, a mark
+/// [`PITCHED_MARK_SEMITONES`] semitones tall ([`PITCHED_MARK`]), while the shrink leaves a
+/// semitone [`SEMITONE_LEAST_PITCH`] device pixels; with less, its keys stack evenly as a
+/// drum's, 2 px marks (then the bands are shared again, those rows at their own fullest). Rows
+/// under 3 px apart cannot hold a 2 px mark and a gap each; there they touch, as they must.
+fn mark_rows(lane_top: f32, lane: f32, bands: &[MarkBand], scale_factor: f32) -> Vec<(f32, f32)> {
+    let scale = if scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    // In device pixels from here on.
+    let device = |px: f32| px * scale;
+    let body_top = device(lane_top + TITLE_HEIGHT + MARK_PADDING);
+    let room = device(lane - TITLE_HEIGHT - 2.0 * MARK_PADDING);
+    let total = |by_pitch: &[bool]| -> f32 {
+        bands
+            .iter()
+            .zip(by_pitch)
+            .map(|(band, &by_pitch)| device(band.fullest(by_pitch)))
+            .sum()
+    };
+    // A length at the fullest as the shrink to `whole` leaves it. (Multiplied before dividing,
+    // so a length that comes out a whole number of pixels is one.)
+    let shrunk = |length: f32, whole: f32| {
+        if whole > room {
+            length * room / whole
+        } else {
+            length
+        }
+    };
+    let pitched: Vec<bool> = bands.iter().map(|band| !band.drum).collect();
+    let first = total(&pitched);
+    let by_pitch: Vec<bool> = pitched
+        .iter()
+        .map(|&pitched| pitched && shrunk(device(SEMITONE_MOST), first) >= SEMITONE_LEAST_PITCH)
+        .collect();
+    let whole = total(&by_pitch);
+    let top = (body_top + ((room - whole) / 2.0).max(0.0)).round();
+    let place = |length: f32| top + shrunk(length, whole);
+    // A mark from its row's centre, on whole pixels.
+    let mark_at =
+        |centre: f32, height: f32| ((centre - height / 2.0).round() / scale, height / scale);
+    let least = device(DRUM_MARK.0).round();
+    let mut rows = Vec::new();
+    let mut before = 0.0;
+    for (band, &by_pitch) in bands.iter().zip(&by_pitch) {
+        if by_pitch {
+            let semitone = shrunk(device(SEMITONE_MOST), whole);
+            let height = (PITCHED_MARK_SEMITONES * semitone)
+                .round()
+                .clamp(least, device(PITCHED_MARK.1).round());
+            let edge = device(PITCHED_MARK.1 + 1.0) / 2.0;
+            let high = f32::from(band.keys[0]) + (band.span() - f32::from(band.used())) / 2.0;
+            rows.extend(band.keys.iter().map(|&key| {
+                let offset = edge + (high - f32::from(key)) * device(SEMITONE_MOST);
+                mark_at(place(before + offset), height)
+            }));
+        } else {
+            let pitch = shrunk(device(DRUM_ROW_MOST), whole);
+            // A drum's mark a pixel less than the pitch's whole pixels, which two row tops on
+            // whole pixels lie apart at least: a pixel's gap between rows.
+            let height = if band.drum {
+                (pitch.floor() - 1.0).clamp(least, device(DRUM_MARK.1).round())
+            } else {
+                least
+            };
+            rows.extend((0..band.keys.len()).map(|row| {
+                let offset = (row as f32 + 0.5) * device(DRUM_ROW_MOST);
+                mark_at(place(before + offset), height)
+            }));
+        }
+        before += device(band.fullest(by_pitch));
+    }
+    rows
 }
 
 /// The visible x span of ticks `start..end` on a canvas `width` wide, right of the headers.
@@ -1493,8 +1655,10 @@ impl Tracks<'_> {
         }
     }
 
-    /// A 2 px mark for each note the clip plays inside `span` (x), one row per channel and key
-    /// the pattern uses, so drum patterns read as step rows and melodies as a small roll.
+    /// A mark for each note the clip plays inside `span` (x), one row per channel and key the
+    /// pattern uses, so drum patterns read as step rows and melodies as a small roll: rows laid
+    /// out by [`mark_rows`], each mark's span by [`mark_span`] (a step hit a block a step wide),
+    /// its colour by [`note_mark_color`].
     fn draw_marks(
         &self,
         frame: &mut Frame,
@@ -1522,23 +1686,37 @@ impl Tracks<'_> {
             .enumerate()
             .map(|(row, &id)| (id, row))
             .collect();
-        let mut lines: Vec<(usize, std::cmp::Reverse<u8>)> = notes
-            .iter()
-            .map(|note| {
-                (
-                    rack.get(&note.channel).copied().unwrap_or(0),
-                    std::cmp::Reverse(note.key),
-                )
-            })
-            .collect();
+        let line_of = |note: &dawsome_engine::project::Note| {
+            (
+                rack.get(&note.channel).copied().unwrap_or(0),
+                Reverse(note.key),
+            )
+        };
+        let mut lines: Vec<(usize, Reverse<u8>)> = notes.iter().map(|note| line_of(note)).collect();
         lines.sort();
         lines.dedup();
         if lines.is_empty() {
             return;
         }
-        let area = grid.lane - TITLE_HEIGHT - 2.0 * MARK_PADDING;
-        let pitch = area / lines.len() as f32;
-        let height = pitch.clamp(1.0, NOTE_MARK_MAX_HEIGHT);
+        // A channel's keys in order, a drum's when it uses one key or plays step hits alone.
+        let bands: Vec<MarkBand> = lines
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|band| {
+                let rack_row = band[0].0;
+                let keys: Vec<u8> = band.iter().map(|&(_, Reverse(key))| key).collect();
+                let hits_alone = notes
+                    .iter()
+                    .filter(|note| line_of(note).0 == rack_row)
+                    .all(|note| note.length.0 == 0);
+                MarkBand {
+                    drum: keys.len() == 1 || hits_alone,
+                    keys,
+                }
+            })
+            .collect();
+        let rows = mark_rows(top, grid.lane, &bands, self.scale_factor);
+        // A step hit draws as a block a step (a sixteenth) wide.
+        let step = i64::from(self.project.ppq / 4).max(1);
         // Only the passes of the pattern that reach into the visible span.
         let visible_from = grid.tick_at(span.0).0.max(clip.start.0);
         let visible_to = grid.tick_at(span.1).0.saturating_add(1).min(clip.end().0);
@@ -1560,24 +1738,22 @@ impl Tracks<'_> {
                     continue;
                 }
                 let x = grid.x_of(Ticks(tick));
-                let end_x = grid.x_of(Ticks(tick.saturating_add(note.length.0)));
-                let Some((left, width)) = mark_span(x, end_x, body, span) else {
+                let (end, least) = if note.length.0 > 0 {
+                    (note.length.0, NOTE_LEAST_WIDTH)
+                } else {
+                    (step, HIT_LEAST_WIDTH)
+                };
+                let end_x = grid.x_of(Ticks(tick.saturating_add(end)));
+                let Some((left, width)) = mark_span(x, end_x, least, body, span, self.scale_factor)
+                else {
                     continue;
                 };
-                let line = (
-                    rack.get(&note.channel).copied().unwrap_or(0),
-                    std::cmp::Reverse(note.key),
-                );
-                let index = lines.binary_search(&line).unwrap_or(0);
-                let y = top
-                    + TITLE_HEIGHT
-                    + MARK_PADDING
-                    + index as f32 * pitch
-                    + (pitch - height) / 2.0;
+                let index = lines.binary_search(&line_of(note)).unwrap_or(0);
+                let (y, height) = rows[index];
                 frame.fill_rectangle(
                     Point::new(left, y),
                     Size::new(width, height),
-                    style::CLIP_NOTE,
+                    note_mark_color(note.velocity),
                 );
             }
         }
@@ -1863,66 +2039,254 @@ mod tests {
         assert_eq!(every(16.0, 10_000), 4);
     }
 
-    // A clip from x 248 to 312 at scale 1: its start line is pixel 248, so its body runs from
-    // 249 to the next clip's line at 312. A note on its first tick (x 248) is drawn from 249, one
-    // mid-clip where it lies, one at 311.5 (its last ticks, zoomed out) from 310, ending at 312.
+    // A clip from x 248 to 312 at scale 1, 64 px a bar (a step 4 px): its start line is pixel
+    // 248, so its body runs from 249 to the next clip's line at 312. A step hit is a block a step
+    // wide less a pixel, at least 2: on its first tick (x 248) from 249 to 251, mid-clip at 280
+    // 280..283, at 311.5 (its last ticks, zoomed out) 310..312, ending on the next clip's line.
     // At 1.7 a clip from 184 to 248: its line is device pixels 312-313 (183.53 to 184.71
-    // logical), the next clip's starts on pixel 421 (247.65), so a first-tick note starts at
-    // 184.71 and a last-tick one at 245.65, two logical pixels before 247.65. Each mark a bar
-    // from its note's start to its end, cut at the clip's end and to the view.
+    // logical), the next clip's starts on pixel 421 (247.65); a first-tick hit (x 184..188,
+    // device 312.8..319.6) covers pixels 314..318, a last-tick one (247.9) 419..421. Each note a
+    // bar from its start to one pixel before its end, cut at the clip's end and to the view.
     #[test]
     fn note_marks_stay_inside_their_clip() {
         let body = (249.0, 312.0);
-        assert_eq!(mark_left(248.0, body), 249.0);
-        assert_eq!(mark_left(280.0, body), 280.0);
-        assert_eq!(mark_left(311.5, body), 310.0);
+        let view = (120.0, 1000.0);
+        let hit = |x: f32, body, scale| mark_span(x, x + 4.0, HIT_LEAST_WIDTH, body, view, scale);
+        assert_eq!(hit(248.0, body, 1.0), Some((249.0, 2.0)));
+        assert_eq!(hit(280.0, body, 1.0), Some((280.0, 3.0)));
+        assert_eq!(hit(311.5, body, 1.0), Some((310.0, 2.0)));
         let (line, width) = device_line(184.0, 1.7);
         let (next, _) = device_line(248.0, 1.7);
         let body = (line + width, next);
         assert!((body.0 - 314.0 / 1.7).abs() < 1e-4, "{body:?}");
         assert!((body.1 - 421.0 / 1.7).abs() < 1e-4, "{body:?}");
-        assert_eq!(mark_left(184.0, body), body.0);
-        assert_eq!(mark_left(247.9, body), body.1 - 2.0);
+        let in_device = |mark: Option<(f32, f32)>| {
+            mark.map(|(left, width)| ((left * 1.7).round(), (width * 1.7).round()))
+        };
+        assert_eq!(in_device(hit(184.0, body, 1.7)), Some((314.0, 4.0)));
+        assert_eq!(in_device(hit(247.9, body, 1.7)), Some((419.0, 2.0)));
 
         // The marks as bars, by hand, at 64 px a bar (a tick 1/6 px; tick t at x 120 + t / 6),
         // a one-bar pattern's clip at ticks 768..1152 (x 248..312, its body 249..312 at scale
         // 1), every pixel of it in view (120..1000): a short note (tick 0, 6 long: x 248..249)
-        // its least width from the body's start, 249..251; a long one (tick 96, 144 long: x
-        // 264..288) 24 px wide; one crossing the clip's end (tick 336, 96 long: x 304..320) cut
-        // at the end, 304..312. Scrolled so the view starts at 270, the long one's visible part
-        // alone, 270..288; with the view ending at 300, the crossing one not at all.
+        // one pixel wide from the body's start, 249..250; a long one (tick 96, 144 long: x
+        // 264..288) 264..287; one crossing the clip's end (tick 336, 96 long: x 304..320) cut at
+        // the end, 304..312; a step hit on tick 0 a step to x 252, 249..251. Scrolled so the view
+        // starts at 270, the long one's visible part alone, 270..287; with the view ending at
+        // 300, the crossing one not at all.
         let body = (249.0, 312.0);
-        let view = (120.0, 1000.0);
         let x = |tick: f32| 120.0 + tick / 6.0;
         let mark = |start: f32, length: f32, view| {
-            mark_span(x(768.0 + start), x(768.0 + start + length), body, view)
+            let start = 768.0 + start;
+            if length > 0.0 {
+                mark_span(
+                    x(start),
+                    x(start + length),
+                    NOTE_LEAST_WIDTH,
+                    body,
+                    view,
+                    1.0,
+                )
+            } else {
+                mark_span(x(start), x(start + 24.0), HIT_LEAST_WIDTH, body, view, 1.0)
+            }
         };
-        assert_eq!(mark(0.0, 6.0, view), Some((249.0, 2.0)), "the short one");
-        assert_eq!(mark(96.0, 144.0, view), Some((264.0, 24.0)), "the long one");
+        assert_eq!(mark(0.0, 6.0, view), Some((249.0, 1.0)), "the short one");
+        assert_eq!(mark(96.0, 144.0, view), Some((264.0, 23.0)), "the long one");
         assert_eq!(
             mark(336.0, 96.0, view),
             Some((304.0, 8.0)),
             "the crossing one"
         );
-        assert_eq!(
-            mark(0.0, 0.0, view),
-            Some((249.0, 2.0)),
-            "a step hit, as before"
-        );
-        assert_eq!(mark(96.0, 144.0, (270.0, 1000.0)), Some((270.0, 18.0)));
+        assert_eq!(mark(0.0, 0.0, view), Some((249.0, 2.0)), "a step hit");
+        assert_eq!(mark(96.0, 144.0, (270.0, 1000.0)), Some((270.0, 17.0)));
         assert_eq!(mark(336.0, 96.0, (120.0, 300.0)), None);
         // The clip two passes long (ticks 768..1536, x 248..376): the crossing note's first pass
-        // (tick 1104, x 304..320) whole, its second (tick 1488, x 368..384) cut at the clip's
-        // end, 368..376.
+        // (tick 1104, x 304..320) whole less its last pixel, its second (tick 1488, x 368..384)
+        // cut at the clip's end, 368..376.
         let body = (249.0, 376.0);
         let pass = |pass: f32| {
             let start = 768.0 + 384.0 * pass + 336.0;
-            mark_span(x(start), x(start + 96.0), body, view)
+            mark_span(x(start), x(start + 96.0), NOTE_LEAST_WIDTH, body, view, 1.0)
         };
         assert_eq!(
             [pass(0.0), pass(1.0)],
-            [Some((304.0, 16.0)), Some((368.0, 8.0))]
+            [Some((304.0, 15.0)), Some((368.0, 8.0))]
         );
+    }
+
+    // Notes played legato, each ending on the tick the next starts, read as separate marks one
+    // device pixel apart. At scale 1, three quarter notes from tick 96 at 64 px a bar (x 264,
+    // 280, 296, 312): marks 264..279, 280..295, 296..311, pixels 279 and 295 left empty. At 1.25,
+    // a note from x 263.3 to 279.9 and the next to 296.5 (device 329.125, 349.875, 370.625): the
+    // first covers pixels 329..348, the second 349..369, pixel 348 between them.
+    #[test]
+    fn legato_notes_keep_a_device_pixel_apart() {
+        let view = (120.0, 1000.0);
+        let body = (249.0, 376.0);
+        let run: Vec<_> = [264.0, 280.0, 296.0]
+            .into_iter()
+            .map(|x| mark_span(x, x + 16.0, NOTE_LEAST_WIDTH, body, view, 1.0))
+            .collect();
+        assert_eq!(
+            run,
+            [
+                Some((264.0, 15.0)),
+                Some((280.0, 15.0)),
+                Some((296.0, 15.0))
+            ]
+        );
+        let body = (248.8, 312.0);
+        let in_device = |mark: Option<(f32, f32)>| {
+            mark.map(|(left, width)| ((left * 1.25).round(), (width * 1.25).round()))
+        };
+        let first = mark_span(263.3, 279.9, NOTE_LEAST_WIDTH, body, view, 1.25);
+        let second = mark_span(279.9, 296.5, NOTE_LEAST_WIDTH, body, view, 1.25);
+        assert_eq!(in_device(first), Some((329.0, 19.0)));
+        assert_eq!(in_device(second), Some((349.0, 20.0)));
+    }
+
+    // A note's mark alpha: 0.55 + 0.45 x velocity, the marks' own colour.
+    #[test]
+    fn softer_notes_draw_softer_marks() {
+        let alpha = |velocity: f32| note_mark_color(velocity).a;
+        assert_eq!(alpha(1.0), 1.0);
+        assert_eq!(alpha(0.0), 0.55);
+        assert!((alpha(0.5) - 0.775).abs() < 1e-6);
+        assert_eq!(alpha(1.5), 1.0, "past full is full");
+        let color = note_mark_color(0.3);
+        let note = style::CLIP_NOTE;
+        assert_eq!((color.r, color.g, color.b), (note.r, note.g, note.b));
+    }
+
+    fn pitched(keys: &[u8]) -> MarkBand {
+        MarkBand {
+            keys: keys.to_vec(),
+            drum: false,
+        }
+    }
+
+    fn drum(keys: &[u8]) -> MarkBand {
+        MarkBand {
+            keys: keys.to_vec(),
+            drum: true,
+        }
+    }
+
+    // One channel's keys 71, 67, 64 and 60 (a held chord), by hand. Its span is 12 semitones
+    // (its own 11, at least 12), centred: 71 half a semitone under the span's top. By pitch at
+    // its fullest the band is 12 x 3 + 4 + 1 = 41 px. The marks' room is the body less 4 px
+    // under the title and above the foot: from 14, the lane less 18. 64 px lane: 46 px, the band
+    // whole, centred from round(14 + 2.5) = 17; centres 17 + 2.5 (the edge) + 1.5 = 21, then 4,
+    // 7 and 11 semitones of 3 px down: 33, 42, 54; marks 4 px (3.6 rounded) from 19, 31, 40,
+    // 52. 32 px lane: 14 px, 14 / 41 of the fullest, 1.02 px a semitone, under 1.5: the keys
+    // stack evenly, four rows of 6 px shrunk to 14 / 24, 3.5 px apart, centres 15.75, 19.25,
+    // 22.75, 26.25, marks 2 px from 15, 18, 22, 25. At scale 2 that lane's 28 device pixels
+    // give a semitone 6 x 28 / 82 = 2.05 device pixels, so the chord stands by pitch: marks 4
+    // device pixels (2.46 rounded, at least 2 px), centres 28 + (8, 32, 50, 74) x 28 / 82 =
+    // 30.73, 38.93, 45.07, 53.27, from device 29, 37, 43, 51 (14.5, 18.5, 21.5, 25.5 px).
+    #[test]
+    fn a_chord_stands_by_semitone_where_a_semitone_has_room_and_stacks_where_not() {
+        let chord = [pitched(&[71, 67, 64, 60])];
+        let rows = |lane, scale| mark_rows(0.0, lane, &chord, scale);
+        assert_eq!(
+            rows(64.0, 1.0),
+            [(19.0, 4.0), (31.0, 4.0), (40.0, 4.0), (52.0, 4.0)]
+        );
+        assert_eq!(
+            rows(32.0, 1.0),
+            [(15.0, 2.0), (18.0, 2.0), (22.0, 2.0), (25.0, 2.0)]
+        );
+        assert_eq!(
+            rows(32.0, 2.0),
+            [(14.5, 2.0), (18.5, 2.0), (21.5, 2.0), (25.5, 2.0)]
+        );
+    }
+
+    // Drum rows, by hand. One key in a 50 px lane (the playlist probe's): its 6 px row centred in
+    // the marks' 32 px room from 14, from 27, the mark 5 px (the row less a pixel) from
+    // round(27.5) = 28, over the row the probe reads at y 30. Three one-key channels (a
+    // drums-only Jam on a kit) in a 32 px lane: 18 px at their fullest in a 14 px room, rows
+    // 14 / 3 = 4.67 px apart, centres 16.33, 21, 25.67, marks 3 px from 15, 20 (19.5 rounded
+    // up) and 24, the last ending 5 px over the lane's foot. One channel's four keys of step
+    // hits (a drums-only Jam on one set) there: rows 3.5 px apart, marks 2 px from 15, 18, 22,
+    // 25.
+    #[test]
+    fn drum_rows_are_their_pitch_less_a_pixel() {
+        assert_eq!(mark_rows(0.0, 50.0, &[drum(&[36])], 1.0), [(28.0, 5.0)]);
+        let kit = [drum(&[60]), drum(&[60]), drum(&[60])];
+        assert_eq!(
+            mark_rows(0.0, 32.0, &kit, 1.0),
+            [(15.0, 3.0), (20.0, 3.0), (24.0, 3.0)]
+        );
+        assert_eq!(
+            mark_rows(0.0, 32.0, &[drum(&[46, 42, 38, 36])], 1.0),
+            [(15.0, 2.0), (18.0, 2.0), (22.0, 2.0), (25.0, 2.0)]
+        );
+    }
+
+    // The Jam's clip of p36_band: drums on 4 keys of step hits (24 px at their fullest), bass
+    // on 3 keys over 12 semitones (41), chords on 10 over their own 17 (56), melody 6 over 12
+    // (41): 162 px. In a 64 px lane's 46 px room a semitone would have 3 x 46 / 162 = 0.85 px,
+    // under 1.5, so the three pitched channels stack evenly too: 23 rows of 6 px, 138, shrunk
+    // to 46, a row every 2 px from 14, 2 px marks from 14, 16, ... 58, touching, as they must
+    // under 3 px. In a 32 px lane the same rows, closer still.
+    #[test]
+    fn a_dense_clip_stacks_every_channel_evenly() {
+        let jam = [
+            drum(&[46, 42, 38, 36]),
+            pitched(&[47, 45, 40]),
+            pitched(&[69, 67, 65, 64, 62, 60, 59, 57, 55, 52]),
+            pitched(&[72, 69, 67, 64, 62, 60]),
+        ];
+        let rows = mark_rows(0.0, 64.0, &jam, 1.0);
+        let even: Vec<(f32, f32)> = (0..23).map(|row| (14.0 + 2.0 * row as f32, 2.0)).collect();
+        assert_eq!(rows, even);
+        let rows = mark_rows(0.0, 32.0, &jam, 1.0);
+        assert_eq!(rows.len(), 23);
+        assert!(rows.iter().all(|&(_, height)| height == 2.0), "{rows:?}");
+        let inside = |&(y, height): &(f32, f32)| y >= TITLE_HEIGHT && y + height <= 32.0;
+        assert!(rows.iter().all(inside), "{rows:?}");
+    }
+
+    // A drum and a chord (6 + 41 = 47 px at their fullest; in the 64 px lane's 46 px room
+    // shrunk a little, the chord still by pitch). In every lane height from 64 up, at the zooms
+    // the app offers: every mark under the title and inside the lane, on device pixels, 2 to 6
+    // px tall, ending at least a device pixel above the next row's. In the 32 and 48 px lanes, shrunk, every mark is still inside, at least 2 px tall.
+    // The chord alone (its band the same at either end) stands centred from 64 up: the space
+    // above its first mark and under its last within 2 device pixels of each other.
+    #[test]
+    fn a_few_rows_stand_whole_and_centred_where_the_lane_has_room() {
+        let bands = [drum(&[36]), pitched(&[71, 67, 64, 60])];
+        for lane in playlist_layout::LANE_HEIGHTS {
+            for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+                let top = 117.0;
+                let rows = mark_rows(top, lane, &bands, scale);
+                let device = |v: f32| (v * scale).round();
+                let at = format!("lane {lane}, scale {scale}: {rows:?}");
+                for (index, &(y, height)) in rows.iter().enumerate() {
+                    assert!(y >= top + TITLE_HEIGHT && y + height <= top + lane, "{at}");
+                    assert!((y * scale - device(y)).abs() < 1e-3, "off a pixel: {at}");
+                    assert!(device(height) >= device(2.0), "{at}");
+                    assert!(device(height) <= device(6.0), "{at}");
+                    if lane >= 64.0 {
+                        if let Some(&(next, _)) = rows.get(index + 1) {
+                            assert!(device(y + height) + 1.0 <= device(next), "touching: {at}");
+                        }
+                    }
+                }
+                if lane >= 64.0 {
+                    let rows = mark_rows(top, lane, &bands[1..], scale);
+                    let above = device(rows[0].0) - device(top + TITLE_HEIGHT + MARK_PADDING);
+                    let (last, height) = rows[rows.len() - 1];
+                    let below = device(top + lane - MARK_PADDING) - device(last + height);
+                    assert!(
+                        (above - below).abs() <= 2.0,
+                        "{above} over, {below} under: {at}"
+                    );
+                }
+            }
+        }
     }
 
     // At scale 1 a line is the logical pixel itself; at 1.7, x 184 is device pixel 312.8, so

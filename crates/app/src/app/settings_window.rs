@@ -155,6 +155,11 @@ impl App {
                     .into()
             }
             SettingsPage::Theme => scrollable(self.theme_page().view()).height(Fill).into(),
+            SettingsPage::Music => {
+                scrollable(crate::ui::jam::music_page(self.session.project().key))
+                    .height(Fill)
+                    .into()
+            }
         };
         let words = self.settings_hint();
         let foot = iced::widget::responsive(move |size| {

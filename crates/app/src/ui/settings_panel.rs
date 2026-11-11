@@ -77,6 +77,8 @@ pub enum SettingsMessage {
     HexEntered,
     /// The Theme page's menu chose what the colour wheel edits.
     ColorTargetChosen(ColorTarget),
+    /// The Theme page's Lock pressed: the accent kept through a theme chosen, or not.
+    AccentLockToggled,
 }
 
 /// What the settings panel shows.

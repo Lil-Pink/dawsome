@@ -181,13 +181,16 @@ pub enum SettingsPage {
     Keys,
     /// The theme and the accent.
     Theme,
+    /// The project's key.
+    Music,
 }
 
 impl SettingsPage {
-    pub const ALL: [SettingsPage; 3] = [
+    pub const ALL: [SettingsPage; 4] = [
         SettingsPage::General,
         SettingsPage::Keys,
         SettingsPage::Theme,
+        SettingsPage::Music,
     ];
 
     pub fn title(self) -> &'static str {
@@ -195,6 +198,7 @@ impl SettingsPage {
             SettingsPage::General => "General",
             SettingsPage::Keys => "Keys",
             SettingsPage::Theme => "Theme",
+            SettingsPage::Music => "Music",
         }
     }
 
@@ -206,10 +210,10 @@ impl SettingsPage {
     }
 }
 
-/// Where the header's first tab starts, and each tab's width (General, Keys, Theme): its title
-/// with room either side, 8 px or so.
+/// Where the header's first tab starts, and each tab's width (General, Keys, Theme, Music): its
+/// title with room either side, 8 px or so.
 const TAB_X: f32 = 90.0;
-const TAB_WIDTHS: [f32; SettingsPage::ALL.len()] = [64.0, 44.0, 56.0];
+const TAB_WIDTHS: [f32; SettingsPage::ALL.len()] = [64.0, 44.0, 56.0, 56.0];
 const TAB_GAP: f32 = 4.0;
 
 /// The tab of `page` in the header.
@@ -262,6 +266,9 @@ pub enum Hit {
     /// The target's hex box, a text box of its own that takes its presses (named here for the
     /// hint line).
     Hex(ColorTarget),
+    /// The Lock beside the menu while it is on the accent, a button of its own that takes its
+    /// presses (named here for the hint line).
+    AccentLock,
     /// The key giving the target its own colour again: the theme's accent ("Theme's own"), each
     /// channel's colour for the notes ("Channel's own").
     OwnColor(ColorTarget),
@@ -996,9 +1003,10 @@ mod tests {
         assert_eq!(three.page_bottom(), 400.0);
     }
 
-    // The header's tabs, General, Keys, then Theme, right of the title, inside the
-    // header, each 4 px after the one before: General 90..154, Keys 158..202 and Theme
-    // 206..262, by x = 90 + the widths and gaps before it (64 + 4, then 44 + 4); a press on
+    // The header's tabs, General, Keys, Theme, then Music, right of the title, inside the
+    // header, each 4 px after the one before: General 90..154, Keys 158..202, Theme 206..262
+    // and Music 266..322, by x = 90 + the widths and gaps before it (64 + 4, 44 + 4, then
+    // 56 + 4); a press on
     // each is its page, one on the title or in a gap none. Each title fits its tab with 7 px
     // either side in the app's font (Keys, the tightest, has 7.9).
     #[test]
@@ -1007,7 +1015,15 @@ mod tests {
             let rect = tab(page);
             (rect.x, rect.x + rect.width)
         });
-        assert_eq!(spans, [(90.0, 154.0), (158.0, 202.0), (206.0, 262.0)]);
+        assert_eq!(
+            spans,
+            [
+                (90.0, 154.0),
+                (158.0, 202.0),
+                (206.0, 262.0),
+                (266.0, 322.0)
+            ]
+        );
         for page in SettingsPage::ALL {
             let rect = tab(page);
             assert_eq!((rect.y, rect.y + rect.height), (2.0, 22.0), "{page:?}");
@@ -1024,6 +1040,7 @@ mod tests {
         );
         assert_eq!(SettingsPage::from_name("keys"), Some(SettingsPage::Keys));
         assert_eq!(SettingsPage::from_name("Theme"), Some(SettingsPage::Theme));
+        assert_eq!(SettingsPage::from_name("music"), Some(SettingsPage::Music));
         assert_eq!(SettingsPage::from_name("audio"), None);
     }
 

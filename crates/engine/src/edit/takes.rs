@@ -26,6 +26,24 @@ pub fn free_track(project: &Project, start: Ticks, end: Ticks) -> Option<TrackId
     })
 }
 
+/// One clip of `pattern` from `start`, as long as the pattern, where a take's clip lands: on
+/// the first track free over it, else on a new track added in the same step, so one undo takes
+/// back both. `None` for a pattern the project lacks or a start past the last tick.
+pub fn pattern_clip(project: &Project, pattern: PatternId, start: Ticks) -> Option<Edit> {
+    project.patterns.get(&pattern)?;
+    let length = project.pattern_ticks(pattern);
+    let end = Ticks(start.0.checked_add(length.0)?);
+    let (track, add_track) = place(project, None, start, end);
+    let clip = Edit::PlaceClips {
+        first: project.playlist.next_clip_id,
+        clips: vec![Clip::of_pattern(pattern, track, start, length)],
+    };
+    Some(match add_track {
+        Some(add) => Edit::Transaction(vec![add, clip]),
+        None => clip,
+    })
+}
+
 /// Where a take's clip over `start..end` lands: on `wanted` when the project has it, else on
 /// the first track free there, else on a new track, which the returned edit adds.
 fn place(
@@ -384,5 +402,73 @@ mod tests {
         assert_eq!(at(0, 24_000, 30_000), None);
         assert_eq!(at(0, 1234, 1234), None);
         assert_eq!(at(0, 1235, 1234), Some((Ticks(0), 1234)));
+    }
+
+    // A pattern's clip by hand: a 2-bar pattern (768 ticks at 96) from tick 768 lands on the
+    // first track free over 768..1536, as long as the pattern; with every track holding a clip
+    // there, on a new track added in the same step (the next track id); none for a pattern the
+    // project lacks.
+    #[test]
+    fn a_pattern_clip_takes_the_first_free_track_or_a_new_one() {
+        let mut project = Project::new(48_000, time::MilliBpm(120_000), 96);
+        let pattern = PatternId(1);
+        super::super::apply(
+            &mut project,
+            Edit::AddPattern {
+                id: pattern,
+                name: "Jam 1".into(),
+                bars: 2,
+                copied_from: None,
+            },
+        )
+        .expect("a pattern");
+        let tracks: Vec<TrackId> = project.playlist.tracks.keys().copied().collect();
+        let first_clip = project.playlist.next_clip_id;
+        assert_eq!(
+            pattern_clip(&project, pattern, Ticks(768)),
+            Some(Edit::PlaceClips {
+                first: first_clip,
+                clips: vec![Clip::of_pattern(pattern, tracks[0], Ticks(768), Ticks(768))],
+            })
+        );
+        // A clip over 0..1152 on the first track overlaps 768..1536: the second track takes it.
+        let busy = Clip::of_pattern(pattern, tracks[0], Ticks(0), Ticks(1152));
+        let mut one_busy = project.clone();
+        super::super::apply(
+            &mut one_busy,
+            Edit::PlaceClips {
+                first: first_clip,
+                clips: vec![busy.clone()],
+            },
+        )
+        .expect("placed");
+        match pattern_clip(&one_busy, pattern, Ticks(768)) {
+            Some(Edit::PlaceClips { clips, .. }) => assert_eq!(clips[0].track, tracks[1]),
+            other => panic!("one clip on track 2: {other:?}"),
+        }
+        let mut all_busy = project.clone();
+        let clips: Vec<Clip> = tracks
+            .iter()
+            .map(|&track| Clip::of_pattern(pattern, track, Ticks(0), Ticks(1152)))
+            .collect();
+        super::super::apply(
+            &mut all_busy,
+            Edit::PlaceClips {
+                first: first_clip,
+                clips,
+            },
+        )
+        .expect("placed");
+        let new_track = all_busy.playlist.next_track_id;
+        match pattern_clip(&all_busy, pattern, Ticks(768)) {
+            Some(Edit::Transaction(edits)) => {
+                assert!(matches!(&edits[0], Edit::AddTrack { id, .. } if *id == new_track));
+                assert!(
+                    matches!(&edits[1], Edit::PlaceClips { clips, .. } if clips[0].track == new_track)
+                );
+            }
+            other => panic!("a new track and its clip: {other:?}"),
+        }
+        assert_eq!(pattern_clip(&project, PatternId(9), Ticks(0)), None);
     }
 }

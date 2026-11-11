@@ -15,6 +15,7 @@ use crate::time::{self, MeterMap, MilliBpm, SignatureChange, Ticks, TimeSignatur
 pub(crate) mod automation;
 mod edits;
 mod input;
+mod key;
 mod links;
 mod midi_out;
 mod mixer;
@@ -29,6 +30,7 @@ pub use edits::{
     NORMALIZE_RANGE,
 };
 pub use input::{InputChannels, InputSource};
+pub use key::{KeyError, KeySignature, PitchClass, Scale};
 pub use links::{Controller, MidiLinks, MAX_CONTROLLER, MIDI_CHANNELS};
 pub use midi_out::{MidiOut, LATENCY_RANGE, MIDI_OUT_CHANNELS, PROGRAM_RANGE};
 pub use mixer::{
@@ -117,6 +119,13 @@ pub const SYNTH_FORMAT_VERSION: u32 = 9;
 /// exports all wrong) and save it so; by the version it refuses the file, saying which versions
 /// it reads.
 pub const METER_FORMAT_VERSION: u32 = 10;
+
+/// The `format_version` this build writes for a project with a key ([`Project::key`]); it reads
+/// as version 10 does, with the field. A project without one keeps its version and bytes; this
+/// version wins over every other. Why its own version and not a field a build reads past: a
+/// build before it would drop the key when it saved, and the user would find a key they set
+/// gone; by the version it refuses the file, saying which versions it reads.
+pub const KEY_FORMAT_VERSION: u32 = 11;
 
 /// The most tracks a playlist holds: the range of the project-file playlist item's track index.
 pub const MAX_TRACKS: usize = 500;
@@ -233,6 +242,10 @@ pub struct Project {
     /// [`METER_FORMAT_VERSION`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signature_changes: Vec<SignatureChange>,
+    /// The song's key, or `None` when none is set: what a Jam writes in. Not written when
+    /// `None`; a key makes the file version [`KEY_FORMAT_VERSION`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeySignature>,
     /// The ID the next new channel gets: above every ID ever given out, so none is reused.
     pub next_channel_id: ChannelId,
     /// Channels by ID. ID order is rack order.
@@ -1114,7 +1127,7 @@ pub enum LoadError {
     #[error("not a valid project file: {0}")]
     Json(#[from] serde_json::Error),
     #[error(
-        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8, 9 and 10)"
+        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8, 9, 10 and 11)"
     )]
     UnsupportedVersion(u32),
     #[error("tempo_bpm {0} is not a positive tempo")]
@@ -1389,6 +1402,7 @@ impl Project {
             ppq,
             time_signature: TimeSignature::COMMON,
             signature_changes: Vec::new(),
+            key: None,
             next_channel_id: ChannelId(1),
             channels: BTreeMap::new(),
             next_pattern_id: None,
@@ -1471,13 +1485,14 @@ impl Project {
         let mut project = match format_version {
             1 => serde_json::from_str::<v1::ProjectFile>(text)?.into_project()?,
             // Version 4 added the instrument channel, 5 the sound settings, 6 the input channel,
-            // 7 its MIDI out, 8 a sound's edits, 9 the synth channel and 10 a time signature
-            // other than 4/4, and nothing else, so they read with the same shape; a version 2
+            // 7 its MIDI out, 8 a sound's edits, 9 the synth channel, 10 a time signature
+            // other than 4/4 and 11 the key, and nothing else, so they read with the same shape; a version 2
             // file is a version 4 file without an instrument channel, a version 4 file a version
             // 5 file without sound settings, a version 5 file a version 6 file without an input
             // channel, a version 6 file a version 7 file without a MIDI out, a version 7 file a
             // version 8 file without edits, a version 8 file a version 9 file without a synth
-            // channel, and a version 9 file a version 10 file in 4/4.
+            // channel, a version 9 file a version 10 file in 4/4, and a version 10 file a
+            // version 11 file without a key.
             FORMAT_VERSION
             | INSTRUMENT_FORMAT_VERSION
             | SOUND_FORMAT_VERSION
@@ -1485,7 +1500,8 @@ impl Project {
             | MIDI_OUT_FORMAT_VERSION
             | EDITS_FORMAT_VERSION
             | SYNTH_FORMAT_VERSION
-            | METER_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
+            | METER_FORMAT_VERSION
+            | KEY_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
             other => return Err(LoadError::UnsupportedVersion(other)),
         };
         project.mixer.adopt_former_native_ids();
@@ -1537,7 +1553,7 @@ impl Project {
     /// The canonical JSON text of this project, in the current format (version 2; 4 when it has
     /// an instrument channel, 5 when a channel holds sound settings, 6 when it has an input
     /// channel, 7 when one of those has a MIDI out, 8 when a sound has edits, 9 when it has a
-    /// synth channel, 10 when its time signature is not 4/4): compact, fields in a fixed order, channels and patterns by
+    /// synth channel, 10 when its time signature is not 4/4, 11 when it has a key): compact, fields in a fixed order, channels and patterns by
     /// ID, notes by (tick, channel, key). Equal projects give identical bytes, so an undo can be
     /// checked byte for byte.
     ///
@@ -1580,7 +1596,9 @@ impl Project {
                 .patterns
                 .values()
                 .any(|pattern| pattern.time_signature.is_some());
-        let format_version = if meter {
+        let format_version = if self.key.is_some() {
+            KEY_FORMAT_VERSION
+        } else if meter {
             METER_FORMAT_VERSION
         } else if synths {
             SYNTH_FORMAT_VERSION
@@ -2119,6 +2137,7 @@ mod v1 {
                 ppq,
                 time_signature: crate::time::TimeSignature::COMMON,
                 signature_changes: Vec::new(),
+                key: None,
                 next_channel_id: ChannelId(next_channel_id),
                 channels,
                 next_pattern_id: None,

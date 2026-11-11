@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use dawsome_engine::jam::KeySignature;
 use dawsome_engine::project::{ChannelId, Note, PatternId, Project};
 use dawsome_engine::time::Ticks;
 use iced::alignment::{Horizontal, Vertical};
@@ -645,6 +646,7 @@ impl<'a> PianoRoll<'a> {
             live,
             song_tick,
             scale: self.roll.scale,
+            key: self.project.key,
             held: self.roll.grid_held(),
             known_size: self.roll.grid_size(),
             scale_factor: self.scale_factor,
@@ -790,22 +792,35 @@ fn row_color(key: u8) -> Color {
     }
 }
 
-/// `key`'s row color with `scale` chosen: darker outside it.
-fn scaled_row(key: u8, scale: Scale) -> Color {
+/// `key`'s row color: darker outside the strip's `scale` while one is chosen, else, with the
+/// project's `project` key, veiled outside it ([`style::out_of_key`]). Why the strip's scale first: it is
+/// the one the user chose to look at here, and two shadings at once would read as one darker.
+fn keyed_row(key: u8, scale: Scale, project: Option<KeySignature>) -> Color {
     let row = row_color(key);
-    if scale.holds(key) {
-        row
+    keyed_face(key, scale, project, row)
+}
+
+/// `color`, a part of `key`'s row or key, shaded as [`keyed_row`] shades the row.
+fn keyed_face(key: u8, scale: Scale, project: Option<KeySignature>, color: Color) -> Color {
+    if scale.is_on() {
+        if scale.holds(key) {
+            color
+        } else {
+            style::out_of_scale(color)
+        }
     } else {
-        style::out_of_scale(row)
+        match project {
+            Some(project) if !project.contains(key) => style::out_of_key(color),
+            _ => color,
+        }
     }
 }
 
-/// What `key`'s row is filled with: its color with `scale` chosen ([`scaled_row`]), lighter in
-/// a `shaded` bar ([`style::shaded`]), and that dimmed `past_end` of the pattern
-/// ([`style::dimmed`]), as the lines there are, so the bars past the end are the pattern's at
-/// 0.6, their shading too: quieter than the pattern, not busier.
-fn row_fill(key: u8, scale: Scale, past_end: bool, shaded: bool) -> Color {
-    let row = scaled_row(key, scale);
+/// What a row of `row`'s color is filled with: lighter in a `shaded` bar ([`style::shaded`]),
+/// and that dimmed `past_end` of the pattern ([`style::dimmed`]), as the lines there are, so the
+/// bars past the end are the pattern's at 0.6, their shading too: quieter than the pattern, not
+/// busier.
+fn finish_row(row: Color, past_end: bool, shaded: bool) -> Color {
     let row = if shaded { style::shaded(row) } else { row };
     if past_end {
         style::dimmed(row)
@@ -857,6 +872,8 @@ struct Grid<'a> {
     song_tick: Option<Ticks>,
     /// The scale whose outside keys shade darker.
     scale: Scale,
+    /// The project's key, whose outside keys are veiled while no scale is chosen.
+    key: Option<KeySignature>,
     /// Whether a move, resize or box select is held, so drags and the release are reported
     /// wherever the cursor is.
     held: bool,
@@ -895,7 +912,8 @@ impl Grid<'_> {
             let y = view.row_top(key);
             let mut fill = |left: f32, right: f32, past_end: bool, shade: bool| {
                 if right > left {
-                    let color = row_fill(key, self.scale, past_end, shade);
+                    let row = keyed_row(key, self.scale, self.key);
+                    let color = finish_row(row, past_end, shade);
                     frame.fill_rectangle(
                         Point::new(left, y),
                         Size::new(right - left, ROW_HEIGHT),
@@ -913,7 +931,7 @@ impl Grid<'_> {
         // The lines run down the whole rows, not the ground under them.
         self.draw_lines(frame, Size::new(size.width, rows_bottom));
         let ghost_row = |note: &Note| {
-            let row = scaled_row(note.key, self.scale);
+            let row = keyed_row(note.key, self.scale, self.key);
             if note.start >= self.end {
                 style::dimmed(row)
             } else {
@@ -950,17 +968,12 @@ impl Grid<'_> {
         // The key column goes on top, covering notes scrolled to the left of the timeline, drawn
         // as a keyboard: every row a white key's face, a black key's row black over the left of
         // it ([`piano_layout::black_key_width`]) with the white showing beside it. A row's faces
-        // shade as its key does with a scale chosen: the row is the key a press plays.
+        // shade as its key does with a scale chosen or outside the project's key: the row is the
+        // key a press plays.
         let black_width = piano_layout::black_key_width(KEY_COLUMN_WIDTH);
         for key in keys() {
             let y = view.row_top(key);
-            let face = |color| {
-                if self.scale.holds(key) {
-                    color
-                } else {
-                    style::out_of_scale(color)
-                }
-            };
+            let face = |color| keyed_face(key, self.scale, self.key, color);
             frame.fill_rectangle(
                 Point::new(0.0, y),
                 Size::new(KEY_COLUMN_WIDTH, ROW_HEIGHT),
@@ -1647,19 +1660,61 @@ mod tests {
             root: Root(0),
             mode: ScaleMode::Major,
         };
-        assert_eq!(scaled_row(60, c_major), style::palette().roll_row_white);
         assert_eq!(
-            scaled_row(61, c_major),
+            keyed_row(60, c_major, None),
+            style::palette().roll_row_white
+        );
+        assert_eq!(
+            keyed_row(61, c_major, None),
             style::out_of_scale(style::palette().roll_row_black)
         );
         assert_eq!(
-            scaled_row(61, Scale::default()),
+            keyed_row(61, Scale::default(), None),
             style::palette().roll_row_black
         );
         assert_ne!(
             style::out_of_scale(style::palette().roll_row_black),
             style::palette().roll_row_black
         );
+    }
+
+    // The project's key, A minor: A (69) and C (60) keep their rows and C# (61) is veiled, the
+    // theme's veil (Graphite's readout glass #141619 at 0.5) over the black-key row #2D3035,
+    // a channel the mean of the two: (0x2D + 0x14) / 2 and so on; with no key nothing is
+    // veiled, and with the strip's C major chosen the strip's shading stands instead (C# 0.7
+    // over black, D# too, which A minor would veil as well, and G# (68), outside A minor but in
+    // no C major either, the strip's alone).
+    #[test]
+    fn keys_outside_the_projects_key_are_veiled() {
+        use dawsome_engine::jam::{PitchClass, Scale as KeyScale};
+
+        use crate::ui::scale::{Root, ScaleMode};
+        let a_minor = Some(KeySignature {
+            root: PitchClass::new(9).expect("A"),
+            scale: KeyScale::Minor,
+        });
+        let off = Scale::default();
+        let white = style::palette().roll_row_white;
+        let black = style::palette().roll_row_black;
+        assert_eq!(keyed_row(69, off, a_minor), white);
+        assert_eq!(keyed_row(60, off, a_minor), white);
+        let veiled = keyed_row(61, off, a_minor);
+        let mean = |row: u8, veil: u8| (f32::from(row) + f32::from(veil)) / 2.0 / 255.0;
+        for (got, want) in [
+            (veiled.r, mean(0x2D, 0x14)),
+            (veiled.g, mean(0x30, 0x16)),
+            (veiled.b, mean(0x35, 0x19)),
+        ] {
+            assert!((got - want).abs() < 1e-6, "{got} {want}");
+        }
+        assert_eq!(keyed_row(61, off, None), black);
+        let c_major = Scale {
+            root: Root(0),
+            mode: ScaleMode::Major,
+        };
+        assert_eq!(keyed_row(61, c_major, a_minor), style::out_of_scale(black));
+        assert_eq!(keyed_row(68, c_major, a_minor), style::out_of_scale(black));
+        assert_eq!(keyed_row(60, c_major, a_minor), white);
     }
 
     // A row in a shaded bar is 5 lighter a channel than it is beside it, whatever color the row
@@ -1680,31 +1735,31 @@ mod tests {
         };
         let rgb = |color: Color| color.into_rgba8();
         assert_eq!(
-            row_fill(60, none, false, false),
+            finish_row(keyed_row(60, none, None), false, false),
             style::palette().roll_row_white
         );
         assert_eq!(
-            rgb(row_fill(60, none, false, true)),
+            rgb(finish_row(keyed_row(60, none, None), false, true)),
             [0x39, 0x3C, 0x42, 0xFF]
         );
         assert_eq!(
-            rgb(row_fill(61, none, false, true)),
+            rgb(finish_row(keyed_row(61, none, None), false, true)),
             [0x32, 0x35, 0x3A, 0xFF]
         );
         assert_eq!(
-            rgb(row_fill(60, none, true, true)),
+            rgb(finish_row(keyed_row(60, none, None), true, true)),
             [0x22, 0x24, 0x28, 0xFF]
         );
         assert_eq!(
-            rgb(row_fill(60, none, true, false)),
+            rgb(finish_row(keyed_row(60, none, None), true, false)),
             [0x1F, 0x21, 0x25, 0xFF]
         );
         assert_eq!(
-            rgb(row_fill(61, none, true, true)),
+            rgb(finish_row(keyed_row(61, none, None), true, true)),
             [0x1E, 0x20, 0x23, 0xFF]
         );
         assert_eq!(
-            rgb(row_fill(61, c_major, false, true)),
+            rgb(finish_row(keyed_row(61, c_major, None), false, true)),
             [0x25, 0x27, 0x2A, 0xFF]
         );
     }

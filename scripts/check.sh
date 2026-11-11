@@ -107,6 +107,9 @@ scripts/python.sh -I tests/fixtures/gen_p34_expected.py --check tests/fixtures
 # MIDI and DAWproject files, --bars, the stems' end, the change edits and their settle rule), as
 # their generator writes them.
 scripts/python.sh -I tests/fixtures/gen_p35_expected.py --check tests/fixtures
+# Jam: the requests, projects and sets, and the pattern each request writes (the PRNG, every
+# genre's table, the draw order, the harmony), as their generator writes them.
+scripts/python.sh -I tests/fixtures/gen_p36_expected.py --check tests/fixtures
 # The piano roll's player: the sounds, projects and their references (every other channel muted)
 # a channel's render alone must equal byte for byte, the frames worked out by hand, and the
 # lengths of a pass played once and of two passes looped.

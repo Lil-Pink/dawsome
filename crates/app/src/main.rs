@@ -388,6 +388,10 @@ fn main() -> ExitCode {
             Some("--screenshot-window help needs the window --show help opens")
         } else if window == headless::ShotWindow::Params && !lists_params {
             Some("--screenshot-window params needs the window --open-plugin or --open-params opens")
+        } else if window == headless::ShotWindow::Jam
+            && shown != Some(args::Shown::Jam { window: true })
+        {
+            Some("--screenshot-window jam needs the window --show jam-window opens")
         } else if window == headless::ShotWindow::SampleEditor && sample_editor.is_none() {
             Some("--screenshot-window sample-editor needs the window --open-sample-editor opens")
         } else if matches!(window, headless::ShotWindow::Panel(panel) if !args.panels.popped.has(panel))

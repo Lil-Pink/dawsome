@@ -13,6 +13,7 @@ pub mod compile;
 pub mod dsp;
 pub mod edit;
 pub mod input;
+pub mod jam;
 pub mod midi_out;
 pub mod plan;
 pub mod processor;

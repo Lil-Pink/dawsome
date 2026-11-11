@@ -20,6 +20,7 @@ pub mod help_window;
 pub mod hint;
 pub mod instrument_layout;
 pub mod instrument_window;
+pub mod jam;
 pub mod key_names;
 pub mod keys_page;
 pub mod knob_block;

@@ -63,6 +63,8 @@ pub enum PopOut {
     Params,
     /// The sample editor: one channel's sound.
     SampleEditor,
+    /// The Jam window: the rolls of a pattern for the rack's instruments.
+    Jam,
     /// The rack, the playlist, the piano roll or the mixer, popped out of the stack.
     Panel(Panel),
 }
@@ -95,6 +97,7 @@ impl PopOut {
             PopOut::Help => crate::ui::help_window::WINDOW_SIZE,
             PopOut::Params => crate::ui::param_window::WINDOW_SIZE,
             PopOut::SampleEditor => crate::ui::sample_editor::WINDOW_SIZE,
+            PopOut::Jam => crate::ui::jam::WINDOW_SIZE,
             PopOut::Panel(_) => PANEL_WINDOW_SIZE,
         }
     }
@@ -108,6 +111,7 @@ impl PopOut {
             PopOut::Help => crate::ui::help_window::WINDOW_MIN,
             PopOut::Params => crate::ui::param_window::WINDOW_MIN,
             PopOut::SampleEditor => crate::ui::sample_editor::WINDOW_MIN,
+            PopOut::Jam => crate::ui::jam::WINDOW_MIN,
             PopOut::Panel(panel) => {
                 let width = if panel == Panel::PianoRoll {
                     ROLL_WINDOW_MIN_WIDTH

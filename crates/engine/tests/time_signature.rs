@@ -288,12 +288,12 @@ fn a_file_with_a_signature_out_of_range_or_a_later_version_is_refused() {
             "{bad}: {error}"
         );
     }
-    let later = three_four.replace(r#""format_version":10"#, r#""format_version":11"#);
+    let later = three_four.replace(r#""format_version":10"#, r#""format_version":12"#);
     match Project::load_json(&later) {
-        Err(error @ LoadError::UnsupportedVersion(11)) => assert_eq!(
+        Err(error @ LoadError::UnsupportedVersion(12)) => assert_eq!(
             error.to_string(),
-            "format_version 11 is not supported (this build reads versions 1, 2, 4, 5, 6, 7, \
-             8, 9 and 10)"
+            "format_version 12 is not supported (this build reads versions 1, 2, 4, 5, 6, 7, \
+             8, 9, 10 and 11)"
         ),
         other => panic!("refused by its version: {other:?}"),
     }

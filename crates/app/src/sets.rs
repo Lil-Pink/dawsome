@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use dawsome_engine::jam::DrumMap;
 use dawsome_engine::project::{Gate, Sound};
 use dawsome_media::decode::probe;
 use dawsome_media::set_files::{self, SetFolder};
@@ -90,27 +91,72 @@ const KIT_KINDS: [(&str, Kind); 10] = [
     ("mallets", Kind::Mallets),
 ];
 
-/// The kind of each of the shipped sets `shipped`: the `category` its folder's `set.json`
-/// names, else the kit's kind for its folder's name ([`KIT_KINDS`]); a set with neither is
-/// left out (the Library lists it as [`Kind::Other`]).
+/// The drum keys of the dawsome-kit's drum sets whose keys are not General MIDI's, by folder
+/// name, for a Jam ([`drum_map`]); every other drum set plays the General MIDI map. Picked from
+/// each set's zones (its .sfz: one sound per key):
+/// - `drums-electronic` (from key 24: 14 kicks, 4 snares, 19 hats, no clap): the kick bd_fat
+///   (28, its peak within 10 ms, 20 dB down by 190 ms), the snare sn_dolf (38, 20 dB down by
+///   100 ms), the closed hat hat_tap (56, 20 dB down by 80 ms) and the open hat hat_gump (46,
+///   the longest hat, 20 dB down by 300 ms), measured from each sound's level over 10 ms
+///   windows; no clap, no perc.
+/// - `drums-acoustic`: General MIDI's keys without the clap, which it has no sound on (39).
+const KIT_DRUM_MAPS: [(&str, DrumMap); 2] = [
+    (
+        "drums-electronic",
+        DrumMap {
+            kick: Some(28),
+            snare: Some(38),
+            clap: None,
+            closed_hat: Some(56),
+            open_hat: Some(46),
+            perc: None,
+        },
+    ),
+    (
+        "drums-acoustic",
+        DrumMap {
+            clap: None,
+            ..DrumMap::GM
+        },
+    ),
+];
+
+/// The keys a Jam plays each drum voice on with the drum set `sfz`: its kit map
+/// ([`KIT_DRUM_MAPS`], by its folder's name), else General MIDI's.
+pub fn drum_map(sfz: &Path) -> DrumMap {
+    let folder = sfz
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+    KIT_DRUM_MAPS
+        .iter()
+        .find(|(kit, _)| Some(*kit) == folder)
+        .map_or(DrumMap::GM, |&(_, map)| map)
+}
+
+/// The kind of the set `sfz`: the `category` its folder's `set.json` names, else the kit's kind
+/// for its folder's name ([`KIT_KINDS`]); `None` with neither.
+pub fn kind_of_set(sfz: &Path) -> Option<Kind> {
+    let folder = sfz.parent()?;
+    let named = manifest(folder)["category"]
+        .as_str()
+        .and_then(Kind::from_category);
+    named.or_else(|| {
+        let name = folder.file_name()?.to_str()?;
+        KIT_KINDS
+            .iter()
+            .find(|(kit, _)| *kit == name)
+            .map(|&(_, kind)| kind)
+    })
+}
+
+/// The kind of each of the shipped sets `shipped` ([`kind_of_set`]); a set with none is left
+/// out (the Library lists it as [`Kind::Other`]).
 pub fn kinds(shipped: &[InstrumentSet]) -> Kinds {
-    let kind_of = |set: &InstrumentSet| {
-        let folder = set.sfz.parent()?;
-        let named = manifest(folder)["category"]
-            .as_str()
-            .and_then(Kind::from_category);
-        named.or_else(|| {
-            let name = folder.file_name()?.to_str()?;
-            KIT_KINDS
-                .iter()
-                .find(|(kit, _)| *kit == name)
-                .map(|&(_, kind)| kind)
-        })
-    };
     Kinds(
         shipped
             .iter()
-            .filter_map(|set| Some((set.sfz.clone(), kind_of(set)?)))
+            .filter_map(|set| Some((set.sfz.clone(), kind_of_set(&set.sfz)?)))
             .collect(),
     )
 }

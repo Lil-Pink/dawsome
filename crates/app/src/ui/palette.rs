@@ -4,7 +4,10 @@
 //! now ([`palette`], [`set_theme`]), chosen on Settings' Theme page and kept as `ui_theme`.
 //!
 //! One colour of a set may be the user's own: the accent ([`set_accent`], the Theme page's
-//! Accent, kept as `ui_accent`), drawn in every theme over the theme's. Every window reads the
+//! Accent, kept as `ui_accent`), drawn over the theme's. A theme chosen gives the accent back to
+//! that theme's own unless the Theme page's Lock keeps the user's
+//! ([`crate::settings::Settings::set_theme`]); [`set_theme`] itself leaves it as it is. Every
+//! window reads the
 //! accent through [`accent`] and the slider's fill, which follows it, through [`slider_fill`];
 //! a set's own two are private to this module, so no draw site can skip the user's (the Theme
 //! page's keys show each set's own accent through [`ThemeId::swatch`], by design). Why one
@@ -177,6 +180,19 @@ pub struct Palette {
     /// lanes were its own green and are brown now, so it reads at least 1.5:1 on the lanes (the
     /// raised band).
     pub audio_clip_body: Color,
+    /// A piano roll row or key outside the project's key, drawn over its colour: a veil of the
+    /// theme's darkest tone (its readouts' glass) at half strength, so the rows outside keep
+    /// their white and black tones and the theme's hue a shade down
+    /// ([`crate::ui::style::out_of_key`]).
+    pub out_of_key: Color,
+}
+
+/// `rgb` at opacity `alpha`: a colour drawn over another.
+const fn veil(rgb: u32, alpha: f32) -> Color {
+    Color {
+        a: alpha,
+        ..hex(rgb)
+    }
 }
 
 /// Today's look, the default: the constants the app drew with before themes, bit for bit but
@@ -234,9 +250,13 @@ pub const GRAPHITE: Palette = Palette {
     loop_tint: hex(0x383532),
     meter_ground: hex(0x141619),
     audio_clip_body: crate::ui::style::AUDIO_BODY,
+    out_of_key: veil(0x141619, 0.5),
 };
 
-/// A darker, cooler five-step blue-grey with brighter text, the same orange.
+/// A darker, cooler five-step blue-grey with brighter text and a violet accent, BD00FF (it was
+/// Graphite's orange until 0.1.5). The violet reads 3.94, 3.63 and 3.16:1 on bg, panel and
+/// raised: over the 3:1 a control's parts need ([`ACCENT_LEAST_CONTRAST`]), under the 4.5 the
+/// other sets' accents meet, which `gen_ui_contrast.py` lists as Slate's three misses.
 /// Beside the design's table (bg to the disabled text, accent, the two lines, the white keys,
 /// the unlit steps) and its
 /// sketch (the lanes, the buttons, the readouts, the knob ring, the unlit steps), the rest
@@ -281,8 +301,8 @@ pub const SLATE: Palette = Palette {
     led_off: hex(0x1F2328),
     route_off: hex(0x34383E),
     row_tones: [hex(0x202329), hex(0x262A30)],
-    slider_fill: hex(0x8F5F25),
-    accent: hex(0xF29A2E),
+    slider_fill: hex(0x710A98),
+    accent: hex(0xBD00FF),
     toolbar_line: hex(0x7A818B),
     seam: hex(0x15171B),
     key_white: hex(0xB4B9BF),
@@ -295,15 +315,19 @@ pub const SLATE: Palette = Palette {
     loop_tint: hex(0x2A2723),
     meter_ground: hex(0x121418),
     audio_clip_body: crate::ui::style::AUDIO_BODY,
+    out_of_key: veil(0x121418, 0.5),
 };
 
 /// Gold leaf on deep chocolate, measured from a photo of glossy deep-brown lacquer flaked with
 /// gold leaf beside a cream cable knit (region medians and 10th/90th percentiles; until 0.1.4 it
-/// was gold on deep green): the gold is the accent, the lit edges (`line_strong`, the knob ring,
-/// the console's lips, the seam's lip) and the fader caps, never a large fill, so it stays clear
-/// of the orange record and warning colours and the amber meter; the synth's console reads as
-/// chocolate lacquer with gold lips. The design, from the photo's measures in CIE L*a*b* (as
-/// `tests/fixtures/gen_ui_contrast.py` works it out):
+/// was gold on deep green): the gold is the lit edges (`line_strong`, the knob ring, the console's
+/// lips, the seam's lip) and the fader caps, never a large fill, so it stays clear of the orange
+/// record and warning colours and the amber meter; the synth's console reads as chocolate lacquer
+/// with gold lips. The accent is a teal, 3FD6C8, which the photo does not hold: the accent marks
+/// what is lit and chosen, so it is a colour the set's ground does not contain, neither the
+/// chocolate nor the gold, as Slate's violet and Graphite's orange are theirs. It reads 9.58, 8.71
+/// and 7.65:1 on bg, panel and raised, past 4.5. The design, from the photo's measures in CIE
+/// L*a*b* (as `tests/fixtures/gen_ui_contrast.py` works it out):
 /// - the tonal ladder: bg 251812, dark chocolate, has the lightness of the lacquer's shadow (the
 ///   L*a*b* midpoint of its two measured ends 2C100F and 37120C: L* 9.78, a* 16.17, b* 9.28) and
 ///   a hue turned from its red toward chocolate: a* a third of the shadow's (16.17 / 3 = 5.39), b*
@@ -317,8 +341,7 @@ pub const SLATE: Palette = Palette {
 /// - the text D7C1B3, the knit's light, and the secondary text B89E8D, its mid, as measured: they
 ///   read 7.98:1 and 5.45:1 on the raised band, past the 7 and 4.5 the rules ask, so neither is
 ///   lightened;
-/// - the accent F4BC7F, the leaf's bright, as measured (8.10:1 on the raised band, past 4.5); the
-///   fader cap E0A265, the leaf's median; `line_strong` 9C7854, the leaf's dim (3.91:1 on the
+/// - the fader cap E0A265, the leaf's median; `line_strong` 9C7854, the leaf's dim (3.91:1 on the
 ///   panel, past 2.5);
 /// - the white key D7C1B3 as designed, the knit's light (a shade down here as every set's is:
 ///   BEA99B), and the black key bg.
@@ -379,8 +402,8 @@ pub const GILT: Palette = Palette {
     led_off: hex(0x31231E),
     route_off: hex(0x564741),
     row_tones: [hex(0x332520), hex(0x3B2C27)],
-    slider_fill: hex(0x97724E),
-    accent: hex(0xF4BC7F),
+    slider_fill: hex(0x338176),
+    accent: hex(0x3FD6C8),
     toolbar_line: hex(0x9C7854),
     seam: hex(0x251812),
     key_white: hex(0xBEA99B),
@@ -399,18 +422,21 @@ pub const GILT: Palette = Palette {
     // which it reads 1.5:1 on raised, a* and b* kept (`gen_ui_contrast.py`'s audio body): L* 30
     // gives 3A4A43, 1.47:1; L* 31 gives 3C4D45, 1.53:1.
     audio_clip_body: hex(0x3C4D45),
+    out_of_key: veil(0x21140D, 0.5),
 };
 
-/// Rose gold on deep plum, garnet set in rose gold: the ground a dark red-violet, the accent a
-/// pale rose gold, the lit edges and the knob rings a darker one, the fader caps between the
-/// two. Why this violet and no bluer: the automation clips' body is a dark violet; a plum this
-/// red keeps the lanes apart from it and from the missing-audio clip's dark red (CIEDE2000
-/// about 7 from each, near Graphite's 8 from its nearest clip body). The rose gold is lighter
-/// and paler than Record's red, 23 from it (Graphite's orange is 26, Gilt's gold 30), so a lit
-/// button reads apart from an armed one by its lightness more than its hue. Designed in CIE LCh
-/// (the surfaces' hue 350°, their lightness near Slate's, deeper than Gilt's): bg to
-/// the secondary text, the accent, the two lines, the white key as designed (E8D6D2, a blush ivory) and
-/// the fader cap; the rest derived as [`GILT`]'s, the readouts' glass bg 3 darker a channel as
+/// Rose gold on deep plum, garnet set in rose gold: the ground a dark red-violet, the lit edges
+/// and the knob rings a dark rose gold, the fader caps a lighter one. The accent is a gold,
+/// FFC63F: the accent marks what is lit and chosen, so it is a colour the set's ground does not
+/// contain, as Slate's violet and Graphite's orange are, and the plum holds no yellow. It reads
+/// 11.03, 10.24 and 9.22:1 on bg, panel and raised, past 4.5. Why this violet and no bluer: the
+/// automation clips' body is a dark violet; a plum this red keeps the lanes apart from it and
+/// from the missing-audio clip's dark red (CIEDE2000 about 7 from each, near Graphite's 8 from
+/// its nearest clip body). The gold is lighter and yellower than Record's red, 40 from it
+/// (Graphite's orange is 26), so a lit button reads apart from an armed one. Designed in CIE LCh
+/// (the surfaces' hue 350°, their lightness near Slate's, deeper than Gilt's): bg to the
+/// secondary text, the two lines, the white key as designed (E8D6D2, a blush ivory) and the
+/// fader cap; the rest derived as [`GILT`]'s, the readouts' glass bg 3 darker a channel as
 /// Slate's.
 pub const GARNET: Palette = Palette {
     bg: hex(0x26161D),
@@ -447,8 +473,8 @@ pub const GARNET: Palette = Palette {
     led_off: hex(0x341D28),
     route_off: hex(0x5A3B49),
     row_tones: [hex(0x351F29), hex(0x3D2530)],
-    slider_fill: hex(0x956C62),
-    accent: hex(0xF0B39B),
+    slider_fill: hex(0x9D7730),
+    accent: hex(0xFFC63F),
     toolbar_line: hex(0x9F6A5A),
     seam: hex(0x26161D),
     key_white: hex(0xCDBBB7),
@@ -461,18 +487,23 @@ pub const GARNET: Palette = Palette {
     loop_tint: hex(0x3F1F21),
     meter_ground: hex(0x23131A),
     audio_clip_body: crate::ui::style::AUDIO_BODY,
+    out_of_key: veil(0x23131A, 0.5),
 };
 
-/// Ice over deep navy water: the ground a saturated navy, the accent a pale ice blue, the lit
-/// edges and the knob rings a steel blue, the fader caps frosted steel; the one cool accent of
-/// the sets. Why ice and not the coral a navy is often paired with: a coral lies within
-/// CIEDE2000 17 of Record's red (Graphite's orange is 26 from it), so a lit button would read
-/// as armed; the ice is 59 from it. Why navy and not a charcoal: a charcoal's lanes lie within
-/// 3 of Graphite's, the same world; the navy's are 11 from Graphite's and Slate's. The clips'
-/// blue keeps its 3:1 on the navy lanes by its lightness. Designed in CIE LCh (the surfaces'
-/// hue 265°, their lightness that of Gilt's green set before 0.1.4): bg to the secondary text, the accent, the two lines, the white key
-/// as designed (D1DCE2, an ice white) and the fader cap; the rest derived as [`GILT`]'s, the
-/// readouts' glass bg 3 darker a channel as Slate's.
+/// Ice over deep navy water: the ground a saturated navy, the lit edges and the knob rings a
+/// steel blue, the fader caps frosted steel. The accent is an amber, FFB347: the accent marks
+/// what is lit and chosen, so it is a colour the set's ground does not contain, as Slate's violet
+/// and Graphite's orange are, its hue all but opposite the navy's (74° in CIE LCh to the
+/// surfaces' 265°). It reads 9.10, 8.16 and 7.04:1 on bg, panel and raised, past 4.5. Why amber
+/// and not the coral a navy is often paired with: a coral lies within CIEDE2000 17 of Record's
+/// red (Graphite's orange is 26 from it), so a lit button would read as armed; the amber is 32
+/// from it. Why navy and not a charcoal: a charcoal's lanes lie within 3 of Graphite's, the same
+/// world; the navy's are 11 from Graphite's and Slate's. The clips' blue keeps its 3:1 on the
+/// navy lanes by its lightness.
+/// Designed in CIE LCh (the surfaces' hue 265°, their lightness that of Gilt's green set before
+/// 0.1.4): bg to the secondary text, the two lines, the white key as designed (D1DCE2, an ice
+/// white) and the fader cap; the rest derived as [`GILT`]'s, the readouts' glass bg 3 darker a
+/// channel as Slate's.
 pub const FJORD: Palette = Palette {
     bg: hex(0x092237),
     panel: hex(0x0E2B43),
@@ -508,8 +539,8 @@ pub const FJORD: Palette = Palette {
     led_off: hex(0x0F2F48),
     route_off: hex(0x2E5477),
     row_tones: [hex(0x11304A), hex(0x163854)],
-    slider_fill: hex(0x56899C),
-    accent: hex(0x95DDEF),
+    slider_fill: hex(0x907240),
+    accent: hex(0xFFB347),
     toolbar_line: hex(0x578296),
     seam: hex(0x092237),
     key_white: hex(0xB6C1C7),
@@ -522,6 +553,7 @@ pub const FJORD: Palette = Palette {
     loop_tint: hex(0x163345),
     meter_ground: hex(0x061F34),
     audio_clip_body: crate::ui::style::AUDIO_BODY,
+    out_of_key: veil(0x061F34, 0.5),
 };
 
 /// A theme: which [`Palette`] the app draws with. Slate is the default, the set a new user
@@ -614,7 +646,8 @@ pub fn palette() -> &'static Palette {
 
 /// Draws every window with `theme`'s palette from the next frame on. What a canvas keeps of an
 /// earlier frame keeps its colours until cleared (the app clears every cache it holds). An
-/// accent of the user's own stays over the new theme's.
+/// accent of the user's own stays over the new theme's: whether a theme chosen keeps it is the
+/// settings' rule ([`crate::settings::Settings::set_theme`]), drawn through [`set_accent`].
 pub fn set_theme(theme: ThemeId) {
     current::set(theme);
 }
@@ -779,7 +812,10 @@ mod tests {
     // 2.53, and every channel colour stands 3:1 off both its unlit steps (the red 3.16 off
     // 34383E, 2.21 off the 4A4F57 before); Slate, Gilt, Garnet and Fjord miss the audio and
     // automation clips' title strips, which no dark surface can meet (the generator's ceiling:
-    // the automation strip's is below 0, the audio strip's darker than every theme's bg). The
+    // the automation strip's is below 0, the audio strip's darker than every theme's bg). Slate
+    // misses the accent's three too: its violet, BD00FF, reads 3.94 on bg, 3.63 on panel and
+    // 3.16 on raised, under 4.5 and over the 3:1 floor of a control's parts that Settings' note
+    // holds (no note shows for it). The
     // audio clip's body, 1.5:1 on raised: Gilt's, lifted to 3C4D45, meets it (1.53); the four
     // that keep AUDIO_BODY (23332C) miss it, Graphite 1.11, Slate 1.09, Garnet 1.09, Fjord 1.06,
     // its green a hue apart from their grey, slate, plum and blue lanes (the rule measures
@@ -838,6 +874,19 @@ mod tests {
             assert_eq!(failing, listed, "{}", theme.name());
             if theme == ThemeId::Gilt {
                 assert_eq!(failing, unmeetable, "Gilt misses only those");
+            } else if theme == ThemeId::Slate {
+                assert_eq!(
+                    failing,
+                    [
+                        "accent/bg",
+                        "accent/panel",
+                        "accent/raised",
+                        unmeetable[0],
+                        unmeetable[1],
+                        body
+                    ],
+                    "Slate misses those, the audio body and its violet's 4.5"
+                );
             } else if theme != ThemeId::Graphite {
                 assert_eq!(
                     failing,
@@ -881,10 +930,10 @@ mod tests {
     // in Gilt, Garnet and Fjord also those after Walnut's and the lanes' bar lines half way
     // between the two lines. Worked by hand (rounded half up): the readouts' glass bg 3 darker
     // a channel, Slate 121418, Garnet 23131A, Fjord 061F34, and Gilt's the design's 21140D; the
-    // slider's fill the accent at 55 % over bg, Slate 0.55 · F29A2E + 0.45 · 15171B = (142.55,
-    // 95.05, 37.45) → 8F5F25, Gilt 0.55 · F4BC7F + 0.45 · 251812 = (150.85, 114.2, 77.95) →
-    // 97724E, Garnet 0.55 · F0B39B + 0.45 · 26161D = (149.1, 108.35, 98.3) → 956C62, Fjord
-    // 0.55 · 95DDEF + 0.45 · 092237 = (86, 136.85, 156.2) → 56899C; the beat lines 2/5 of the
+    // slider's fill the accent at 55 % over bg, Slate 0.55 · BD00FF + 0.45 · 15171B = (113.4,
+    // 10.35, 152.4) → 710A98, Gilt 0.55 · 3FD6C8 + 0.45 · 251812 = (51.3, 128.5, 118.1) →
+    // 338176, Garnet 0.55 · FFC63F + 0.45 · 26161D = (157.35, 118.8, 47.7) → 9D7730, Fjord
+    // 0.55 · FFB347 + 0.45 · 092237 = (144.3, 113.75, 63.8) → 907240; the beat lines 2/5 of the
     // strong line over the soft one, Slate 0.4 · 7A818B + 0.6 · 2F343B = (77, 82.8, 91) → 4D535B,
     // Gilt 0.4 · 9C7854 + 0.6 · 3F312B = (100.2, 77.4, 59.4) → 644D3B, Garnet 0.4 · 9F6A5A + 0.6 ·
     // 422A35 = (103.2, 67.6, 67.8) → 674444, Fjord 0.4 · 578296 + 0.6 · 1E3D58 = (52.8, 88.6,
@@ -997,10 +1046,10 @@ mod tests {
         }
         let derived =
             |palette: &Palette| [palette.lcd, palette.slider_fill, palette.grid_beat].map(hex_of);
-        assert_eq!(derived(&SLATE), ["121418", "8F5F25", "4D535B"]);
-        assert_eq!(derived(&GILT), ["21140D", "97724E", "644D3B"]);
-        assert_eq!(derived(&GARNET), ["23131A", "956C62", "674444"]);
-        assert_eq!(derived(&FJORD), ["061F34", "56899C", "355971"]);
+        assert_eq!(derived(&SLATE), ["121418", "710A98", "4D535B"]);
+        assert_eq!(derived(&GILT), ["21140D", "338176", "644D3B"]);
+        assert_eq!(derived(&GARNET), ["23131A", "9D7730", "674444"]);
+        assert_eq!(derived(&FJORD), ["061F34", "907240", "355971"]);
         assert_eq!(hex_of(SLATE.window), "1A1D22");
     }
 
@@ -1022,7 +1071,7 @@ mod tests {
     // none puts each theme's own back; the slider's fill follows it by the law the fixed sets
     // follow, against the generator's: the probes' blue #3FA7D6 at 55 % over Graphite's bg is
     // #316B86 and over Gilt's #33677E, and every other set's own accent typed as the user's gives
-    // its own fill back (Slate #8F5F25, Gilt #97724E, Garnet #956C62, Fjord #56899C). Graphite's
+    // its own fill back (Slate #710A98, Gilt #338176, Garnet #9D7730, Fjord #907240). Graphite's
     // orange typed as the user's keeps
     // Graphite's hand-set fill, #8A5A24, so typing it changes nothing on the screen. The theme's
     // own two stay its own.
@@ -1092,6 +1141,70 @@ mod tests {
         }
     }
 
+    // Slate's own accent is the violet #BD00FF and its slider's fill that at 55 % over its bg,
+    // #710A98 (by hand: 0xBD · 0.55 + 0x15 · 0.45 = 0x71, 0x00 · 0.55 + 0x17 · 0.45 = 0x0A,
+    // 0xFF · 0.55 + 0x1B · 0.45 = 0x98); Graphite keeps its orange #F29A2E and its hand-set
+    // #8A5A24. The violet reads 3.63:1 on Slate's panel #1C1F24, over ACCENT_LEAST_CONTRAST's
+    // 3:1, so Settings shows no low-contrast note for Slate's own. A fresh start (no settings,
+    // Slate) draws it: with no accent of the user's own, the accent drawn is the theme's.
+    #[test]
+    fn slates_own_accent_is_the_violet() {
+        let violet = Color::from_rgb8(0xBD, 0x00, 0xFF);
+        assert_eq!(ThemeId::Slate.palette().accent, violet);
+        assert_eq!(
+            ThemeId::Slate.palette().slider_fill,
+            Color::from_rgb8(0x71, 0x0A, 0x98)
+        );
+        assert_eq!(
+            (GRAPHITE.accent, GRAPHITE.slider_fill),
+            (
+                Color::from_rgb8(0xF2, 0x9A, 0x2E),
+                Color::from_rgb8(0x8A, 0x5A, 0x24)
+            )
+        );
+        let panel = Color::from_rgb8(0x1C, 0x1F, 0x24);
+        assert_eq!(SLATE.panel, panel);
+        let ratio = style::contrast(violet, panel);
+        assert!((ratio - 3.63).abs() <= 0.005, "{ratio}");
+        assert!(ratio >= ACCENT_LEAST_CONTRAST);
+        set_theme(ThemeId::Slate);
+        assert_eq!(own_accent(), None);
+        assert_eq!((accent(), slider_fill()), (violet, SLATE.slider_fill));
+        set_theme(ThemeId::Graphite);
+    }
+
+    // Gilt's, Garnet's and Fjord's own accents are a colour their ground does not contain, as
+    // Slate's violet and Graphite's orange are: Gilt a teal #3FD6C8 against its chocolate and
+    // gold, Garnet a gold #FFC63F against its plum, Fjord an amber #FFB347 against its navy. Each
+    // slider's fill is that at 55 % over the set's bg (Gilt #338176, Garnet #9D7730, Fjord
+    // #907240), and each accent reads past the 4.5:1 of the accent's rules on bg, panel and
+    // raised: Gilt 9.58, 8.71 and 7.65, Garnet 11.03, 10.24 and 9.22, Fjord 9.10, 8.16 and 7.04.
+    // Gilt's lit edges, knob rings and fader caps stay its gold: they are the set, not the accent.
+    #[test]
+    fn each_sets_own_accent_is_a_colour_its_ground_lacks() {
+        let sets = [
+            (ThemeId::Gilt, 0x3FD6C8, 0x338176, [9.58, 8.71, 7.65]),
+            (ThemeId::Garnet, 0xFFC63F, 0x9D7730, [11.03, 10.24, 9.22]),
+            (ThemeId::Fjord, 0xFFB347, 0x907240, [9.10, 8.16, 7.04]),
+        ];
+        for (theme, accent, fill, ratios) in sets {
+            let set = theme.palette();
+            let name = theme.name();
+            assert_eq!(set.accent, hex(accent), "{name}'s accent");
+            assert_eq!(set.slider_fill, hex(fill), "{name}'s slider fill");
+            for (ground, expected) in [set.bg, set.panel, set.raised].into_iter().zip(ratios) {
+                let ratio = style::contrast(set.accent, ground);
+                assert!(
+                    (ratio - expected).abs() <= 0.005,
+                    "{name}: {ratio}, known {expected}"
+                );
+            }
+        }
+        let gold = hex(0x9C7854);
+        assert_eq!([GILT.line_strong, GILT.knob_ring], [gold; 2]);
+        assert_eq!(GILT.fader_cap, hex(0xE0A265));
+    }
+
     // A colour is "#RRGGBB" in settings.json, in capitals; read in any case, the # optional and
     // spaces around ignored, as typed; three digits, seven, a letter past F or a sign are none.
     #[test]
@@ -1141,7 +1254,7 @@ mod tests {
     }
 
     // The Theme page's key of each set shows its panel and its own accent as the design gives
-    // them (the generator's colours: Gilt 2E201B and F4BC7F), whatever theme or accent is drawn
+    // them (the generator's colours: Gilt 2E201B and 3FD6C8), whatever theme or accent is drawn
     // now: an accent of the user's own and another theme leave every key's swatch as it was.
     #[test]
     fn a_themes_swatch_is_its_own_panel_and_accent() {
@@ -1160,7 +1273,7 @@ mod tests {
         }
         assert_eq!(
             ThemeId::Gilt.swatch().map(hex_of),
-            ["2E201B".to_owned(), "F4BC7F".to_owned()]
+            ["2E201B".to_owned(), "3FD6C8".to_owned()]
         );
         set_theme(ThemeId::Fjord);
         set_accent(Some(Rgb([0x3F, 0xA7, 0xD6])));

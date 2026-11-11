@@ -888,6 +888,8 @@ impl App {
         self.close_params();
         // The sample editor shows a sound of the document going.
         self.close_sample_editor();
+        // The Jam's prompt and window list the document's channels.
+        self.close_jam();
         // The next session has no preview.
         self.forget_library_preview();
         self.settle_controllers();

@@ -5,6 +5,7 @@
 mod automation;
 mod channels;
 pub mod copies;
+mod jam;
 mod links;
 mod mixer;
 mod patterns;
@@ -19,6 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
+use crate::jam::JamPattern;
+use crate::project::KeySignature;
 use crate::project::{
     check_signature_changes, Automation, AutomationId, AutomationPoint, AutomationTarget, Channel,
     ChannelId, ChannelKind, Clip, ClipId, ClipStretch, Controller, Curve, EffectId, InputSource,
@@ -167,6 +170,24 @@ pub enum Edit {
     SetPatternBars {
         pattern: PatternId,
         bars: u32,
+    },
+    /// Gives the project the key `key`, or none; its inverse is the same edit with the old one.
+    /// Nothing the plan holds changes: a key only says what a Jam writes in.
+    SetKey {
+        key: Option<KeySignature>,
+    },
+    /// Writes a Jam into the project as one step: a new pattern named `pattern_name` after the
+    /// others (with the ID [`Project::next_pattern_id`] gives), or with `replace` that pattern's
+    /// notes, length and swing replaced (it keeps its name); the pattern's notes, bars and swing
+    /// from `pattern`; the project's key `key`; and with `set_tempo` the genre's tempo. Applied
+    /// as a transaction of the edits that make each change, so its inverse is that
+    /// transaction's and one undo restores the project byte for byte.
+    Jam {
+        pattern_name: String,
+        replace: Option<PatternId>,
+        pattern: JamPattern,
+        set_tempo: bool,
+        key: KeySignature,
     },
     /// Sets how late the pattern plays the second 16th of each pair
     /// ([`Pattern::swing_tenths`]); refused outside [`time::SWING_RANGE`]. Its inverse is the
@@ -736,6 +757,12 @@ pub enum EditError {
     NoBars,
     #[error("swing {0} must be 500 to 750 (50.0 to 75.0 %)")]
     InvalidSwing(u16),
+    #[error("a Jam writes 4/4 patterns and the pattern it writes into is in {0}")]
+    JamMeter(TimeSignature),
+    #[error("a Jam needs a PPQ that is a multiple of 8, and the project's is {0}")]
+    JamPpq(u16),
+    #[error("the Jam was written at PPQ {written} and the project's is {project}")]
+    JamPpqMismatch { written: u16, project: u16 },
     #[error("a new pattern must take the next free id {expected}, not {got}")]
     NotNextPatternId { got: u32, expected: u32 },
     #[error("every pattern id has been used")]
@@ -997,6 +1024,20 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
             let inverse = Edit::SetPatternBars { pattern, bars: old };
             Ok(Applied::pattern(inverse, pattern))
         }
+        Edit::SetKey { key } => {
+            let old = mem::replace(&mut project.key, key);
+            Ok(Applied {
+                inverse: Edit::SetKey { key: old },
+                touched: Touched::default(),
+            })
+        }
+        Edit::Jam {
+            pattern_name,
+            replace,
+            pattern,
+            set_tempo,
+            key,
+        } => jam::apply(project, pattern_name, replace, pattern, set_tempo, key),
         Edit::SetPatternSwing {
             pattern,
             swing_tenths,

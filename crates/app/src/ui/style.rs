@@ -1,12 +1,12 @@
-//! Colors and widget styles: a dark workspace with an orange accent. The chrome's colours
-//! (surfaces, text, lines, keys, the controls' edges) come from the theme's
-//! [`Palette`](crate::ui::palette::Palette), read through [`palette`], the accent (the user's
-//! own or the theme's) through [`accent`] and [`slider_fill`]; the content colours
+//! Colors and widget styles: a dark workspace with one accent colour, which marks what is lit
+//! and chosen. The chrome's colours (surfaces, text, lines, keys, the controls' edges) come from
+//! the theme's [`Palette`](crate::ui::palette::Palette), read through [`palette`], the accent
+//! (the user's own or the theme's) through [`accent`] and [`slider_fill`]; the content colours
 //! below (the channels', the clips', the LEDs', record's, the meters', the warnings') are the
 //! same in every theme.
 
 use iced::overlay::menu;
-use iced::widget::{button, container, pick_list, text_input};
+use iced::widget::{button, checkbox, container, pick_list, text_input};
 use iced::{Background, Border, Color, Theme};
 
 use crate::ui::palette::mix;
@@ -92,6 +92,18 @@ pub fn dimmed(row: Color) -> Color {
 /// than the rows in it and lighter than a row past the pattern's end.
 pub fn out_of_scale(row: Color) -> Color {
     mix(row, Color::BLACK, 7, 10)
+}
+
+/// A piano roll row or key outside the project's key: the theme's veil
+/// ([`Palette::out_of_key`](crate::ui::palette::Palette::out_of_key)) over its colour, opaque.
+pub fn out_of_key(row: Color) -> Color {
+    let veil = palette().out_of_key;
+    let over = |top: f32, under: f32| top * veil.a + under * (1.0 - veil.a);
+    Color::from_rgb(
+        over(veil.r, row.r),
+        over(veil.g, row.g),
+        over(veil.b, row.b),
+    )
 }
 
 /// Another channel's note shown behind the edited one: 0.3 of its color over 0.7 of the row.
@@ -371,6 +383,26 @@ pub fn hex_box(_theme: &Theme, status: text_input::Status) -> text_input::Style 
     }
 }
 
+/// A tick box (the Jam's prompt and window): the readouts' dark glass in the buttons' edge, the
+/// accent's tick, the edge in the accent under the pointer; dim when it cannot be ticked.
+pub fn check_box(_theme: &Theme, status: checkbox::Status) -> checkbox::Style {
+    let (edge, text) = match status {
+        checkbox::Status::Hovered { .. } => (accent(), palette().text),
+        checkbox::Status::Active { .. } => (palette().button_edge, palette().text),
+        checkbox::Status::Disabled { .. } => (palette().button_edge, palette().text_disabled),
+    };
+    checkbox::Style {
+        background: Background::Color(palette().lcd),
+        icon_color: accent(),
+        border: Border {
+            color: edge,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        text_color: Some(text),
+    }
+}
+
 /// A toolbar button; `lit` marks the active choice with accent text.
 pub fn tool_button(lit: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_theme, status| {
@@ -393,6 +425,30 @@ pub fn tool_button(lit: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
             },
             ..button::Style::default()
         }
+    }
+}
+
+/// A button on the rack's header strip ("Start a Jam"): its words alone on the strip's ground,
+/// the hover fill under the pointer and while pressed, no edge; dim words when it cannot be
+/// pressed. Why flat: the header's other controls are bare glyphs and dark readouts, and an
+/// outlined box among them read as a loose frame.
+pub fn header_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let (background, text_color) = match status {
+        button::Status::Hovered | button::Status::Pressed => (
+            Some(Background::Color(palette().button_hover)),
+            palette().text,
+        ),
+        button::Status::Active => (None, palette().text),
+        button::Status::Disabled => (None, palette().text_disabled),
+    };
+    button::Style {
+        background,
+        text_color,
+        border: Border {
+            radius: 2.0.into(),
+            ..Border::default()
+        },
+        ..button::Style::default()
     }
 }
 
@@ -455,6 +511,32 @@ mod tests {
             [0x24, 0x26, 0x2A, 0xFF]
         );
         assert_eq!(shaded(Color::WHITE), Color::WHITE);
+    }
+
+    // "Start a Jam" on the rack's header: no fill and no edge at rest, the strip's ground
+    // showing; the hover fill under the pointer and while pressed, corners of 2, still no edge;
+    // dim words and no fill when it cannot be pressed; the glyphs' text colour otherwise.
+    #[test]
+    fn the_header_button_is_flat_but_under_the_pointer() {
+        let face = |status| header_button(&Theme::Dark, status);
+        let rest = face(button::Status::Active);
+        assert_eq!(rest.background, None);
+        assert_eq!(rest.text_color, GRAPHITE.text);
+        assert_eq!(rest.border.width, 0.0);
+        for status in [button::Status::Hovered, button::Status::Pressed] {
+            let lit = face(status);
+            assert_eq!(
+                lit.background,
+                Some(Background::Color(GRAPHITE.button_hover))
+            );
+            assert_eq!(lit.text_color, GRAPHITE.text);
+            assert_eq!(lit.border.width, 0.0);
+            assert_eq!(lit.border.radius, 2.0.into());
+        }
+        let refused = face(button::Status::Disabled);
+        assert_eq!(refused.background, None);
+        assert_eq!(refused.text_color, GRAPHITE.text_disabled);
+        assert_eq!(refused.border.width, 0.0);
     }
 
     // The Quantize preview's old places, fill and rim at half a ghost's weight and a ghost's,

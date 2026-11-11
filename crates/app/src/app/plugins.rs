@@ -170,6 +170,7 @@ impl App {
                 self.help.open = true;
                 let _ = self.help_message(crate::ui::help_window::HelpMessage::Show(section));
             }
+            crate::args::Shown::Jam { window } => self.show_jam_at_start(window),
         }
     }
 

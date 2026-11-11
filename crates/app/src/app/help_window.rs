@@ -94,7 +94,8 @@ impl App {
         let help = self.sync_help_window();
         let editor = self.sync_sample_editor_window();
         let panels = self.sync_panel_windows();
-        Task::batch([others, help, self.sync_param_window(), editor, panels])
+        let jam = self.sync_jam_window();
+        Task::batch([others, help, self.sync_param_window(), editor, panels, jam])
     }
 
     /// Opens the Help window's own window while Help is open and closes it once it is not,

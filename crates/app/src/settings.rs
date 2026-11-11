@@ -7,7 +7,9 @@
 //! not 100), the theme (`"ui_theme"`, its name, written only when not Slate, the default; a
 //! name this build does not know shows Slate and is kept as it was), the accent of the user's own
 //! (`"ui_accent"`, `"#RRGGBB"`, written only while one is set; a value that is no such colour
-//! shows the theme's and is kept as it was), the piano roll's notes' colour of the user's own
+//! shows the theme's and is kept as it was) and its Lock (`"ui_accent_lock"`, written only while
+//! on: the accent kept through a theme chosen, which otherwise gives the theme's own back), the
+//! piano roll's notes' colour of the user's own
 //! (`"ui_note_color"`, likewise; none: each channel's own),
 //! the instrument window's, the Help window's, the parameter window's and the sample editor's
 //! size and position (`"instrument_window"`, `"help_window"`, `"params_window"`,
@@ -460,9 +462,9 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     ui_zoom: Option<u16>,
-    /// The theme, by its name ([`ThemeId::name`]); written only when not Graphite. A name this
-    /// build does not know (a newer build's, a hand edit) shows Graphite and is written back as
-    /// it was; a value that is no text is none.
+    /// The theme, by its name ([`ThemeId::name`]); written only when not Slate. A name this
+    /// build does not know (a newer build's, a hand edit) shows Slate and is written back as it
+    /// was; a value that is no text is none.
     #[serde(
         default,
         deserialize_with = "lenient",
@@ -478,6 +480,15 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     ui_accent: Option<String>,
+    /// The Theme page's Lock: `true` keeps the accent of the user's own through a theme chosen
+    /// ([`Settings::set_theme`]); written only while on (none: off). A value that is no true or
+    /// false reads off.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    ui_accent_lock: Option<bool>,
     /// The colour the piano roll draws its notes and their velocity stems in, `"#RRGGBB"`;
     /// written only while one is set (none: the channel's own). As [`Settings::accent`]'s: a
     /// value that is no such colour shows the channel's and is written back as it was; one that
@@ -877,8 +888,15 @@ impl Settings {
             .filter(|name| ThemeId::from_name(name).is_none())
     }
 
-    /// Keeps `theme`; the default, Slate, is written as nothing.
+    /// Keeps `theme`; the default, Slate, is written as nothing. A theme other than the one shown
+    /// gives the accent back to its own, the user's forgotten, unless the Lock is on
+    /// ([`Settings::accent_lock`]). Why: each theme's accent is tuned to its colours, and a user
+    /// who chose an accent over one theme rarely wants it over the next; the Lock is for one who
+    /// does. The theme shown chosen again is no change and keeps the accent.
     pub fn set_theme(&mut self, theme: ThemeId) {
+        if theme != self.theme() && !self.accent_lock() {
+            self.ui_accent = None;
+        }
         self.ui_theme = (theme != ThemeId::default()).then(|| theme.name().to_owned());
     }
 
@@ -891,6 +909,17 @@ impl Settings {
     /// Keeps `accent` as the user's own; none: each theme's own, written as nothing.
     pub fn set_accent(&mut self, accent: Option<Rgb>) {
         self.ui_accent = accent.map(Rgb::hex);
+    }
+
+    /// Whether the Lock keeps the accent of the user's own through a theme chosen: off unless
+    /// switched on.
+    pub fn accent_lock(&self) -> bool {
+        self.ui_accent_lock == Some(true)
+    }
+
+    /// Switches the Lock on or off; off is written as nothing. No colour changes.
+    pub fn set_accent_lock(&mut self, locked: bool) {
+        self.ui_accent_lock = locked.then_some(true);
     }
 
     /// The piano roll's notes' colour of the user's own, as kept; none when none is (each
@@ -1092,10 +1121,11 @@ impl Settings {
     }
 
     /// Settings → General's "Reset to defaults": the looks and the layout as a first start has
-    /// them. The zoom, the theme, the accent and the notes' colour; the window's panels (the
-    /// first start's, none popped; its size kept), the dividers' heights (the rack's, the piano
-    /// roll's and the mixer's); the playlist's zoom and lane height; the piano roll's zoom and
-    /// Follow; the Library's folded groups; the hint bar shown. Kept: the MIDI inputs, the audio
+    /// them. The zoom, the theme, the accent and its Lock, and the notes' colour; the window's
+    /// panels (the first start's, none popped; its size kept), the dividers' heights (the
+    /// rack's, the piano roll's and the mixer's); the playlist's zoom and lane height; the piano
+    /// roll's zoom and Follow; the Library's folded groups; the hint bar shown. Kept: the MIDI
+    /// inputs, the audio
     /// devices and the input latency, the shortcuts, the pop-out windows' places, the first-run
     /// notes put away, the typing keyboard, the playlist's Follow and the roll player's Loop (how
     /// it plays, no look), and whatever this build
@@ -1105,6 +1135,7 @@ impl Settings {
         self.ui_zoom = None;
         self.ui_theme = None;
         self.ui_accent = None;
+        self.ui_accent_lock = None;
         self.ui_note_color = None;
         if let Some(window) = &mut self.window {
             let first = WindowLayout::of(Panels::FIRST_START, Size::ZERO, false);
@@ -1211,11 +1242,12 @@ impl Settings {
                 rest.remove(key)
                     .and_then(|value| serde_json::from_value(value).ok())
             };
-            let (preview_notes, show_hints, keyboard_plays_notes, snap_to_zero) = (
+            let (preview_notes, show_hints, keyboard_plays_notes, snap_to_zero, ui_accent_lock) = (
                 flag("preview_notes"),
                 flag("show_hints"),
                 flag("keyboard_plays_notes"),
                 flag("snap_to_zero"),
+                flag("ui_accent_lock"),
             );
             let mut text = |key: &str| {
                 rest.remove(key)
@@ -1256,6 +1288,7 @@ impl Settings {
                 ui_zoom,
                 ui_theme,
                 ui_accent,
+                ui_accent_lock,
                 ui_note_color,
                 audio_output,
                 audio_output_name,
@@ -1493,6 +1526,70 @@ mod tests {
         fs::remove_dir_all(&dir).expect("removed");
     }
 
+    // The accent's Lock, in settings.json: {"ui_accent":"#3FA7D6","ui_accent_lock":true} reads
+    // the lock on beside the accent; absent reads off and nothing is written for it, so a file
+    // written before stays byte for byte; on is written "ui_accent_lock": true and read back; off
+    // is written as nothing again; a value that is no true or false ("yes") reads off, the other
+    // keys keeping theirs.
+    #[test]
+    fn the_accent_lock_is_written_only_while_on() {
+        let dir = std::env::temp_dir().join(format!("dawsome-accent-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("settings.json");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let blue = Rgb([0x3F, 0xA7, 0xD6]);
+        fs::write(&file, r##"{"ui_accent":"#3FA7D6","ui_accent_lock":true}"##).expect("writes");
+        let read = Settings::load(Some(&file));
+        assert_eq!((read.accent(), read.accent_lock()), (Some(blue), true));
+        fs::write(&file, r##"{"ui_accent":"#3FA7D6"}"##).expect("writes");
+        let absent = Settings::load(Some(&file));
+        assert_eq!((absent.accent(), absent.accent_lock()), (Some(blue), false));
+        let mut settings = Settings::default();
+        assert!(!settings.accent_lock());
+        settings.set_accent_lock(true);
+        settings.save(&file).expect("saves");
+        let text = fs::read_to_string(&file).expect("reads");
+        assert!(text.contains(r#""ui_accent_lock": true"#), "{text}");
+        assert!(Settings::load(Some(&file)).accent_lock());
+        settings.set_accent_lock(false);
+        settings.save(&file).expect("saves");
+        assert_eq!(
+            fs::read_to_string(&file).expect("reads"),
+            "{\n  \"midi_inputs\": []\n}\n"
+        );
+        fs::write(&file, r#"{"ui_accent_lock":"yes","show_hints":false}"#).expect("writes");
+        let odd = Settings::load(Some(&file));
+        assert!(!odd.accent_lock());
+        assert!(!odd.show_hints(), "the other keys keep theirs");
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // A theme chosen gives the accent back to that theme, the user's own forgotten, while the
+    // Lock is off; on, the user's own stays over the new theme, the lock with it. The theme shown
+    // chosen again is no change and keeps the accent either way.
+    #[test]
+    fn a_theme_chosen_drops_an_unlocked_accent_of_ones_own() {
+        let blue = Rgb([0x3F, 0xA7, 0xD6]);
+        let mut settings = Settings::default();
+        settings.set_accent(Some(blue));
+        settings.set_theme(ThemeId::Slate);
+        assert_eq!(settings.accent(), Some(blue), "Slate again: no change");
+        settings.set_theme(ThemeId::Gilt);
+        assert_eq!(
+            (settings.theme(), settings.accent()),
+            (ThemeId::Gilt, None),
+            "unlocked: Gilt's own"
+        );
+        settings.set_accent(Some(blue));
+        settings.set_accent_lock(true);
+        settings.set_theme(ThemeId::Fjord);
+        assert_eq!(
+            (settings.theme(), settings.accent(), settings.accent_lock()),
+            (ThemeId::Fjord, Some(blue), true),
+            "locked: kept"
+        );
+    }
+
     // The piano roll's notes' colour, in settings.json, as the accent's: absent reads none (each
     // channel's own) and nothing is written for it, so a file written before stays byte for
     // byte; #3FA7D6 is written "ui_note_color": "#3FA7D6" beside an accent of its own and read
@@ -1537,7 +1634,8 @@ mod tests {
 
     // "Reset to defaults", by a table written by hand: a settings file with every key it resets
     // set off its default and every key it keeps set too. After the reset each reset key reads
-    // its default (zoom 100 %, Graphite, the theme's accent, each channel's colour, the first
+    // its default (zoom 100 %, Slate, the theme's accent with the Lock off, each channel's
+    // colour, the first
     // start's panels Library, rack and playlist with none popped, no divider height kept, the
     // playlist at 64 px a bar fitting its lanes, the piano roll at 16 px a step following, no
     // Library group folded, the hints shown) and is written as nothing, and every kept key
@@ -1553,7 +1651,7 @@ mod tests {
             "instrument_window": {"width": 600.0, "height": 500.0},
             "panel_windows": {"mixer": {"width": 1000.0, "height": 300.0}},
             "ui_zoom": 150, "ui_theme": "gilt", "ui_accent": "#3FA7D6",
-            "ui_note_color": "#E8F04A",
+            "ui_accent_lock": true, "ui_note_color": "#E8F04A",
             "audio_output": "sink:speakers", "audio_output_name": "Speakers",
             "audio_input": "Line in", "note_layout": "two-rows",
             "keys": {"play": "Ctrl+P"},
@@ -1579,6 +1677,7 @@ mod tests {
         assert!(settings.callouts.keyboard_shown && settings.callouts.record_shown);
         assert_eq!(settings.note_layout(), NoteLayout::TwoRows);
         assert!(settings.instrument_window.is_some() && !settings.panel_windows.is_empty());
+        assert!(settings.accent_lock(), "the lock read as written");
         settings.reset_looks_and_layout();
         let first_start: Vec<String> = ["browser", "rack", "playlist", "mixer"]
             .map(String::from)
@@ -1588,6 +1687,7 @@ mod tests {
             ("ui_zoom", settings.zoom().percent() == 100),
             ("ui_theme", settings.theme() == ThemeId::Slate),
             ("ui_accent", settings.accent().is_none()),
+            ("ui_accent_lock", !settings.accent_lock()),
             ("ui_note_color", settings.note_color().is_none()),
             ("window panels", window.panels == first_start),
             ("window popped", window.popped.is_empty()),
@@ -1642,6 +1742,7 @@ mod tests {
             "ui_zoom",
             "ui_theme",
             "ui_accent",
+            "ui_accent_lock",
             "ui_note_color",
             "show_hints",
             "rack",

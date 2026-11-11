@@ -317,10 +317,43 @@ impl Window {
     /// menus over its panels), as iced passes them a click before the widgets under them: the
     /// messages they published, not handled.
     pub fn click_overlay(&mut self, app: &App, at: Point) -> Vec<Message> {
+        self.on_overlays_at(
+            app,
+            at,
+            &[mouse::Event::ButtonPressed, mouse::Event::ButtonReleased],
+        )
+    }
+
+    /// As [`Window::click_overlay`], the cursor moved onto `at` first: what a pick list's menu
+    /// takes, its row the one the cursor came onto (it ignores a press it saw no move for).
+    pub fn choose_overlay(&mut self, app: &App, at: Point) -> Vec<Message> {
+        let moved = self.overlay_events(app, at, vec![mouse::Event::CursorMoved { position: at }]);
+        let mut published = moved;
+        published.extend(self.click_overlay(app, at));
+        published
+    }
+
+    /// The left button's `events` at `at` passed to the window's overlays.
+    fn on_overlays_at(
+        &mut self,
+        app: &App,
+        at: Point,
+        events: &[fn(mouse::Button) -> mouse::Event],
+    ) -> Vec<Message> {
+        let events = events
+            .iter()
+            .map(|event| event(mouse::Button::Left))
+            .collect();
+        self.overlay_events(app, at, events)
+    }
+
+    /// `events` with the cursor at `at` passed to the window's overlays: the messages they
+    /// published, not handled.
+    fn overlay_events(&mut self, app: &App, at: Point, events: Vec<mouse::Event>) -> Vec<Message> {
         let cursor = mouse::Cursor::Available(at);
         let mut published = Vec::new();
-        for event in [mouse::Event::ButtonPressed, mouse::Event::ButtonReleased] {
-            let event = Event::Mouse(event(mouse::Button::Left));
+        for event in events {
+            let event = Event::Mouse(event);
             self.on_overlays(app, |overlay, laid_out, renderer| {
                 let mut shell = Shell::new(&mut published);
                 overlay.update(

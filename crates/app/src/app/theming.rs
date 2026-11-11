@@ -11,6 +11,10 @@
 //! writes the settings file once, when let go of; a hex typed in its box and entered, or the key
 //! giving the colour back ("Theme's own", "Channel's own"), is kept at once. A hex that is no
 //! colour is refused, the reason under the row.
+//!
+//! A theme chosen gives the accent back to that theme's own unless the Lock beside the menu is
+//! on (the rule is the settings', [`crate::settings::Settings::set_theme`], which `--theme`
+//! follows too); the Lock itself changes no colour.
 
 use dawsome_engine::project::ChannelId;
 use iced::Point;
@@ -52,6 +56,7 @@ impl App {
             own: self.own_color(target).is_some(),
             hex: self.hex_text(),
             hex_refused: self.hex_refused(),
+            locked: self.settings.accent_lock(),
         }
     }
 
@@ -68,12 +73,23 @@ impl App {
     }
 
     /// Sets the theme: kept in the settings, every window drawn in it from the next frame, every
-    /// drawing the app keeps cleared.
+    /// drawing the app keeps cleared. The accent is the theme's own after it unless the Lock
+    /// keeps the user's ([`crate::settings::Settings::set_theme`]).
     pub(super) fn set_theme(&mut self, theme: ThemeId) {
         self.settings.set_theme(theme);
         self.save_settings();
         palette::set_theme(theme);
+        palette::set_accent(self.settings.accent());
         self.clear_every_cache();
+    }
+
+    /// The Lock beside the menu pressed: on, the accent of the user's own stays through a theme
+    /// chosen; off, a theme chosen brings its own. Kept in the settings at once; no colour
+    /// changes.
+    pub(super) fn toggle_accent_lock(&mut self) {
+        let locked = !self.settings.accent_lock();
+        self.settings.set_accent_lock(locked);
+        self.save_settings();
     }
 
     /// The menu chose what the wheel edits: it shows that colour, and what was typed in the hex
@@ -694,6 +710,276 @@ mod tests {
         app.set_color(ColorTarget::Accent, Some(Rgb([0x3F, 0xA7, 0xD6])));
         let shot = settings.snapshot(&app);
         assert_eq!(swatches(&shot), own, "under an accent of one's own");
+    }
+
+    /// Slate's own accent.
+    const SLATE_VIOLET: Color = Color::from_rgb8(0xBD, 0x00, 0xFF);
+
+    /// F1 with its settings file written as a user's is, the main window and the Settings
+    /// window open on the Theme page, in Slate as a fresh start has it: the app, its player, the
+    /// file, its folder and the two windows.
+    fn slate_app_with_file(
+        test: &str,
+    ) -> (
+        App,
+        dawsome_engine::realtime::Player,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        Window,
+        Window,
+    ) {
+        use crate::ui::settings_panel::WINDOW_SIZE;
+        let dir = std::env::temp_dir().join(format!("dawsome-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("dawsome/settings.json");
+        let mut host = crate::document::Host::offline();
+        host.settings_file = Some(file.clone());
+        host.saves_settings = true;
+        let f1 = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/f1_four_on_floor.json"
+        );
+        let project = crate::project_file::open(Path::new(f1))
+            .expect("opens")
+            .project;
+        let (mut app, player) = super::super::tests::app_hosted(project, Path::new(f1), host);
+        app.set_main_window(window::Id::unique());
+        let _ = app.update(Message::WindowResized(MAIN));
+        let _ = app.update(Message::TogglePanel(Panel::Settings));
+        let settings_id = app.settings_window.expect("the Settings window");
+        let main = Window::new(&app);
+        let mut settings = Window::pop_out(&app, settings_id, WINDOW_SIZE);
+        let _ = settings.click(&mut app, tab(SettingsPage::Theme).center());
+        assert_eq!(app.settings_page, SettingsPage::Theme);
+        (app, player, file, dir, main, settings)
+    }
+
+    // A fresh start, no settings file: Slate, its own accent the violet #BD00FF, which the main
+    // window's lit rack button shows (more than 4 pixels within 12 of it). An accent of the
+    // user's own, #3FA7D6, and then "Theme's own" pressed on the Theme page puts the violet back,
+    // the file keeping no accent.
+    #[test]
+    fn a_fresh_start_draws_slates_violet_and_themes_own_brings_it_back() {
+        use crate::settings::Settings;
+        use crate::ui::layout::TOOLBAR_HEIGHT;
+        let (mut app, _player, file, dir, mut main, mut settings) =
+            slate_app_with_file("fresh-violet");
+        assert_eq!(app.settings.theme(), ThemeId::Slate);
+        assert_eq!(palette::own_accent(), None);
+        assert_eq!(palette::accent(), SLATE_VIOLET);
+        let toolbar = iced::Rectangle::new(Point::ORIGIN, Size::new(MAIN.width, TOOLBAR_HEIGHT));
+        assert!(
+            count_near(&mut main, &app, toolbar, SLATE_VIOLET) > 4,
+            "the lit button"
+        );
+        let blue = Rgb([0x3F, 0xA7, 0xD6]);
+        app.set_color(ColorTarget::Accent, Some(blue));
+        assert_eq!(palette::accent(), blue.color());
+        let _ = settings.click(&mut app, theme_page::own_color_key().center());
+        assert_eq!(palette::own_accent(), None, "the theme's own");
+        assert_eq!(palette::accent(), SLATE_VIOLET);
+        assert_eq!(Settings::load(Some(&file)).accent(), None);
+        std::fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // A theme chosen on the Theme page, end to end through the Settings window's widgets, its
+    // file written as a user's is. In Slate with #3FA7D6 as the accent and the Lock off, Gilt's
+    // key gives Gilt's own accent (#3FD6C8): no accent of the user's own drawn, and the file
+    // holds no "ui_accent". The blue again and the Lock pressed: the lock is on and written
+    // ("ui_accent_lock": true), the accent still the blue (the lock changes no colour), and the
+    // page shows the Lock lit, its word in the accent (the Jam window's Lock's style; read from
+    // the style, as the offscreen drawing gives a toolkit button no state to draw it in);
+    // Gilt's key then keeps the blue over Gilt, the file holding both keys, and Slate's over
+    // Slate. "Theme's
+    // own" with the lock on gives Slate's violet and leaves the lock on; the Lock pressed again
+    // turns it off, written as nothing.
+    #[test]
+    fn a_theme_change_gives_the_themes_own_accent_unless_it_is_locked() {
+        use crate::settings::Settings;
+        let (mut app, _player, file, dir, _main, mut settings) = slate_app_with_file("accent-lock");
+        let blue = Rgb([0x3F, 0xA7, 0xD6]);
+        let text = || std::fs::read_to_string(&file).unwrap_or_default();
+        let lock = theme_page::lock_box();
+        let word = |app: &App| {
+            let status = iced::widget::button::Status::Active;
+            style::tool_button(app.theme_page().locked)(&iced::Theme::Dark, status).text_color
+        };
+        app.set_color(ColorTarget::Accent, Some(blue));
+        assert!(!app.settings.accent_lock());
+        assert_eq!(word(&app), palette::palette().text, "unlit while off");
+        let _ = settings.click(&mut app, theme_page::theme_key(ThemeId::Gilt).center());
+        assert_eq!(app.settings.theme(), ThemeId::Gilt);
+        assert_eq!(palette::own_accent(), None, "unlocked: the theme's own");
+        assert_eq!(palette::accent(), Color::from_rgb8(0x3F, 0xD6, 0xC8));
+        assert_eq!(Settings::load(Some(&file)).accent(), None);
+        assert!(!text().contains("ui_accent"), "{}", text());
+
+        let _ = settings.click(&mut app, theme_page::theme_key(ThemeId::Slate).center());
+        app.set_color(ColorTarget::Accent, Some(blue));
+        let published = settings.click(&mut app, lock.center());
+        assert!(
+            published.iter().any(|message| matches!(
+                message,
+                Message::Settings(SettingsMessage::AccentLockToggled)
+            )),
+            "{published:?}"
+        );
+        assert!(app.settings.accent_lock(), "on");
+        assert!(text().contains(r#""ui_accent_lock": true"#), "{}", text());
+        assert_eq!(palette::own_accent(), Some(blue), "no colour changed");
+        assert_eq!(word(&app), blue.color(), "lit in the accent");
+        let _ = settings.click(&mut app, theme_page::theme_key(ThemeId::Gilt).center());
+        assert_eq!(app.settings.theme(), ThemeId::Gilt);
+        assert_eq!(palette::own_accent(), Some(blue), "locked: kept");
+        assert_eq!(palette::accent(), blue.color());
+        let read = Settings::load(Some(&file));
+        assert_eq!((read.accent(), read.accent_lock()), (Some(blue), true));
+        assert!(text().contains(r##""ui_accent": "#3FA7D6""##), "{}", text());
+
+        let _ = settings.click(&mut app, theme_page::theme_key(ThemeId::Slate).center());
+        assert_eq!(palette::accent(), blue.color(), "kept over Slate too");
+        let _ = settings.click(&mut app, theme_page::own_color_key().center());
+        assert_eq!(palette::own_accent(), None);
+        assert_eq!(palette::accent(), SLATE_VIOLET);
+        assert!(app.settings.accent_lock(), "the lock stays as it was");
+        let read = Settings::load(Some(&file));
+        assert_eq!((read.accent(), read.accent_lock()), (None, true));
+        let _ = settings.click(&mut app, lock.center());
+        assert!(!app.settings.accent_lock(), "off");
+        assert!(!text().contains("ui_accent_lock"), "{}", text());
+        std::fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // The Lock stands beside the colours' menu while it is on Accent: the Settings window's
+    // layout holds the word "Lock" inside the lock's box and a press there turns the lock on. On
+    // "Piano roll notes" (whose colour has no theme to follow) there is no Lock: no such word in
+    // the layout, and a press there turns nothing on.
+    #[test]
+    fn the_lock_shows_beside_the_menu_on_accent_alone() {
+        use crate::ui::settings_panel::WINDOW_SIZE;
+        use crate::zoom::Zoom;
+        let (mut app, _player, _file, dir, _main, mut settings) = slate_app_with_file("lock-shown");
+        let lock = theme_page::lock_box();
+        let id = app.settings_window.expect("the Settings window");
+        let words = |app: &App| {
+            let dump = super::super::layout_dump::dump(
+                app.view_window(id),
+                WINDOW_SIZE,
+                Zoom::DEFAULT,
+                1.0,
+            );
+            dump["texts"]
+                .as_array()
+                .expect("texts")
+                .iter()
+                .filter(|run| run["text"] == "Lock")
+                .map(|run| {
+                    let number = |key: &str| run[key].as_f64().expect("a number") as f32;
+                    Point::new(number("x"), number("y"))
+                })
+                .collect::<Vec<_>>()
+        };
+        let shown = words(&app);
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert!(
+            lock.contains(Point::new(shown[0].x + 1.0, shown[0].y + 1.0)),
+            "{shown:?} in {lock:?}"
+        );
+        let _ = settings.click(&mut app, lock.center());
+        assert!(app.settings.accent_lock());
+        let _ = settings.click(&mut app, lock.center());
+        assert!(!app.settings.accent_lock());
+
+        let _ = app.update(Message::Settings(SettingsMessage::ColorTargetChosen(
+            ColorTarget::Notes,
+        )));
+        assert_eq!(words(&app), Vec::<Point>::new(), "none on the notes");
+        let _ = settings.click(&mut app, lock.center());
+        assert!(!app.settings.accent_lock(), "nothing there to press");
+        std::fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // --theme on the command line follows a theme key's rule, for the run alone: a settings file
+    // in Slate with #3FA7D6 as the accent and the Lock off boots `--theme gilt` in Gilt's own
+    // accent (#3FD6C8); with the lock on, in the blue; `--accent #E8F04A` beside it draws that,
+    // the run's own accent set after its theme. `--theme slate` over a file in Slate is no change
+    // of theme and keeps the blue. The file is never written.
+    #[test]
+    fn a_theme_on_the_command_line_gives_its_own_accent_unless_locked() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        use crate::headless::Script;
+        let dir = std::env::temp_dir().join(format!("dawsome-theme-flag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("dawsome/settings.json");
+        std::fs::create_dir_all(dir.join("dawsome")).expect("temp dir");
+        let f1 = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/f1_four_on_floor.json"
+        );
+        let boot = |script: Script| {
+            let project = crate::project_file::open(Path::new(f1))
+                .expect("opens")
+                .project;
+            let samples = crate::project_file::samples_dir(Path::new(f1));
+            let session = crate::session::Session::open(project, samples, false)
+                .expect("compiles")
+                .0;
+            let mut host = crate::document::Host::offline();
+            host.settings_file = Some(file.clone());
+            let (app, _) = App::boot(
+                session,
+                Err(crate::audio::StartError::NoDevice),
+                crate::ui::panels::Panels::default(),
+                MAIN,
+                false,
+                script,
+                Arc::new(AtomicBool::new(false)),
+                host,
+                super::super::files::Start {
+                    document: crate::document::Document::untitled(),
+                },
+            );
+            app
+        };
+        let gilt = || Script {
+            theme: Some(ThemeId::Gilt),
+            ..Script::default()
+        };
+        let blue = Rgb([0x3F, 0xA7, 0xD6]);
+        let unlocked = r##"{"ui_accent":"#3FA7D6"}"##;
+        let locked = r##"{"ui_accent":"#3FA7D6","ui_accent_lock":true}"##;
+
+        std::fs::write(&file, unlocked).expect("writes");
+        let app = boot(gilt());
+        assert_eq!(app.settings.theme(), ThemeId::Gilt);
+        assert_eq!(palette::own_accent(), None, "unlocked: Gilt's own");
+        assert_eq!(palette::accent(), Color::from_rgb8(0x3F, 0xD6, 0xC8));
+
+        std::fs::write(&file, locked).expect("writes");
+        let _app = boot(gilt());
+        assert_eq!(palette::own_accent(), Some(blue), "locked: kept");
+        assert_eq!(palette::accent(), blue.color());
+
+        std::fs::write(&file, unlocked).expect("writes");
+        let yellow_green = Rgb([0xE8, 0xF0, 0x4A]);
+        let _app = boot(Script {
+            accent: Some(yellow_green),
+            ..gilt()
+        });
+        assert_eq!(palette::own_accent(), Some(yellow_green), "--accent drawn");
+        let _app = boot(Script {
+            theme: Some(ThemeId::Slate),
+            ..Script::default()
+        });
+        assert_eq!(palette::own_accent(), Some(blue), "Slate again: no change");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("reads"),
+            unlocked,
+            "never written"
+        );
+        std::fs::remove_dir_all(&dir).expect("removed");
     }
 
     // A settings file naming a theme this build does not know ("oak", a newer build's): the app

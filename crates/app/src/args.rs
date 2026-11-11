@@ -27,7 +27,7 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                    [--midi-out-ports none|<names>]
                    [--screenshot <out.png> --screenshot-after <ms>
                    [--screenshot-window main|instrument|settings|help|params|sample-editor
-                                        |rack|playlist|piano-roll|mixer]
+                                        |jam|rack|playlist|piano-roll|mixer]
                    [--screenshot-every <ms>] [--dump-layout <file.json>]]
                    [--quit-after <ms>] [--null-output] [--rehearse <events.json>]
                    [--zoom <percent>] [--theme graphite|slate|gilt|garnet|fjord]
@@ -37,8 +37,9 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                    [--open-params channel:<id>|effect:<id>] [--dump-params <file>]
                    [--play | --play-roll] [--stats]
                    [--open-adder] [--hints on|off] [--open-instrument channel:<id>]
-                   [--library-preview <set.sfz>] [--show export|edit-menu|help[:<n>]]
-                   [--settings-page general|keys|theme] [--callouts on|off] [--scroll end]
+                   [--library-preview <set.sfz>] [--show export|edit-menu|help[:<n>]
+                          |jam|jam-window]
+                   [--settings-page general|keys|theme|music] [--callouts on|off] [--scroll end]
                    [--time-signature <beats>/<note>]
                    [--pattern-time-signature <id>:<beats>/<note>]
                    [--signature-change <tick>:<beats>/<note>]...
@@ -87,7 +88,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                  settings file is never written; --window-size stays the window's own size,
                  which the system's pixels are this zoom times
   --theme        (a scripted window) every window in this theme, as Settings → Theme offers
-                 them, for the run alone: the settings file is never written
+                 them, for the run alone: the settings file is never written; the accent is
+                 the theme's own unless the settings' Lock keeps the user's (or --accent)
   --accent       (a scripted window) every window's accent this colour, #RRGGBB (the # may be
                  left off), as Settings → Theme → Accent sets it, for the run alone: the
                  settings file is never written
@@ -178,8 +180,9 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --screenshot-window  the window the screenshot is of: the main window (the default), the
                  instrument window --open-instrument opens, the Settings window --panels
                  settings opens, the Help window --show help opens, the parameter window
-                 --open-plugin opens (params), the sample editor --open-sample-editor opens, or
-                 a panel's own window --pop-out opens (rack, playlist, piano-roll, mixer)
+                 --open-plugin opens (params), the sample editor --open-sample-editor opens, the
+                 Jam window --show jam-window opens (jam), or a panel's own window --pop-out
+                 opens (rack, playlist, piano-roll, mixer)
   --open-sample-editor  open this channel's sample editor at start (a headless check), or the
                  one an audio clip's double-click opens (its channel's, the clip bracketed)
   --sample-editor-select  with --open-sample-editor: select frames <from> to <to> of the sound
@@ -188,11 +191,12 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
   --library-preview  preview this instrument set as a click on its Library row does (a
                  headless check): the notes no link routes play it; with --play-to, the
                  MIDI notes of ports linked to no channel, as in the window
-  --show         show the export dialog (export), the Edit menu (edit-menu) or the Help
-                 window on its first section (help), or on section n (help:n), at start (a
+  --show         show the export dialog (export), the Edit menu (edit-menu), the Help window
+                 on its first section (help) or on section n (help:n), the Jam's prompt (jam)
+                 or the Jam window opened from it, its seeds from 1 (jam-window), at start (a
                  headless check)
-  --settings-page  the Settings window's page at start: general, keys or theme (a headless
-                 check)
+  --settings-page  the Settings window's page at start: general, keys, theme or music (a
+                 headless check)
   --time-signature  the opened project's time signature, such as 3/4 or 6/8 (1 to 24 beats
                  over 4, 8 or 16), set as the run starts, as the toolbar sets it (a headless
                  check)
@@ -300,6 +304,9 @@ pub enum Shown {
     EditMenu,
     /// The Help window, on this section (0 the first; `help:<n>` names n from 1).
     Help(usize),
+    /// The Jam's prompt over the main window (`jam`), or the Jam window opened from it
+    /// (`jam-window`).
+    Jam { window: bool },
 }
 
 impl Shown {
@@ -318,13 +325,21 @@ impl Shown {
             "export" => Self::Export,
             "edit-menu" => Self::EditMenu,
             "help" => Self::Help(0),
+            "jam" => Self::Jam { window: false },
+            "jam-window" => Self::Jam { window: true },
             _ => match value
                 .strip_prefix("help:")
                 .and_then(|n| n.parse::<usize>().ok())
                 .filter(|&n| n >= 1)
             {
                 Some(n) => Self::Help(n - 1),
-                None => return Err(bad_value(&flag, "export, edit-menu or help[:<n>]", value)),
+                None => {
+                    return Err(bad_value(
+                        &flag,
+                        "export, edit-menu, help[:<n>], jam or jam-window",
+                        value,
+                    ))
+                }
             },
         };
         if raw.iter().any(|word| word == "--show") {
@@ -354,13 +369,14 @@ pub fn take_shot_window(raw: &mut Vec<String>) -> Result<Option<ShotWindow>, Arg
         "help" => ShotWindow::Help,
         "params" => ShotWindow::Params,
         "sample-editor" => ShotWindow::SampleEditor,
+        "jam" => ShotWindow::Jam,
         name => match Panel::from_name(name).filter(|panel| panel.stacked_index().is_some()) {
             Some(panel) => ShotWindow::Panel(panel),
             None => {
                 return Err(bad_value(
                     &flag,
-                    "main, instrument, settings, help, params, sample-editor, rack, playlist, \
-                     piano-roll or mixer",
+                    "main, instrument, settings, help, params, sample-editor, jam, rack, \
+                     playlist, piano-roll or mixer",
                     value,
                 ))
             }
@@ -1459,7 +1475,7 @@ mod tests {
             Shown::take(&mut words("--show help:0")),
             Err(bad_value(
                 "--show",
-                "export, edit-menu or help[:<n>]",
+                "export, edit-menu, help[:<n>], jam or jam-window",
                 "help:0".to_owned()
             ))
         );
@@ -1469,10 +1485,18 @@ mod tests {
             Err(ArgsError::MissingValue("--show".to_owned()))
         );
         assert_eq!(
+            Shown::take(&mut words("--show jam")),
+            Ok(Some(Shown::Jam { window: false }))
+        );
+        assert_eq!(
+            Shown::take(&mut words("--show jam-window")),
+            Ok(Some(Shown::Jam { window: true }))
+        );
+        assert_eq!(
             Shown::take(&mut words("--show menu")),
             Err(bad_value(
                 "--show",
-                "export, edit-menu or help[:<n>]",
+                "export, edit-menu, help[:<n>], jam or jam-window",
                 "menu".to_owned()
             ))
         );
@@ -1665,6 +1689,10 @@ mod tests {
             Ok(Some(ShotWindow::Params))
         );
         assert_eq!(
+            take_shot_window(&mut words("--screenshot-window jam")),
+            Ok(Some(ShotWindow::Jam))
+        );
+        assert_eq!(
             take_shot_window(&mut words("--screenshot-window")),
             Err(ArgsError::MissingValue("--screenshot-window".to_owned()))
         );
@@ -1682,8 +1710,8 @@ mod tests {
             take_shot_window(&mut words("--screenshot-window browser")),
             Err(bad_value(
                 "--screenshot-window",
-                "main, instrument, settings, help, params, sample-editor, rack, playlist, \
-                 piano-roll or mixer",
+                "main, instrument, settings, help, params, sample-editor, jam, rack, \
+                 playlist, piano-roll or mixer",
                 "browser".to_owned()
             ))
         );

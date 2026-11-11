@@ -851,6 +851,7 @@ fn refused_under_take(edit: &Edit, parts: TakeParts) -> bool {
     match edit {
         Edit::Transaction(edits) => edits.iter().any(|edit| refused_under_take(edit, parts)),
         Edit::AddPattern { .. }
+        | Edit::Jam { .. }
         | Edit::UnaddPattern { .. }
         | Edit::DeletePattern { .. }
         | Edit::RestorePattern { .. }

@@ -17,6 +17,7 @@ Open it, drag a drum from the Library onto the rack, click some steps, and you h
 
 Some of the features that I think are kinda nice:
 
+- **Jam Sesh.** Need some inspiration? Start a Jam to lay down some drums, chords, or melody to play to!
 - **Create set patterns while also allowing for unique adjustments.** Put the same pattern on the playlist five times, edit one copy, all five change. If you want to change a note on copy 4, one click unlinks it from the main pattern and vise-versa.
 
 

@@ -46,6 +46,8 @@ pub fn name(edit: &Edit) -> &'static str {
         | Edit::MoveSignatureChange { .. }
         | Edit::RestoreSignatureChanges { .. } => "Time signature change",
         Edit::SetPatternBars { .. } => "Pattern length",
+        Edit::SetKey { .. } => "Key",
+        Edit::Jam { .. } => "Jam",
         Edit::SetPatternSwing { .. } => "Swing",
         Edit::SetPatternKind {
             kind: PatternKind::Take,
