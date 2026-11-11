@@ -1,5 +1,6 @@
 # Dawsome
-<img width="1600" height="847" alt="Untitled" src="https://github.com/user-attachments/assets/5289e8e0-8d57-4d8f-af50-ff0e9bd8c5f0" />
+<img width="1600" height="847" alt="main-window-2026-11-11-defaults" src="https://github.com/user-attachments/assets/69890a7c-a248-45ac-9f10-756931985100" />
+
 
 
 
