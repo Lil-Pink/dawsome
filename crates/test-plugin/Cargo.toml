@@ -25,4 +25,4 @@ clack-extensions = { version = "=0.2.0", features = ["clack-plugin", "audio-port
 [target.'cfg(target_os = "linux")'.dependencies]
 # The GUI file's interface is an X11 window of its own, a child of the host's, on a connection of
 # its own. The line the hosts' windows use, so the tree keeps one.
-x11rb = "0.13"
+x11rb = "0.14"
