@@ -52,7 +52,7 @@ crossbeam-queue = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # The per-user folders (settings, recordings, the demo, autosaves, Music): XDG on Linux, AppData
 # and the known folders on Windows.
-dirs = "6"
+dirs = "7"
 # A sample's path as a project keeps it: resolved as the standard library does, but in the
 # plain `C:\...` form on Windows (see the media crate).
 dunce = "1"

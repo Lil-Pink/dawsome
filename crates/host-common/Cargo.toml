@@ -11,7 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # The per-user cache folder the catalogue is kept in: XDG on Linux, AppData on Windows.
-dirs = "6"
+dirs = "7"
 
 [target.'cfg(unix)'.dependencies]
 # A scan child's process group, and keeping a scan child from dumping core.
