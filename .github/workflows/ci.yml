@@ -46,7 +46,7 @@ jobs:
           toolchain: "1.93.1"
           components: rustfmt, clippy
       # scripts/check.sh audits the dependencies (deny.toml) only where cargo-deny is installed.
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-deny@0.20.2
       # The registry and the target dir, which holds the dependencies' builds, the static LAME
