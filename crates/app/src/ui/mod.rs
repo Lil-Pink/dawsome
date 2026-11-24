@@ -58,3 +58,4 @@ pub mod synth_panel;
 pub mod text_fit;
 pub mod theme_page;
 pub mod toolbar;
+pub mod warp_gesture;

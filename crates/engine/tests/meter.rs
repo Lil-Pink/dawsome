@@ -209,7 +209,7 @@ fn a_patterns_own_signature_is_kept_in_the_file() {
         error.contains("3/2") && error.contains("Pattern 2"),
         "{error}"
     );
-    bad = bytes.replace(r#""format_version":10"#, r#""format_version":12"#);
+    bad = bytes.replace(r#""format_version":10"#, r#""format_version":14"#);
     assert!(
         Project::load_json(&bad).is_err(),
         "a later version is refused"

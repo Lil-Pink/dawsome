@@ -65,9 +65,12 @@ fn band(test: &str, lead: Lead, seed: u64) -> (Folder, App, Player) {
     let dir = std::env::temp_dir().join(format!("dawsome-jam-c3-{}-{test}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("a folder");
+    // The path as a JSON string: pasted between quotes by hand, a Windows path's backslashes
+    // are invalid escapes.
     let set = |id: u32, name: &str, set: &str| {
+        let path = serde_json::to_string(&format!("{FIXTURES}/p36_sets/{set}")).expect("JSON");
         format!(
-            r#"{{"id":{id},"name":"{name}","kind":"instrument","instrument":"{FIXTURES}/p36_sets/{set}","volume":1.0,"pan":0.0,"mute":false}}"#
+            r#"{{"id":{id},"name":"{name}","kind":"instrument","instrument":{path},"volume":1.0,"pan":0.0,"mute":false}}"#
         )
     };
     let sine = r#"{"id":3,"name":"Keys","kind":"plugin","processor":{"id":"clap:org.dawsome.test.sine","name":"Dawsome Test Sine","state":"T1RQMQAAAAAAAOA/"},"volume":1.0,"pan":0.0,"mute":false}"#;

@@ -161,7 +161,10 @@ fn sha256(frames: &[f32]) -> String {
         sha.update(value.to_le_bytes());
         sha.update(value.to_le_bytes());
     }
-    format!("{:x}", sha.finalize())
+    sha.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The bend case: a live A4 at velocity 0.5 from call 0, then before each call the bends

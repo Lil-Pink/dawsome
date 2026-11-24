@@ -14,6 +14,7 @@ pub mod sound_edits;
 pub mod takes;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::iter;
 use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,12 +25,14 @@ use crate::jam::JamPattern;
 use crate::project::KeySignature;
 use crate::project::{
     check_signature_changes, Automation, AutomationId, AutomationPoint, AutomationTarget, Channel,
-    ChannelId, ChannelKind, Clip, ClipId, ClipStretch, Controller, Curve, EffectId, InputSource,
-    InsertId, LoopRange, MidiOut, Note, Pattern, PatternId, PatternKind, ProcessorOwner,
-    ProcessorRef, Project, Sound, SoundEdits, SoundSource, Track, TrackId, ValidationError,
-    DEFAULT_KEY, MAX_KEY, MAX_SONG_BARS, MAX_VOLUME, PAN_RANGE, TEMPO_RANGE,
+    ChannelId, ChannelKind, Clip, ClipId, ClipItem, ClipStretch, Controller, Curve, EffectId,
+    InputSource, InsertId, LoopRange, MidiOut, Note, Pattern, PatternId, PatternKind,
+    ProcessorOwner, ProcessorRef, Project, Sound, SoundEdits, SoundSource, StretchMode, Track,
+    TrackId, ValidationError, DEFAULT_KEY, MAX_KEY, MAX_SONG_BARS, MAX_VOLUME, PAN_RANGE,
+    TEMPO_RANGE,
 };
 use crate::time::{self, MeterMap, MeterUnit, MilliBpm, SignatureChange, Ticks, TimeSignature};
+use crate::warp::{ClipWarp, WarpMarker};
 
 /// Velocity of a step switched on in the step grid: 100 on the 0..128 velocity scale, the
 /// same as a note drawn in the piano roll, and the default the project-file note record uses.
@@ -355,6 +358,23 @@ pub enum Edit {
         clip: ClipId,
         gain: f32,
     },
+    /// Sets an audio clip's fade in and fade out, in frames: the fade in at most the clip's
+    /// frames, the fade out at most what the fade in leaves (each clamped so, never refused).
+    /// Its inverse is [`Edit::RestoreClipFades`] with the fades it had.
+    SetClipFades {
+        clip: ClipId,
+        fade_in: u64,
+        fade_out: u64,
+    },
+    /// Puts an audio clip's fades back exactly as given, unclamped: the inverse of a fade edit,
+    /// and a split's way to leave a part's stored fade as it was. Why not clamped: a resize or
+    /// a trim keeps a clip's fades, so a clip can hold fades longer than itself, and an undo
+    /// must give them back whole. Its inverse restores the fades it had.
+    RestoreClipFades {
+        clip: ClipId,
+        fade_in: u64,
+        fade_out: u64,
+    },
     /// Stretches an audio clip (or ends its stretch, `None`) and sets its frame offset and
     /// length with it, absolute values: both count the stretched file's frames, so a new
     /// stretch moves them together.
@@ -363,6 +383,14 @@ pub enum Edit {
         stretch: Option<ClipStretch>,
         frame_offset: u64,
         length: Ticks,
+    },
+    /// Gives a stretched audio clip the warp markers `warp` in place of its list (`None`: it
+    /// has no list), each rule of [`crate::warp::problem`] kept on the sound's frames the list
+    /// holds. Its inverse gives back the list it had. Adding, moving, removing and quantizing
+    /// markers are all this.
+    SetClipWarp {
+        clip: ClipId,
+        warp: Option<ClipWarp>,
     },
     /// Links a parameter to a MIDI controller, or unlinks it (`None`). A controller linked to
     /// another parameter moves to this one.
@@ -872,6 +900,8 @@ pub enum EditError {
     InvalidParamValue(f32),
     #[error("clip {0} is not an audio clip")]
     NotAnAudioClip(u32),
+    #[error("channel {0}'s sound cannot change its length while a clip of it has warp markers: remove the warp markers first")]
+    WarpedSoundLength(u32),
     #[error("gain {0} must be a finite number from 0 to 4")]
     InvalidGain(f32),
     #[error("channel {channel} and clip {clip} are not the newest audio channel and its one clip, as added")]
@@ -912,6 +942,93 @@ pub enum EditError {
 /// Applies `edit` to `project`. On success returns the inverse edit (applying it restores the
 /// project exactly) and what changed; on failure the project is untouched.
 pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
+    // A transaction's own edits come through here one by one, so each carries its markers.
+    let carries = !matches!(edit, Edit::Transaction(_));
+    let mut applied = apply_one(project, edit)?;
+    if carries {
+        warps_follow_clips(project, &mut applied);
+    }
+    Ok(applied)
+}
+
+/// Takes out the warp markers of every clip `applied`'s edit left without the right to hold
+/// them (removed, or no longer a stretched audio clip), and has its inverse put them back once
+/// it has brought the clip back. Why one place for every edit: the markers live beside the
+/// clips ([`crate::project::Playlist::warps`]), so no edit that removes a clip sees them, and
+/// each new one would otherwise have to remember to; a project with markers left behind would
+/// be one `validate` refuses.
+fn warps_follow_clips(project: &mut Project, applied: &mut Applied) {
+    let playlist = &mut project.playlist;
+    let left: Vec<ClipId> = playlist
+        .warps
+        .keys()
+        .copied()
+        .filter(|id| playlist.clips.get(id).and_then(Clip::stretch).is_none())
+        .collect();
+    if left.is_empty() {
+        return;
+    }
+    let restores = left.into_iter().filter_map(|clip| {
+        let warp = playlist.warps.remove(&clip)?;
+        Some(Edit::SetClipWarp {
+            clip,
+            warp: Some(warp),
+        })
+    });
+    let inverse = mem::replace(&mut applied.inverse, Edit::Transaction(Vec::new()));
+    applied.inverse = Edit::Transaction(iter::once(inverse).chain(restores).collect());
+    applied.touched.playlist = true;
+}
+
+/// The one step that gives audio clip `clip` the warp markers `markers`, placed on its sound of
+/// `sound_frames` frames: the marker edit alone on a stretched clip; on an unstretched one, a
+/// transaction that first stretches it in the mode that keeps the pitch to the sound's own
+/// `sound_frames` (a ratio of 1, its offset and length kept), then sets them. Refused for a clip
+/// that is not audio.
+pub fn start_warp(
+    project: &Project,
+    clip: ClipId,
+    sound_frames: u64,
+    markers: Vec<WarpMarker>,
+) -> Result<Edit, EditError> {
+    let held = project
+        .playlist
+        .clips
+        .get(&clip)
+        .ok_or(EditError::UnknownClip(clip.0))?;
+    let ClipItem::Audio {
+        frame_offset,
+        stretch,
+        ..
+    } = held.item
+    else {
+        return Err(EditError::NotAnAudioClip(clip.0));
+    };
+    let warp = Edit::SetClipWarp {
+        clip,
+        warp: Some(ClipWarp {
+            source_frames: sound_frames,
+            markers,
+        }),
+    };
+    if stretch.is_some() {
+        return Ok(warp);
+    }
+    let stretch = Edit::SetClipStretch {
+        clip,
+        stretch: Some(ClipStretch {
+            mode: StretchMode::Stretch,
+            frames: sound_frames,
+            pitch: 0,
+        }),
+        frame_offset,
+        length: held.length,
+    };
+    Ok(Edit::Transaction(vec![stretch, warp]))
+}
+
+/// [`apply`] for one edit, its markers not yet followed.
+fn apply_one(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
     match edit {
         Edit::ToggleStep {
             pattern,
@@ -1117,12 +1234,23 @@ pub fn apply(project: &mut Project, edit: Edit) -> Result<Applied, EditError> {
             frame_offset,
         } => playlist::trim_audio_clip(project, clip, start, length, frame_offset),
         Edit::SetClipGain { clip, gain } => playlist::set_clip_gain(project, clip, gain),
+        Edit::SetClipFades {
+            clip,
+            fade_in,
+            fade_out,
+        } => playlist::set_clip_fades(project, clip, fade_in, fade_out),
+        Edit::RestoreClipFades {
+            clip,
+            fade_in,
+            fade_out,
+        } => playlist::restore_clip_fades(project, clip, fade_in, fade_out),
         Edit::SetClipStretch {
             clip,
             stretch,
             frame_offset,
             length,
         } => playlist::set_clip_stretch(project, clip, stretch, frame_offset, length),
+        Edit::SetClipWarp { clip, warp } => playlist::set_clip_warp(project, clip, warp),
         Edit::SetMidiLink { target, link } => links::set(project, target, link),
         Edit::SetChannelMidiInput { channel, port } => links::set_input(project, channel, port),
         Edit::SetChannelMidiOut { channel, out } => links::set_output(project, channel, out),

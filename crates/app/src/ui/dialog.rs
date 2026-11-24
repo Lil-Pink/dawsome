@@ -600,6 +600,12 @@ pub struct EditMenu<'k> {
     pub redo: Option<String>,
     /// Something is selected in the panel with the keys, so Delete and Duplicate act.
     pub selected: bool,
+    /// Clips are selected on the playlist shown, so Split acts.
+    pub split: bool,
+    /// Two clips are selected on the playlist shown, so Crossfade may act.
+    pub crossfade: bool,
+    /// Clips are selected on the playlist shown, so Quantize audio may act.
+    pub quantize: bool,
     /// The piano roll shows a channel's notes, so Select all notes acts.
     pub notes: bool,
     /// The shortcuts, whose keys the rows name.
@@ -610,7 +616,7 @@ pub struct EditMenu<'k> {
 }
 
 /// The Edit menu under the toolbar's Edit button, over a backdrop that closes it when clicked:
-/// Undo and Redo naming their steps, Delete, Duplicate and Select all notes, each with its key
+/// Undo and Redo naming their steps, Delete, Duplicate, Split, Crossfade, Quantize audio and Select all notes, each with its key
 /// and dim when it would do nothing, then Settings, so the window is found from a menu too.
 pub fn edit_menu<'a>(menu: EditMenu) -> Element<'a, Message> {
     let mut list = column![].spacing(2);
@@ -640,6 +646,24 @@ pub fn edit_menu<'a>(menu: EditMenu) -> Element<'a, Message> {
                 key(Action::Duplicate),
                 Message::Duplicate,
                 menu.selected,
+            ),
+            EditRow::Split => (
+                "Split".to_owned(),
+                key(Action::Split),
+                Message::Split,
+                menu.split,
+            ),
+            EditRow::Crossfade => (
+                "Crossfade".to_owned(),
+                key(Action::Crossfade),
+                Message::Crossfade,
+                menu.crossfade,
+            ),
+            EditRow::QuantizeAudio => (
+                "Quantize audio".to_owned(),
+                key(Action::QuantizeAudio),
+                Message::QuantizeAudio,
+                menu.quantize,
             ),
             EditRow::SelectAll => (
                 "Select all notes".to_owned(),

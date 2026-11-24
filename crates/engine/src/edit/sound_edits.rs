@@ -9,7 +9,9 @@
 use std::mem;
 
 use super::{channel_mut, Applied, Edit, EditError};
-use crate::project::{ChannelId, ClipItem, ClipStretch, EditsSource, Project, SoundEdits, SoundOp};
+use crate::project::{
+    ChannelId, Clip, ClipItem, ClipStretch, EditsSource, Project, SoundEdits, SoundOp,
+};
 
 /// Gives `channel` the edit list `edits`; the inverse gives it the list it had. Refused for a
 /// channel that plays no file of its own and for a list no sound can hold.
@@ -18,9 +20,20 @@ pub(super) fn set(
     channel: ChannelId,
     edits: SoundEdits,
 ) -> Result<Applied, EditError> {
+    let warped =
+        project.playlist.warps.keys().any(|id| {
+            project.playlist.clips.get(id).and_then(Clip::audio_channel) == Some(channel)
+        });
     let shown = channel_mut(project, channel)?;
     if !shown.plays_a_file() {
         return Err(EditError::NoSoundFile(channel.0));
+    }
+    // Why refused rather than the markers moved: markers pin frames of the sound, and carrying
+    // them through a crop or a delete is a feature of its own. A sound's length follows from its
+    // crops and deletes alone, in order (every other op keeps the length and the frames' places),
+    // so a list with the same ones leaves the markers where they were.
+    if warped && length_ops(&shown.edits) != length_ops(&edits) {
+        return Err(EditError::WarpedSoundLength(channel.0));
     }
     let old = mem::replace(&mut shown.edits, edits);
     if let Some(problem) = shown.edits_problem() {
@@ -34,6 +47,15 @@ pub(super) fn set(
         },
         channel,
     ))
+}
+
+/// The ops of `edits` that change the sound's length, in order.
+fn length_ops(edits: &SoundEdits) -> Vec<&SoundOp> {
+    edits
+        .ops
+        .iter()
+        .filter(|op| matches!(op, SoundOp::Crop { .. } | SoundOp::Delete { .. }))
+        .collect()
 }
 
 /// The one step that appends `op` to `channel`'s list, its sound `frames` frames long as the

@@ -1207,7 +1207,7 @@ fn every_length_the_playlist_reads_is_the_edited_sounds() {
     let look = |app: &App| {
         let channel = &app.session.project().channels[&ChannelId(2)];
         match clips::look_of(&app.looks.files, channel) {
-            Some(FileLook::Ready(peaks)) => Some(peaks.clone()),
+            Some(FileLook::Ready(peaks, _)) => Some(peaks.clone()),
             _ => None,
         }
     };
@@ -1235,7 +1235,8 @@ fn every_length_the_playlist_reads_is_the_edited_sounds() {
         Some(ClipProperties {
             mode: Some(StretchMode::Resample),
             pitch: 0,
-            percent: Some(150)
+            percent: Some(150),
+            warp: false,
         })
     );
     app.arranger.properties = Some(ClipId(1));
@@ -1257,6 +1258,49 @@ fn every_length_the_playlist_reads_is_the_edited_sounds() {
     let made = look(&app).expect("made from the file");
     assert_eq!(made.frames, frames);
     assert_eq!(made, cropped);
+}
+
+// The editor's peaks show at once, but the onsets of the sound it shows (the marks on its
+// clips) are found on a worker, as a loaded file's are: the window's thread never pays for
+// them (ten minutes of stereo took 96 ms there in a release build, with a 230 MB copy). Right
+// after a crop with the app's work in the background they are not there yet; then they are
+// the onsets of what plays.
+#[test]
+fn the_editors_sound_finds_its_onsets_on_a_worker() {
+    use crate::app::MediaMessage;
+    use crate::ui::clips::{self, FileLook};
+    use std::time::{Duration, Instant};
+    let (mut app, _player, _main) = app_on("p30_undo.json");
+    let _ = open(&mut app, 2);
+    app.host.background = true;
+    send(
+        &mut app,
+        M::Select {
+            from: 1000,
+            to: 2000,
+        },
+    );
+    send(&mut app, M::Op(EditorOp::Crop));
+    let onsets = |app: &App| {
+        let channel = &app.session.project().channels[&ChannelId(2)];
+        match clips::look_of(&app.looks.files, channel) {
+            Some(FileLook::Ready(_, onsets)) => Some(onsets.clone()),
+            _ => None,
+        }
+    };
+    assert_eq!(
+        onsets(&app),
+        Some(None),
+        "the peaks at once, the onsets not yet"
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while onsets(&app) == Some(None) {
+        assert!(Instant::now() < deadline, "the worker's onsets never came");
+        std::thread::sleep(Duration::from_millis(5));
+        let _ = app.update(Message::Media(MediaMessage::Tick));
+    }
+    let found = dawsome_media::onsets::of(&played(&app));
+    assert_eq!(onsets(&app), Some(Some(found)));
 }
 
 // gen_p30's "stale": the editor's crop of p30_undo's audio channel, its list's source the

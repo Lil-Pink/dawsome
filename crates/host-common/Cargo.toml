@@ -20,7 +20,7 @@ libc = "0.2"
 # the line the toolkit already pulls in, so the tree keeps one. `xinput`: the raw key events a
 # plugin window's keys are heard by while the plugin's own window takes them (no new crate; the
 # app's winit enables it already).
-x11rb = { version = "0.13", features = ["xinput"] }
+x11rb = { version = "0.14", features = ["xinput"] }
 
 [target.'cfg(windows)'.dependencies]
 # The job object a scan child runs in (and finding its first thread to resume it), keeping a

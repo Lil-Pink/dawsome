@@ -1,6 +1,8 @@
 //! The app's own settings, kept per user in `dawsome/settings.json` in the settings folder
 //! ([`project_file::config_dir`]), not in any project: which MIDI inputs play,
-//! `"midi_inputs": "all"` or a list of port names, the window's layout when it last closed
+//! `"midi_inputs": "all"` or a list of port names (absent or empty until the first choice: every
+//! port plays; `"midi_inputs_none": true` beside the empty list once every port is unticked), the
+//! window's layout when it last closed
 //! (`"window"`, the panels popped out of it among them, `"popped"`, written only when one is;
 //! its size, as the pop-out windows' below, in the system's logical pixels, so a window keeps its
 //! size on the screen whatever the zoom), the zoom (`"ui_zoom"`, a percentage, written only when
@@ -64,51 +66,66 @@ use crate::ui::{mixer_layout, piano_layout};
 use crate::zoom::Zoom;
 
 /// Which MIDI input ports play.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum MidiInputs {
+    /// No choice made yet: the settings never held one. Every port plays, those plugged in
+    /// later too, each shown ticked, and nothing is written; the first tick changed writes a
+    /// choice. Why: a first-time user with one keyboard expects it to play, and nothing told
+    /// them to tick it.
+    #[default]
+    Unchosen,
     /// Every port, those plugged in later too.
     All,
-    /// The ports of these names; none at first. A port is chosen by its name without the
-    /// numbers the system appends on Linux ([`stable_port_name`]), and compared so, so a choice
-    /// holds when another device is found first.
+    /// The ports of these names; an empty list plays none. A port is chosen by its name without
+    /// the numbers the system appends on Linux ([`stable_port_name`]), and compared so, so a
+    /// choice holds when another device is found first; a name and the same name with the
+    /// instance number Windows gives a second socket ("2- Name") match while the chosen name
+    /// itself is not found ([`renamed`]).
     Named(BTreeSet<String>),
 }
 
-impl Default for MidiInputs {
-    fn default() -> Self {
+impl MidiInputs {
+    /// A choice of no port.
+    pub fn none() -> Self {
         MidiInputs::Named(BTreeSet::new())
     }
-}
 
-impl MidiInputs {
-    pub fn plays(&self, port: &str) -> bool {
+    /// Whether "All ports" is chosen (a first run's every port playing is not a choice).
+    pub fn is_all(&self) -> bool {
+        matches!(self, MidiInputs::All)
+    }
+
+    /// Whether port `port` plays, `listed` being the ports there are: a chosen name matches its
+    /// port by [`same_port`], and by [`renamed`] while no listed port is that name's own.
+    pub fn plays(&self, port: &str, listed: &[String]) -> bool {
         match self {
-            MidiInputs::All => true,
-            MidiInputs::Named(names) => names.iter().any(|name| same_port(name, port)),
+            MidiInputs::Unchosen | MidiInputs::All => true,
+            MidiInputs::Named(names) => names.iter().any(|name| chosen_as(name, port, listed)),
         }
     }
 
     /// "All ports" switched: from all to none, else to all.
     pub fn toggle_all(&mut self) {
         *self = match self {
-            MidiInputs::All => MidiInputs::Named(BTreeSet::new()),
-            MidiInputs::Named(_) => MidiInputs::All,
+            MidiInputs::All => MidiInputs::none(),
+            MidiInputs::Unchosen | MidiInputs::Named(_) => MidiInputs::All,
         };
     }
 
-    /// The port `name` switched; `listed` are the ports there are, which "all" stands for when
-    /// one of them goes. Switched off, every name of the port goes (one stored under former
-    /// numbers too); switched on, it is stored without the system's numbers.
+    /// The port `name` switched; `listed` are the ports there are, which "all" (and a first
+    /// run's every port) stands for when one of them goes. Switched off, every name that chose
+    /// the port goes (one stored under former numbers, or renamed, too); switched on, it is
+    /// stored without the system's numbers.
     pub fn toggle(&mut self, name: &str, listed: &[String]) {
         let mut names: BTreeSet<String> = match std::mem::take(self) {
-            MidiInputs::All => listed
+            MidiInputs::Unchosen | MidiInputs::All => listed
                 .iter()
                 .map(|port| stable_port_name(port).to_owned())
                 .collect(),
             MidiInputs::Named(names) => names,
         };
         let before = names.len();
-        names.retain(|kept| !same_port(kept, name));
+        names.retain(|kept| !chosen_as(kept, name, listed));
         if names.len() == before {
             names.insert(stable_port_name(name).to_owned());
         }
@@ -116,10 +133,84 @@ impl MidiInputs {
     }
 }
 
+/// Whether the chosen name `chosen` picks port `port` among `listed`: the same port, or
+/// [`renamed`] while no listed port is `chosen`'s own.
+fn chosen_as(chosen: &str, port: &str, listed: &[String]) -> bool {
+    same_port(chosen, port)
+        || (renamed(chosen, port) && !listed.iter().any(|found| same_port(found, chosen)))
+}
+
+/// Whether `a` and `b` are one port's names with and without the instance number Windows puts
+/// before a second device of one name ("2- Keys" for "Keys": digits, a hyphen, a space).
+fn renamed(a: &str, b: &str) -> bool {
+    let (a, b) = (stable_port_name(a), stable_port_name(b));
+    without_instance(a) == Some(b) || without_instance(b) == Some(a)
+}
+
+/// `name` without a leading instance number ("2- Keys" → "Keys"); none when it has none.
+fn without_instance(name: &str) -> Option<&str> {
+    let (number, rest) = name.split_once("- ")?;
+    let digits = !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit());
+    (digits && !rest.is_empty()).then_some(rest)
+}
+
+/// How the choice of MIDI inputs sits in the settings file: `"midi_inputs"`, "all" or a list of
+/// names, and `"midi_inputs_none": true` beside an empty list for a choice of none (written only
+/// while so). An empty list without it is no choice. Why the flag: every build before this one
+/// wrote the empty list on any save, unticked or not, so it cannot also mean "none chosen". A
+/// flag that is no `true` reads as none written.
+mod midi_choice {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_json::Value;
+
+    use super::MidiInputs;
+
+    #[derive(Deserialize)]
+    struct Read {
+        #[serde(default)]
+        midi_inputs: Option<MidiInputs>,
+        #[serde(default)]
+        midi_inputs_none: Option<Value>,
+    }
+
+    #[derive(Serialize)]
+    struct Write<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        midi_inputs: Option<&'a MidiInputs>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        midi_inputs_none: bool,
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<MidiInputs, D::Error> {
+        let read = Read::deserialize(deserializer)?;
+        let none = read.midi_inputs_none == Some(Value::Bool(true));
+        Ok(choice(read.midi_inputs, none))
+    }
+
+    /// The choice a file's list (none when absent) and flag make.
+    pub(super) fn choice(list: Option<MidiInputs>, none: bool) -> MidiInputs {
+        match list {
+            Some(MidiInputs::Named(names)) if !names.is_empty() => MidiInputs::Named(names),
+            Some(MidiInputs::All) => MidiInputs::All,
+            _ if none => MidiInputs::none(),
+            _ => MidiInputs::Unchosen,
+        }
+    }
+
+    pub fn serialize<S: Serializer>(inputs: &MidiInputs, serializer: S) -> Result<S::Ok, S::Error> {
+        Write {
+            midi_inputs: (!matches!(inputs, MidiInputs::Unchosen)).then_some(inputs),
+            midi_inputs_none: matches!(inputs, MidiInputs::Named(names) if names.is_empty()),
+        }
+        .serialize(serializer)
+    }
+}
+
 impl Serialize for MidiInputs {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            MidiInputs::All => serializer.serialize_str("all"),
+            // Never written as such (the settings leave the key out); were it, every port plays.
+            MidiInputs::Unchosen | MidiInputs::All => serializer.serialize_str("all"),
             MidiInputs::Named(names) => serializer.collect_seq(names),
         }
     }
@@ -378,7 +469,9 @@ pub fn start_window(saved: Option<&WindowLayout>, zoom: Zoom) -> StartWindow {
 /// The settings file's content.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
-    #[serde(default)]
+    /// `"midi_inputs"` and `"midi_inputs_none"` ([`midi_choice`]): absent or an empty list
+    /// (never chosen), every port plays and nothing is written.
+    #[serde(flatten, with = "midi_choice")]
     pub midi_inputs: MidiInputs,
     /// The window's layout when it last closed; none before the first close.
     #[serde(
@@ -1067,6 +1160,12 @@ impl Settings {
         self.panel_windows.insert(panel.name().to_owned(), place);
     }
 
+    /// Whether these are a first start's settings: no window layout kept yet, as a missing file
+    /// gives; [`start_window`] opens the first start's panels then.
+    pub fn first_start(&self) -> bool {
+        self.window.is_none()
+    }
+
     /// The Library's groups folded, by name.
     pub fn library_folded(&self) -> std::collections::BTreeSet<String> {
         self.library.folded.iter().cloned().collect()
@@ -1214,7 +1313,13 @@ impl Settings {
         };
         serde_json::from_str(&text).unwrap_or_else(|_| {
             let mut rest: Map<String, Value> = serde_json::from_str(&text).unwrap_or_default();
-            rest.remove("midi_inputs");
+            // A value there held a choice this build cannot read: none plays, as it did before
+            // the first-run rule; absent (or no object at all) is a first run.
+            let none_flag = rest.remove("midi_inputs_none");
+            let midi_inputs = match rest.remove("midi_inputs") {
+                Some(_) => MidiInputs::none(),
+                None => midi_choice::choice(None, none_flag == Some(Value::Bool(true))),
+            };
             // Taken out of the rest too, so it is never written twice.
             let window = rest
                 .remove("window")
@@ -1274,7 +1379,7 @@ impl Settings {
             let library = serde_json::from_value(read("library")).unwrap_or_default();
             let input_latency = serde_json::from_value(read("input_latency")).unwrap_or_default();
             Self {
-                midi_inputs: MidiInputs::default(),
+                midi_inputs,
                 window,
                 instrument_window,
                 settings_window,
@@ -1382,10 +1487,7 @@ mod tests {
         let mut settings = Settings::default();
         assert_eq!(settings.zoom(), Zoom::DEFAULT);
         settings.save(&file).expect("saves");
-        assert_eq!(
-            fs::read_to_string(&file).expect("reads"),
-            "{\n  \"midi_inputs\": []\n}\n"
-        );
+        assert_eq!(fs::read_to_string(&file).expect("reads"), "{}\n");
         settings.set_zoom(Zoom::exact(125).expect("a stop"));
         settings.save(&file).expect("saves");
         let text = fs::read_to_string(&file).expect("reads");
@@ -1459,10 +1561,7 @@ mod tests {
         assert_eq!(Settings::load(Some(&file)).theme(), ThemeId::Graphite);
         settings.set_theme(ThemeId::Slate);
         settings.save(&file).expect("saves");
-        assert_eq!(
-            fs::read_to_string(&file).expect("reads"),
-            "{\n  \"midi_inputs\": []\n}\n"
-        );
+        assert_eq!(fs::read_to_string(&file).expect("reads"), "{}\n");
         fs::write(&file, r#"{"ui_theme":"oak","show_hints":false}"#).expect("writes");
         let newer = Settings::load(Some(&file));
         assert_eq!(newer.theme(), ThemeId::Slate);
@@ -1498,10 +1597,7 @@ mod tests {
         assert_eq!(Settings::load(Some(&file)).accent(), Some(blue));
         settings.set_accent(None);
         settings.save(&file).expect("saves");
-        assert_eq!(
-            fs::read_to_string(&file).expect("reads"),
-            "{\n  \"midi_inputs\": []\n}\n"
-        );
+        assert_eq!(fs::read_to_string(&file).expect("reads"), "{}\n");
         fs::write(&file, r##"{"ui_accent":"#3fa7d6"}"##).expect("writes");
         assert_eq!(Settings::load(Some(&file)).accent(), Some(blue));
         for odd in ["blue", "#36D"] {
@@ -1553,10 +1649,7 @@ mod tests {
         assert!(Settings::load(Some(&file)).accent_lock());
         settings.set_accent_lock(false);
         settings.save(&file).expect("saves");
-        assert_eq!(
-            fs::read_to_string(&file).expect("reads"),
-            "{\n  \"midi_inputs\": []\n}\n"
-        );
+        assert_eq!(fs::read_to_string(&file).expect("reads"), "{}\n");
         fs::write(&file, r#"{"ui_accent_lock":"yes","show_hints":false}"#).expect("writes");
         let odd = Settings::load(Some(&file));
         assert!(!odd.accent_lock());
@@ -1617,10 +1710,7 @@ mod tests {
         settings.set_note_color(None);
         settings.set_accent(None);
         settings.save(&file).expect("saves");
-        assert_eq!(
-            fs::read_to_string(&file).expect("reads"),
-            "{\n  \"midi_inputs\": []\n}\n"
-        );
+        assert_eq!(fs::read_to_string(&file).expect("reads"), "{}\n");
         fs::write(&file, r##"{"ui_note_color":"#3fa7d6"}"##).expect("writes");
         assert_eq!(Settings::load(Some(&file)).note_color(), Some(blue));
         fs::write(&file, r#"{"ui_note_color":"blue"}"#).expect("writes");
@@ -1846,14 +1936,14 @@ mod tests {
     #[test]
     fn a_port_is_chosen_by_its_name_without_the_systems_numbers() {
         let mut inputs = names(&["USB Keyboard:USB Keyboard MIDI 1 32:0"]);
-        assert!(inputs.plays("USB Keyboard:USB Keyboard MIDI 1 36:0"));
-        assert!(!inputs.plays("USB Keyboard:USB Keyboard MIDI 2 36:1"));
+        assert!(inputs.plays("USB Keyboard:USB Keyboard MIDI 1 36:0", &[]));
+        assert!(!inputs.plays("USB Keyboard:USB Keyboard MIDI 2 36:1", &[]));
         let listed = [
             "USB Keyboard:USB Keyboard MIDI 1 36:0".to_owned(),
             "2- Digital Piano".to_owned(),
         ];
         inputs.toggle(&listed[0], &listed);
-        assert_eq!(inputs, MidiInputs::default(), "the former entry goes");
+        assert_eq!(inputs, MidiInputs::none(), "the former entry goes");
         inputs.toggle(&listed[0], &listed);
         assert_eq!(inputs, names(&["USB Keyboard:USB Keyboard MIDI 1"]));
         inputs.toggle(&listed[1], &listed);
@@ -1885,7 +1975,185 @@ mod tests {
         assert!(serde_json::from_str::<Settings>(r#"{"midi_inputs":"some"}"#).is_err());
         let empty: Settings = serde_json::from_str("{}").expect("reads");
         assert_eq!(empty.midi_inputs, MidiInputs::default());
-        assert!(!empty.midi_inputs.plays("Port A"), "no port plays at first");
+        assert!(
+            empty.midi_inputs.plays("Port A", &[]),
+            "every port plays until a choice is made"
+        );
+        let none: Settings =
+            serde_json::from_str(r#"{"midi_inputs":[],"midi_inputs_none":true}"#).expect("reads");
+        assert!(
+            !none.midi_inputs.plays("Port A", &[]),
+            "an empty list: none"
+        );
+    }
+
+    // A settings file that never held a choice of MIDI inputs (no "midi_inputs" key, or no file
+    // at all) plays every port found, those found later too, and saving it writes no choice. The
+    // first tick changed writes the list as a change from "all" does: every port shown ticked but
+    // that one. From then on only the ticked ports play; an empty list written plays none. "All
+    // ports" is off until chosen, and choosing it from there is "all".
+    #[test]
+    fn every_port_plays_until_the_first_tick_changes() {
+        let listed = ["Port A".to_owned(), "Port B".to_owned()];
+        let (dir, file) = settings_file_with("settings-first-run", r#"{"theme":"dark"}"#);
+        let mut settings = Settings::load(Some(&file));
+        for port in ["Port A", "Port B", "Port C"] {
+            assert!(settings.midi_inputs.plays(port, &listed), "{port} plays");
+        }
+        assert_eq!(settings.midi_inputs, MidiInputs::default());
+        assert!(!settings.midi_inputs.is_all(), "All ports unticked");
+        settings.save(&file).expect("saves");
+        assert_eq!(
+            fs::read_to_string(&file).expect("reads"),
+            "{\n  \"theme\": \"dark\"\n}\n",
+            "no choice written"
+        );
+        settings.midi_inputs.toggle("Port A", &listed);
+        assert_eq!(settings.midi_inputs, names(&["Port B"]));
+        settings.save(&file).expect("saves");
+        let read = Settings::load(Some(&file));
+        assert_eq!(read.midi_inputs, names(&["Port B"]));
+        assert!(read.midi_inputs.plays("Port B", &listed));
+        assert!(!read.midi_inputs.plays("Port A", &listed));
+        assert!(
+            !read.midi_inputs.plays("Port C", &listed),
+            "nor one found later"
+        );
+        fs::write(&file, r#"{"midi_inputs":[],"midi_inputs_none":true}"#).expect("written");
+        let none = Settings::load(Some(&file));
+        assert!(listed
+            .iter()
+            .all(|port| !none.midi_inputs.plays(port, &listed)));
+        let missing = dir.join("dawsome/none.json");
+        let fresh = Settings::load(Some(&missing));
+        assert!(listed
+            .iter()
+            .all(|port| fresh.midi_inputs.plays(port, &listed)));
+        let mut all = fresh.midi_inputs.clone();
+        all.toggle_all();
+        assert_eq!(all, MidiInputs::All, "All ports ticked from the first run");
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // The empty list every earlier build wrote on any save ("midi_inputs": []) is no choice:
+    // it plays every port, as no key does. Unticking every port is a choice of none, kept as
+    // the empty list with "midi_inputs_none": true beside it (written only while so), and
+    // survives a reload; ticking one again writes the list without the flag. A list with a
+    // name in it reads as it always has. Ports A and B are found throughout.
+    #[test]
+    fn an_empty_list_is_no_choice_and_unticking_every_port_is_kept_as_none() {
+        let listed = ["A".to_owned(), "B".to_owned()];
+        let (dir, file) = settings_file_with("settings-none-flag", r#"{"midi_inputs": []}"#);
+        let saved = |settings: &Settings| -> Value {
+            settings.save(&file).expect("saves");
+            serde_json::from_str(&fs::read_to_string(&file).expect("reads")).expect("parses")
+        };
+        let plays = |settings: &Settings| -> Vec<bool> {
+            listed
+                .iter()
+                .map(|port| settings.midi_inputs.plays(port, &listed))
+                .collect()
+        };
+        // (1) the empty list: both play and are ticked, "All ports" is not.
+        let mut settings = Settings::load(Some(&file));
+        assert_eq!(plays(&settings), [true, true], "case 1");
+        assert!(!settings.midi_inputs.is_all(), "case 1: All ports unticked");
+        // (2) A unticked: the list holds B, no flag.
+        settings.midi_inputs.toggle("A", &listed);
+        let file_now = saved(&settings);
+        assert_eq!(file_now["midi_inputs"], serde_json::json!(["B"]), "case 2");
+        assert!(
+            file_now.get("midi_inputs_none").is_none(),
+            "case 2: no flag"
+        );
+        // (3) B unticked too: the empty list and the flag; reloaded, nothing plays or is ticked.
+        let mut settings = Settings::load(Some(&file));
+        settings.midi_inputs.toggle("B", &listed);
+        let file_now = saved(&settings);
+        assert_eq!(file_now["midi_inputs"], serde_json::json!([]), "case 3");
+        assert_eq!(
+            file_now["midi_inputs_none"],
+            serde_json::json!(true),
+            "case 3"
+        );
+        let mut settings = Settings::load(Some(&file));
+        assert_eq!(
+            plays(&settings),
+            [false, false],
+            "case 3: none after the reload"
+        );
+        assert!(!settings.midi_inputs.is_all());
+        // (4) A ticked: the list holds A, the flag gone.
+        settings.midi_inputs.toggle("A", &listed);
+        let file_now = saved(&settings);
+        assert_eq!(file_now["midi_inputs"], serde_json::json!(["A"]), "case 4");
+        assert!(
+            file_now.get("midi_inputs_none").is_none(),
+            "case 4: flag gone"
+        );
+        assert_eq!(plays(&Settings::load(Some(&file))), [true, false], "case 4");
+        // (5) a list with a name: only that port, as before.
+        fs::write(&file, r#"{"midi_inputs": ["A"]}"#).expect("written");
+        let settings = Settings::load(Some(&file));
+        assert_eq!(plays(&settings), [true, false], "case 5");
+        assert!(
+            !settings.midi_inputs.plays("C", &listed),
+            "case 5: nor one found later"
+        );
+        // (6) no key: as case 1, and nothing written back.
+        fs::write(&file, "{}").expect("written");
+        let settings = Settings::load(Some(&file));
+        assert_eq!(plays(&settings), [true, true], "case 6");
+        assert!(!settings.midi_inputs.is_all(), "case 6: All ports unticked");
+        assert_eq!(
+            saved(&settings),
+            serde_json::json!({}),
+            "case 6: no MIDI key written"
+        );
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // Windows names a second instance of a device "2- Name" (a number, a hyphen, a space, the
+    // name), so a port chosen as "Keys" comes back as "2- Keys" in another USB socket, and the
+    // reverse. Either matches the other while no port of the chosen name itself is found; when it
+    // is, only that one plays. Switching the renamed port off forgets the choice it matched.
+    // Anything only close ("2-Keys", "x- Keys", "- Keys", "2- Keys 2") is another port.
+    #[test]
+    fn a_port_renamed_with_an_instance_number_still_plays() {
+        let moved = ["2- Keys".to_owned(), "Pads".to_owned()];
+        let keys = names(&["Keys"]);
+        assert!(keys.plays("2- Keys", &moved));
+        assert!(!keys.plays("Pads", &moved));
+        let both = ["Keys".to_owned(), "2- Keys".to_owned()];
+        assert!(keys.plays("Keys", &both));
+        assert!(
+            !keys.plays("2- Keys", &both),
+            "the exact name found plays alone"
+        );
+        let back = ["Keys".to_owned()];
+        assert!(names(&["3- Keys"]).plays("Keys", &back), "and the reverse");
+        let three = ["Keys".to_owned(), "3- Keys".to_owned()];
+        assert!(!names(&["3- Keys"]).plays("Keys", &three));
+        for close in [
+            "2-Keys",
+            "x- Keys",
+            "- Keys",
+            "2- Keys 2",
+            "2- keys",
+            "12 - Keys",
+        ] {
+            let found = [close.to_owned()];
+            assert!(!keys.plays(close, &found), "{close:?} is another port");
+        }
+        let mut chosen = keys.clone();
+        chosen.toggle("2- Keys", &moved);
+        assert_eq!(chosen, MidiInputs::none(), "switched off");
+        chosen.toggle("2- Keys", &moved);
+        assert_eq!(
+            chosen,
+            names(&["2- Keys"]),
+            "switched on under its new name"
+        );
     }
 
     #[test]
@@ -1919,7 +2187,11 @@ mod tests {
         let (dir, file) =
             settings_file_with("settings-newer", r#"{"midi_inputs":"some","theme":"dark"}"#);
         let mut settings = Settings::load(Some(&file));
-        assert_eq!(settings.midi_inputs, MidiInputs::default());
+        assert_eq!(
+            settings.midi_inputs,
+            MidiInputs::none(),
+            "a choice was held: none plays, as before the first-run rule"
+        );
         settings.midi_inputs = MidiInputs::All;
         settings.save(&file).expect("saves");
         let saved: Value =
@@ -2135,13 +2407,10 @@ mod tests {
         settings.set_preview_notes(false);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"preview_notes":false}"#
+            r#"{"preview_notes":false}"#
         );
         settings.set_preview_notes(true);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let odd: Settings = serde_json::from_str(r#"{"preview_notes":"yes"}"#).expect("reads");
         assert!(odd.preview_notes(), "a value it cannot read is the default");
     }
@@ -2156,14 +2425,11 @@ mod tests {
         assert_eq!(settings.roll_zoom(), 16.0);
         settings.set_roll_zoom(19.5);
         let written = serde_json::to_string(&settings).expect("writes");
-        assert_eq!(written, r#"{"midi_inputs":[],"piano_roll":{"zoom":19.5}}"#);
+        assert_eq!(written, r#"{"piano_roll":{"zoom":19.5}}"#);
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert_eq!(read.roll_zoom(), 19.5);
         settings.set_roll_zoom(16.0);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let far: Settings = serde_json::from_str(r#"{"piano_roll":{"zoom":900}}"#).expect("reads");
         let near: Settings = serde_json::from_str(r#"{"piano_roll":{"zoom":2}}"#).expect("reads");
         assert_eq!((far.roll_zoom(), near.roll_zoom()), (64.0, 4.0));
@@ -2172,7 +2438,7 @@ mod tests {
         assert_eq!(odd.roll_zoom(), 16.0);
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"piano_roll":{"width":3}}"#
+            r#"{"piano_roll":{"width":3}}"#
         );
         let (dir, file) = settings_file_with(
             "roll_zoom",
@@ -2199,7 +2465,7 @@ mod tests {
             let read: Settings = serde_json::from_str(old).expect("reads");
             assert_eq!(
                 serde_json::to_string(&read).expect("writes"),
-                r#"{"midi_inputs":[]}"#,
+                r#"{}"#,
                 "{old}"
             );
         }
@@ -2209,7 +2475,7 @@ mod tests {
         assert!(!beside.follows(Panel::PianoRoll));
         assert_eq!(
             serde_json::to_string(&beside).expect("writes"),
-            r#"{"midi_inputs":[],"piano_roll":{"follow":false}}"#
+            r#"{"piano_roll":{"follow":false}}"#
         );
     }
 
@@ -2228,15 +2494,12 @@ mod tests {
         let written = serde_json::to_string(&settings).expect("writes");
         assert_eq!(
             written,
-            r#"{"midi_inputs":[],"library":{"folded":["Instrument sets/Drums","Plugins"]}}"#
+            r#"{"library":{"folded":["Instrument sets/Drums","Plugins"]}}"#
         );
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert_eq!(read.library_folded(), folded);
         settings.set_library_folded(&std::collections::BTreeSet::new());
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let mut odd: Settings =
             serde_json::from_str(r#"{"library":{"folded":"Plugins","width":300}}"#).expect("reads");
         assert!(odd.library_folded().is_empty());
@@ -2245,7 +2508,7 @@ mod tests {
         ));
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"library":{"folded":["Starter kit"],"width":300}}"#
+            r#"{"library":{"folded":["Starter kit"],"width":300}}"#
         );
     }
 
@@ -2259,18 +2522,12 @@ mod tests {
         settings.set_playlist_zoom(90.5);
         settings.set_playlist_lanes(Lanes::Fixed(48.0));
         let written = serde_json::to_string(&settings).expect("writes");
-        assert_eq!(
-            written,
-            r#"{"midi_inputs":[],"playlist":{"lane_height":48.0,"zoom":90.5}}"#
-        );
+        assert_eq!(written, r#"{"playlist":{"lane_height":48.0,"zoom":90.5}}"#);
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert_eq!(read.playlist_zoom(), 90.5);
         settings.set_playlist_zoom(64.0);
         settings.set_playlist_lanes(Lanes::Fit);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let read = |text: &str| -> Settings { serde_json::from_str(text).expect("reads") };
         assert_eq!(read(r#"{"playlist":{"zoom":900}}"#).playlist_zoom(), 256.0);
         assert_eq!(read(r#"{"playlist":{"zoom":2}}"#).playlist_zoom(), 16.0);
@@ -2304,7 +2561,7 @@ mod tests {
         let written = serde_json::to_string(&settings).expect("writes");
         assert_eq!(
             written,
-            r#"{"midi_inputs":[],"playlist":{"lane_height":64.0},"mixer":{"height":312.0}}"#
+            r#"{"playlist":{"lane_height":64.0},"mixer":{"height":312.0}}"#
         );
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert_eq!(read.kept_heights().mixer_height(), 312.0);
@@ -2312,14 +2569,11 @@ mod tests {
         settings.set_kept_heights(&mixer(310.0));
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"playlist":{"lane_height":64.0},"mixer":{"height":310.0}}"#
+            r#"{"playlist":{"lane_height":64.0},"mixer":{"height":310.0}}"#
         );
         settings.set_kept_heights(&mixer(235.0));
         settings.set_playlist_lanes(Lanes::Fit);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let odd: Settings = serde_json::from_str(
             r#"{"mixer":{"height":12,"skin":"dark"},"playlist":{"lane_height":900}}"#,
         )
@@ -2341,7 +2595,7 @@ mod tests {
         odd.set_kept_heights(&mixer(350.0));
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"mixer":{"height":350.0,"skin":"dark"}}"#
+            r#"{"mixer":{"height":350.0,"skin":"dark"}}"#
         );
     }
 
@@ -2364,15 +2618,12 @@ mod tests {
         let written = serde_json::to_string(&settings).expect("writes");
         assert_eq!(
             written,
-            r#"{"midi_inputs":[],"rack":{"height":150.0},"piano_roll":{"height":264.0},"mixer":{"height":420.0}}"#
+            r#"{"rack":{"height":150.0},"piano_roll":{"height":264.0},"mixer":{"height":420.0}}"#
         );
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert_eq!(read.kept_heights(), kept);
         settings.set_kept_heights(&Kept::default());
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let mut odd: Settings = serde_json::from_str(
             r#"{"rack":{"height":"tall","rows":3},"piano_roll":{"height":-5,"lane_height":96}}"#,
         )
@@ -2390,7 +2641,7 @@ mod tests {
         });
         assert_eq!(
             serde_json::to_string(&odd).expect("writes"),
-            r#"{"midi_inputs":[],"rack":{"height":100.0,"rows":3}}"#
+            r#"{"rack":{"height":100.0,"rows":3}}"#
         );
     }
 
@@ -2405,16 +2656,13 @@ mod tests {
         let written = serde_json::to_string(&settings).expect("writes");
         assert_eq!(
             written,
-            r#"{"midi_inputs":[],"piano_roll":{"follow":false,"loop_player":false}}"#
+            r#"{"piano_roll":{"follow":false,"loop_player":false}}"#
         );
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert!(!read.loops_roll_player());
         settings.set_loops_roll_player(true);
         settings.set_follows(Panel::PianoRoll, true);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let odd: Settings =
             serde_json::from_str(r#"{"piano_roll":{"loop_player":"often"}}"#).expect("reads");
         assert!(odd.loops_roll_player());
@@ -2430,24 +2678,18 @@ mod tests {
         settings.set_follows(Panel::PianoRoll, false);
         settings.set_roll_zoom(32.0);
         let written = serde_json::to_string(&settings).expect("writes");
-        assert_eq!(
-            written,
-            r#"{"midi_inputs":[],"piano_roll":{"zoom":32.0,"follow":false}}"#
-        );
+        assert_eq!(written, r#"{"piano_roll":{"zoom":32.0,"follow":false}}"#);
         let read: Settings = serde_json::from_str(&written).expect("reads");
         assert!(!read.follows(Panel::PianoRoll));
         settings.set_follows(Panel::PianoRoll, true);
         settings.set_roll_zoom(16.0);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         assert!(!settings.follows(Panel::Mixer));
         // The playlist's switch, apart from the roll's.
         settings.set_follows(Panel::Playlist, false);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"playlist":{"follow":false}}"#
+            r#"{"playlist":{"follow":false}}"#
         );
         assert!(settings.follows(Panel::PianoRoll) && !settings.follows(Panel::Playlist));
     }
@@ -2462,7 +2704,7 @@ mod tests {
         settings.set_audio_output(Some("USB Audio Analog Stereo".to_owned()));
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"audio_output":"USB Audio Analog Stereo"}"#
+            r#"{"audio_output":"USB Audio Analog Stereo"}"#
         );
         let (dir, file) = settings_file_with("settings-audio", "{}");
         settings.save(&file).expect("saves");
@@ -2478,10 +2720,7 @@ mod tests {
         );
         fs::remove_dir_all(&dir).expect("removed");
         settings.set_audio_output(None);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
         let odd: Settings = serde_json::from_str(r#"{"audio_output":3}"#).expect("reads");
         assert_eq!(
             odd.audio_output(),
@@ -2502,14 +2741,14 @@ mod tests {
             Some("Arctis Nova 7 Analog Stereo".to_owned()),
         );
         let written = concat!(
-            r#"{"midi_inputs":[],"audio_output":"sink:alsa_output.usb-SteelSeries_Arctis_Nova_7-00"#,
+            r#"{"audio_output":"sink:alsa_output.usb-SteelSeries_Arctis_Nova_7-00"#,
             r#".analog-stereo","audio_output_name":"Arctis Nova 7 Analog Stereo"}"#
         );
         assert_eq!(serde_json::to_string(&settings).expect("writes"), written);
         let (dir, file) = settings_file_with("settings-sink", "{}");
         settings.save(&file).expect("saves");
         assert_eq!(Settings::load(Some(&file)), settings);
-        let lenient = written.replace(r#""midi_inputs":[]"#, r#""midi_inputs":"some""#);
+        let lenient = written.replacen('{', r#"{"midi_inputs":"some","#, 1);
         fs::write(&file, lenient).expect("written");
         let loaded = Settings::load(Some(&file));
         assert_eq!(
@@ -2520,13 +2759,10 @@ mod tests {
         settings.choose_audio_output(Some("Speakers".to_owned()), Some("Speakers".to_owned()));
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"audio_output":"Speakers"}"#
+            r#"{"audio_output":"Speakers"}"#
         );
         settings.choose_audio_output(None, Some("System default".to_owned()));
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
     }
 
     // The input device new input channels take: by name, written only when chosen, read back,
@@ -2538,7 +2774,7 @@ mod tests {
         settings.set_audio_input(Some("USB Audio Line Input".to_owned()));
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"audio_input":"USB Audio Line Input"}"#
+            r#"{"audio_input":"USB Audio Line Input"}"#
         );
         let (dir, file) = settings_file_with("settings-audio-input", "{}");
         settings.save(&file).expect("saves");
@@ -2607,7 +2843,9 @@ mod tests {
         assert_eq!(place.position(), Some(Point::new(100.0, -20.0)));
         assert_eq!(
             serde_json::to_string(&saved).expect("writes"),
-            r#"{"midi_inputs":[],"instrument_window":{"width":640.0,"height":480.0,"position":[100.0,-20.0]}}"#
+            // The empty list an earlier build wrote is no choice of inputs, so it is not
+            // written back.
+            r#"{"instrument_window":{"width":640.0,"height":480.0,"position":[100.0,-20.0]}}"#
         );
         let wayland = WindowPlace::of(Size::new(600.0, 400.0), None);
         assert_eq!(
@@ -2649,14 +2887,11 @@ mod tests {
         settings.set_keyboard_plays_notes(false);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"keyboard_plays_notes":false}"#
+            r#"{"keyboard_plays_notes":false}"#
         );
         settings.set_keyboard_plays_notes(true);
-        assert_eq!(
-            serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[]}"#
-        );
-        let text = r#"{"midi_inputs":[],"keyboard_plays_notes":false,"note_layout":"two-rows"}"#;
+        assert_eq!(serde_json::to_string(&settings).expect("writes"), r#"{}"#);
+        let text = r#"{"keyboard_plays_notes":false,"note_layout":"two-rows"}"#;
         let read: Settings = serde_json::from_str(text).expect("reads");
         assert!(!read.keyboard_plays_notes());
         assert_eq!(read.note_layout(), NoteLayout::TwoRows);
@@ -2666,7 +2901,7 @@ mod tests {
         assert_eq!(newer.note_layout(), NoteLayout::Piano);
         assert_eq!(
             serde_json::to_string(&newer).expect("writes"),
-            r#"{"midi_inputs":[],"note_layout":"isomorphic"}"#
+            r#"{"note_layout":"isomorphic"}"#
         );
         let (dir, file) = settings_file_with(
             "settings-keyboard",
@@ -2702,7 +2937,7 @@ mod tests {
         settings.set_keys(&keys);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"keys":{"mode":"Ctrl+M","teleport":"Ctrl+K"}}"#
+            r#"{"keys":{"mode":"Ctrl+M","teleport":"Ctrl+K"}}"#
         );
         let read: Settings =
             serde_json::from_str(&serde_json::to_string(&settings).expect("writes"))
@@ -2711,7 +2946,7 @@ mod tests {
         settings.set_keys(&Keys::default());
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"keys":{"teleport":"Ctrl+K"}}"#
+            r#"{"keys":{"teleport":"Ctrl+K"}}"#
         );
         let (dir, file) = settings_file_with(
             "settings-keys",
@@ -2728,7 +2963,7 @@ mod tests {
         settings.set_note_layout(NoteLayout::Piano);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"keys":{"teleport":"Ctrl+K"}}"#
+            r#"{"keys":{"teleport":"Ctrl+K"}}"#
         );
         fs::remove_dir_all(&dir).expect("removed");
     }
@@ -2753,13 +2988,13 @@ mod tests {
         settings.save(&file).expect("saves");
         assert_eq!(
             written(&file),
-            serde_json::json!({"midi_inputs": [], "keys": {"later": ["Ctrl+K"], "mode": "Ctrl+M", "undo": 42}})
+            serde_json::json!({"keys": {"later": ["Ctrl+K"], "mode": "Ctrl+M", "undo": 42}})
         );
         keys.bind(Action::Save, Chord::parse("Ctrl+W").expect("a chord"));
         settings.set_keys(&keys);
         assert_eq!(
             serde_json::to_string(&settings).expect("writes"),
-            r#"{"midi_inputs":[],"keys":{"later":["Ctrl+K"],"mode":"Ctrl+M","save":"Ctrl+W"}}"#
+            r#"{"keys":{"later":["Ctrl+K"],"mode":"Ctrl+M","save":"Ctrl+W"}}"#
         );
         fs::remove_dir_all(&dir).expect("removed");
     }
@@ -2780,7 +3015,7 @@ mod tests {
         settings.save(&file).expect("saves");
         assert_eq!(
             written(&file),
-            serde_json::json!({"midi_inputs": [], "keys": {"save": "Ctrl+ß"}})
+            serde_json::json!({"keys": {"save": "Ctrl+ß"}})
         );
         let read = Settings::load(Some(&file)).keys();
         assert_eq!(read, keys);
@@ -2800,15 +3035,12 @@ mod tests {
         assert!(!settings.keyboard_callout_shown());
         settings.put_away_keyboard_callout();
         let text = serde_json::to_string(&settings).expect("writes");
-        assert_eq!(
-            text,
-            r#"{"midi_inputs":[],"callouts":{"keyboard_shown":true,"later":true}}"#
-        );
+        assert_eq!(text, r#"{"callouts":{"keyboard_shown":true,"later":true}}"#);
         let read: Settings = serde_json::from_str(&text).expect("reads");
         assert!(read.keyboard_callout_shown());
         assert_eq!(
             serde_json::to_string(&Settings::default()).expect("writes"),
-            r#"{"midi_inputs":[]}"#
+            r#"{}"#
         );
         let odd: Settings = serde_json::from_str(r#"{"callouts":"seen"}"#).expect("reads");
         assert!(!odd.keyboard_callout_shown());
@@ -2823,6 +3055,29 @@ mod tests {
         settings.midi_inputs = MidiInputs::All;
         settings.save(&file).expect("saves");
         assert_eq!(Settings::load(Some(&file)), settings);
+        fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // A missing file is a first start's settings; a file with the window kept, as every install
+    // whose window has closed once holds, is not, and its Library folds what it says: nothing.
+    #[test]
+    fn a_missing_file_is_a_first_start_and_a_kept_window_is_not() {
+        let dir = std::env::temp_dir().join(format!("dawsome-first-start-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("dawsome/settings.json");
+        assert!(Settings::load(Some(&file)).first_start());
+        let closed_once = Settings {
+            window: Some(WindowLayout::of(
+                Panels::FIRST_START,
+                FIRST_START_SIZE,
+                true,
+            )),
+            ..Settings::default()
+        };
+        closed_once.save(&file).expect("saves");
+        let existing = Settings::load(Some(&file));
+        assert!(!existing.first_start());
+        assert!(existing.library_folded().is_empty());
         fs::remove_dir_all(&dir).expect("removed");
     }
 }

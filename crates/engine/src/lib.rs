@@ -26,3 +26,4 @@ pub mod song;
 pub mod source;
 pub mod time;
 pub mod transport;
+pub mod warp;

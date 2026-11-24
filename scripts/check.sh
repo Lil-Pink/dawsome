@@ -110,6 +110,16 @@ scripts/python.sh -I tests/fixtures/gen_p35_expected.py --check tests/fixtures
 # Jam: the requests, projects and sets, and the pattern each request writes (the PRNG, every
 # genre's table, the draw order, the harmony), as their generator writes them.
 scripts/python.sh -I tests/fixtures/gen_p36_expected.py --check tests/fixtures
+# Slip and split: the sounds, the projects before and after each split, the documents each slip
+# leaves and the renders a split must not change, as their generator writes them.
+scripts/python.sh -I tests/fixtures/gen_p37_expected.py --check tests/fixtures
+# An audio clip's fades and edge declick: the sounds, the projects, the renders, the version-12
+# document, the fade edit's clamp and undo bytes and a faded clip's split.
+scripts/python.sh -I tests/fixtures/gen_p38_expected.py --check tests/fixtures
+# Warp markers and transients: the map's table, the sounds, the projects, the resampled renders
+# through the markers, the version-13 document and the broken ones, every marker edit's document
+# and undo bytes, the refused edits and the onsets each sound holds.
+scripts/python.sh -I tests/fixtures/gen_p39_expected.py --check tests/fixtures
 # The piano roll's player: the sounds, projects and their references (every other channel muted)
 # a channel's render alone must equal byte for byte, the frames worked out by hand, and the
 # lengths of a pass played once and of two passes looped.

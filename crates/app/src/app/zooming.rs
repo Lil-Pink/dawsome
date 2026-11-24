@@ -181,12 +181,13 @@ mod tests {
 
     use iced::keyboard::key::Code;
     use iced::keyboard::{Key, Modifiers};
-    use iced::{Point, Size};
+    use iced::{Rectangle, Size};
 
     use super::super::key_input::KeyInput;
     use super::super::tests::app_on;
     use super::*;
     use crate::ui::panels::Panel;
+    use crate::ui::settings_layout::Layout;
     use crate::ui::settings_panel::SettingsMessage;
 
     const F1: &str = concat!(
@@ -273,23 +274,32 @@ mod tests {
     }
 
     // The Settings window's stepper: + a stop larger, − a stop smaller, two presses on the
-    // value soon after each other 100 %; one press alone changes nothing.
+    // value soon after each other 100 %; one press alone changes nothing. Each press where the
+    // stepper is at that zoom: the page's width in logical pixels shrinks as the zoom grows, and
+    // with no MIDI port found the empty line takes two rows once its column is too narrow for
+    // it (at 120 % here), which moves the sections under it.
     #[test]
     fn the_settings_stepper_steps_the_zoom_and_a_double_press_resets_it() {
         let mut app = f1_app();
         let _ = app.update(Message::TogglePanel(Panel::Settings));
-        let layout = app.settings_panel().layout();
-        let press = |app: &mut App, at: Point| {
+        let press = |app: &mut App, part: fn(&Layout) -> Rectangle| {
+            let at = part(&app.settings_panel().layout()).center();
             let _ = app.update(Message::Settings(SettingsMessage::Pressed(at)));
         };
-        press(&mut app, layout.zoom_up().center());
-        press(&mut app, layout.zoom_up().center());
+        press(&mut app, Layout::zoom_up);
+        press(&mut app, Layout::zoom_up);
         assert_eq!(app.zoom().percent(), 120);
-        press(&mut app, layout.zoom_down().center());
+        press(&mut app, Layout::zoom_down);
         assert_eq!(app.zoom().percent(), 110);
-        press(&mut app, layout.zoom_value().center());
+        // The value's place read once: the two presses of a double press follow each other at
+        // once, as a hand's do, within the 400 ms that makes them one.
+        let value = app.settings_panel().layout().zoom_value().center();
+        let at = |app: &mut App| {
+            let _ = app.update(Message::Settings(SettingsMessage::Pressed(value)));
+        };
+        at(&mut app);
         assert_eq!(app.zoom().percent(), 110, "one press");
-        press(&mut app, layout.zoom_value().center());
+        at(&mut app);
         assert_eq!(app.zoom(), Zoom::DEFAULT, "a double press");
     }
 

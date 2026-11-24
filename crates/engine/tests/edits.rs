@@ -851,6 +851,8 @@ fn every_refused_playlist_edit_changes_nothing() {
             frame_offset: 0,
             gain: 1.0,
             stretch: None,
+            fade_in: 0,
+            fade_out: 0,
         },
         ..pattern_clip(1, 1, 0, 384)
     };

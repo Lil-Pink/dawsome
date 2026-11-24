@@ -83,7 +83,7 @@ link them statically.
 |-|-|-|-|
 | Signalsmith Stretch (C++ header library, bundled by the `signalsmith-stretch` crate) | time-stretch and pitch shift of audio clips | MIT | Geraint Luff / Signalsmith Audio Ltd. (2022) |
 | signalsmith-linear (bundled with it) | its FFT and vector maths | MIT | Signalsmith Audio (2025) |
-| LAME 3.100 (C library, bundled by the `mp3lame-sys` crate) | MP3 export | LGPL-2.0-or-later | Mark Taylor, Takehiro Tominaga, Robert Hegemann and the LAME developers; lame.sourceforge.io |
+| LAME 4.0 (C library, bundled by the `mp3lame-sys` crate) | MP3 export | LGPL-2.0-or-later | Mark Taylor, Takehiro Tominaga, Robert Hegemann and the LAME developers; lame.sourceforge.io |
 
 ## Fonts built in
 

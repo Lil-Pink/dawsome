@@ -29,6 +29,14 @@ pub enum Action {
     Redo,
     Delete,
     Duplicate,
+    /// Clips cut in two: the selected ones at the song marker, else the one under the pointer.
+    Split,
+    /// Two overlapping audio clips faded across each other.
+    Crossfade,
+    /// Warp mode on the selected audio clip, or off.
+    Warp,
+    /// The selected audio clips' hits moved onto the snap's lines.
+    QuantizeAudio,
     SelectAll,
     Route,
     OpenSelected,
@@ -63,7 +71,7 @@ pub enum Action {
 impl Action {
     /// Every action, in the order the Keys page lists them; a chord two actions share runs the
     /// one listed first.
-    pub const ALL: [Action; 41] = [
+    pub const ALL: [Action; 45] = [
         Action::PlayStop,
         Action::ToggleMode,
         Action::ArmRecord,
@@ -74,6 +82,10 @@ impl Action {
         Action::Redo,
         Action::Delete,
         Action::Duplicate,
+        Action::Split,
+        Action::Crossfade,
+        Action::Warp,
+        Action::QuantizeAudio,
         Action::SelectAll,
         Action::Route,
         Action::OpenSelected,
@@ -120,6 +132,10 @@ impl Action {
             Action::Redo => "redo",
             Action::Delete => "delete",
             Action::Duplicate => "duplicate",
+            Action::Split => "split",
+            Action::Crossfade => "crossfade",
+            Action::Warp => "warp",
+            Action::QuantizeAudio => "quantize_audio",
             Action::SelectAll => "select_all",
             Action::RollPlayStop => "roll_play",
             Action::TransposeUp => "transpose_up",
@@ -172,6 +188,10 @@ impl Action {
             Action::Redo => "Redo",
             Action::Delete => "Delete the selection",
             Action::Duplicate => "Duplicate the selection",
+            Action::Split => "Split clips",
+            Action::Crossfade => "Crossfade two clips",
+            Action::Warp => "Warp markers on or off",
+            Action::QuantizeAudio => "Quantize audio",
             Action::SelectAll => "Select all notes",
             Action::RollPlayStop => "Piano roll: play / stop",
             Action::TransposeUp => "Notes: up a semitone",
@@ -214,6 +234,10 @@ impl Action {
             Action::Redo => "redoes",
             Action::Delete => "deletes the selection",
             Action::Duplicate => "duplicates the selection",
+            Action::Split => "splits the selected clips at the song marker",
+            Action::Crossfade => "fades two overlapping audio clips across each other",
+            Action::Warp => "shows the selected audio clip's warp markers to add and move",
+            Action::QuantizeAudio => "moves the selected audio clips' hits onto the snap",
             Action::SelectAll => "selects all notes",
             Action::RollPlayStop => "plays and stops the piano roll's notes",
             Action::TransposeUp => "moves the selected notes up a semitone",
@@ -315,6 +339,10 @@ impl Action {
             Action::Redo => &["Ctrl+Shift+Z", "Ctrl+Y"],
             Action::Delete => &["Del", "Shift+Del"],
             Action::Duplicate => &["Ctrl+B", "Ctrl+D"],
+            Action::Split => &["Ctrl+E"],
+            Action::Crossfade => &["Ctrl+Shift+X"],
+            Action::Warp => &["Ctrl+Shift+W"],
+            Action::QuantizeAudio => &["Ctrl+Shift+Q"],
             Action::SelectAll => &["Ctrl+A"],
             // The piano roll's keys: the arrows while the roll has the keys; the
             // Library's walk has them while it does (see [`Scope`]). Shift+Space: Space is the
@@ -808,6 +836,14 @@ mod tests {
             ("Del", Action::Delete),
             ("Shift+Del", Action::Delete),
             ("Ctrl+B", Action::Duplicate),
+            // Split, Ctrl+E: free in the table before it.
+            ("Ctrl+E", Action::Split),
+            // Crossfade, Ctrl+Shift+X: free in the table before it.
+            ("Ctrl+Shift+X", Action::Crossfade),
+            // Warp mode, Ctrl+Shift+W, and Quantize audio, Ctrl+Shift+Q: free in the table
+            // before them.
+            ("Ctrl+Shift+W", Action::Warp),
+            ("Ctrl+Shift+Q", Action::QuantizeAudio),
             ("Ctrl+A", Action::SelectAll),
             ("Ctrl+L", Action::Route),
             ("Enter", Action::OpenSelected),

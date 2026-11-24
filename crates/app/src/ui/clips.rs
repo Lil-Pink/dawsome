@@ -22,6 +22,16 @@ pub fn look_of<'a>(looks: &'a FileLooks, channel: &Channel) -> Option<&'a FileLo
     looks.get(&channel.sample)?.get(&channel.edits)
 }
 
+/// The onsets of the sound `channel` plays ([`dawsome_media::onsets`]), rising, in frames of
+/// that sound (its file through its edits, at the project's rate: the frames warp markers'
+/// `source` counts); `None` while they are found, while it loads or when it cannot be read.
+pub fn onsets_of<'a>(looks: &'a FileLooks, channel: &Channel) -> Option<&'a [u64]> {
+    match look_of(looks, channel)? {
+        FileLook::Ready(_, onsets) => onsets.as_deref(),
+        FileLook::Loading | FileLook::Missing => None,
+    }
+}
+
 /// An audio channel's sound (its file through its edits) as its clips draw it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileLook {
@@ -29,7 +39,9 @@ pub enum FileLook {
     Loading,
     /// It cannot be read.
     Missing,
-    Ready(Peaks),
+    /// Its peaks, and its onsets (of the same frames) once found: the sample editor's peaks come
+    /// at once and their onsets after, from a worker.
+    Ready(Peaks, Option<Vec<u64>>),
 }
 
 /// What an automation sets, as its clips are titled: "kick · Volume", "Insert 2 · Pan",
@@ -223,6 +235,24 @@ mod tests {
     use dawsome_engine::project::{AutomationPoint, Curve};
 
     use super::*;
+
+    // A channel's onsets are those of the look of its file through its edits, and none while
+    // that loads.
+    #[test]
+    fn a_channels_onsets_are_its_sounds() {
+        let channel = Channel::audio("Loop", "loop.wav");
+        let mut looks = FileLooks::new();
+        assert_eq!(onsets_of(&looks, &channel), None);
+        let sound = looks.entry(channel.sample.clone()).or_default();
+        sound.insert(SoundEdits::default(), FileLook::Loading);
+        assert_eq!(onsets_of(&looks, &channel), None);
+        let ready = FileLook::Ready(Peaks::default(), Some(vec![1000, 9000]));
+        looks
+            .entry(channel.sample.clone())
+            .or_default()
+            .insert(SoundEdits::default(), ready);
+        assert_eq!(onsets_of(&looks, &channel), Some([1000, 9000].as_slice()));
+    }
 
     #[test]
     fn a_stretched_clip_names_its_mode_ratio_and_pitch() {

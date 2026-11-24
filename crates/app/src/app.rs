@@ -11,6 +11,7 @@
 
 mod automate;
 mod browse;
+mod clip_edits;
 mod clip_link;
 mod controllers;
 mod desktop_drop;
@@ -312,6 +313,17 @@ pub enum Message {
     /// Ctrl+B: copy the selection one extent later, in the playlist or the piano roll as for
     /// [`Message::Delete`].
     Duplicate,
+    /// Ctrl+E, or the Edit menu's Split: cut clips in two, the selected ones at the song marker,
+    /// else the one under the pointer ([`clip_edits`]).
+    Split,
+    /// Ctrl+Shift+X, or the Edit menu's Crossfade: the two selected audio clips that overlap on
+    /// one track faded across the overlap ([`clip_edits`]).
+    Crossfade,
+    /// Ctrl+Shift+W: warp mode on the selected audio clip, or off ([`clip_edits`]).
+    ToggleWarp,
+    /// Ctrl+Shift+Q, or the Edit menu's Quantize audio: the selected audio clips' hits moved
+    /// onto the snap's lines ([`clip_edits`]).
+    QuantizeAudio,
     /// Ctrl+A, while the piano roll has the keys: select every note of the channel.
     SelectAllNotes,
     /// A piano roll key (the arrows, Ctrl+C/X/V): acts while the roll has the keys.
@@ -1874,6 +1886,10 @@ impl App {
                 }
             }
             Message::Delete | Message::Duplicate => {}
+            Message::Split => self.split_clips(),
+            Message::Crossfade => self.crossfade_clips(),
+            Message::ToggleWarp => self.toggle_warp(),
+            Message::QuantizeAudio => self.quantize_audio(),
             Message::RollKey(edit) if self.roll_has_keys() => self.note_edit(edit),
             Message::RollKey(_) => {}
             Message::NoteEdit(edit) => {
@@ -2423,8 +2439,9 @@ impl App {
         self.callout_note = waiting.unwrap_or(CalloutNote::Keyboard);
     }
 
-    /// What the Edit menu offers now: Undo and Redo naming their steps, and Delete, Duplicate
-    /// and Select all where they would act (on the panel with the keys, as their keys do).
+    /// What the Edit menu offers now: Undo and Redo naming their steps, and Delete, Duplicate,
+    /// Split and Select all where they would act (on the panel with the keys, as their keys do;
+    /// Split on the playlist's selection).
     fn edit_menu_view(&self) -> dialog::EditMenu<'_> {
         let history = self.session.history();
         let step = |verb: &str, steps: usize, name: Option<&str>| {
@@ -2440,6 +2457,9 @@ impl App {
             undo: step("Undo", history.undo_len(), history.undo_name()),
             redo: step("Redo", history.redo_len(), history.redo_name()),
             selected,
+            split: self.panels.playlist && !self.arranger.selection.is_empty(),
+            crossfade: self.panels.playlist && self.arranger.selection.len() == 2,
+            quantize: self.panels.playlist && !self.arranger.selection.is_empty(),
             notes: self.roll_has_keys()
                 && Target::of(self.session.project(), self.pattern, self.selected_channel)
                     .is_some(),
@@ -3592,9 +3612,17 @@ impl App {
         // A new layout size or place is not a press: it must not take the keys.
         if !matches!(
             message,
-            PlaylistMessage::TracksResized(_) | PlaylistMessage::Placed(_)
+            PlaylistMessage::TracksResized(_)
+                | PlaylistMessage::Placed(_)
+                | PlaylistMessage::Pointer { .. }
         ) {
             self.focus = Panel::Playlist;
+        }
+        if let PlaylistMessage::Pointer {
+            hover: Some(hover), ..
+        } = &message
+        {
+            let _ = self.update(Message::Hover(hover.clone()));
         }
         let project = self.session.project();
         let (lanes, zoom) = (self.arranger.lanes(), self.arranger.grid.zoom);
@@ -3615,10 +3643,14 @@ impl App {
             }
             Some(arranger::Command::Arm(track)) => self.arm_track(track),
             Some(arranger::Command::Stretch { clip, end }) => self.stretch_clip(clip, end),
+            Some(arranger::Command::Slip { clip, ticks }) => self.slip_clip(clip, ticks),
             Some(arranger::Command::StretchMode { clip, mode }) => self.set_clip_mode(clip, mode),
             Some(arranger::Command::OpenInRoll(clip)) => return self.open_clip_in_roll(clip),
             Some(arranger::Command::EditSample(clip)) => self.open_sample_editor_on_clip(clip),
             Some(arranger::Command::Link(link)) => self.clip_link(link),
+            Some(arranger::Command::AddWarpMarker { clip, song, reach }) => {
+                self.add_warp_marker(clip, song, reach);
+            }
             Some(arranger::Command::SignatureMenu { at, place }) => {
                 return self.signature_message(SignatureMessage::ForChange { at, place });
             }
@@ -4045,6 +4077,15 @@ impl App {
             roll_player: self.roll_player(),
             roll_snap: self.roll.snap,
             draw_length: self.roll.draw_length(),
+            warping: self.arranger.warping(),
+            held_fades: match self.arranger.preview(project) {
+                Some(crate::ui::arranger::Preview::Fades {
+                    clip,
+                    fade_in,
+                    fade_out,
+                }) => Some((clip, fade_in, fade_out)),
+                _ => None,
+            },
         }
     }
 
@@ -4258,6 +4299,7 @@ fn closes_menus(message: &Message) -> bool {
                 PlaylistMessage::TracksResized(_)
                     | PlaylistMessage::Placed(_)
                     | PlaylistMessage::BrowserHover(_)
+                    | PlaylistMessage::Pointer { .. }
             )
             | Message::Mixer(MixerMessage::Resized(_))
             | Message::RackResized(_)
@@ -6152,7 +6194,8 @@ mod tests {
             Some(ClipProperties {
                 mode: Some(StretchMode::Stretch),
                 pitch: 0,
-                percent: Some(150)
+                percent: Some(150),
+                warp: false,
             })
         );
         let stretch = |app: &App| match app.session.project().playlist.clips[&ClipId(1)].item {

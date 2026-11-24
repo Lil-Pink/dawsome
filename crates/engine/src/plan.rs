@@ -174,6 +174,11 @@ pub(crate) struct AudioClipPlan {
     pub(crate) source: Option<SourceSlot>,
     pub(crate) frame_offset: u64,
     pub(crate) gain: f32,
+    /// The ramps it plays, in frames: its fade in and fade out, each lengthened to the declick
+    /// where its edge cuts into the sound. Sample n's value is scaled by min(1, k / fade_in)
+    /// (k = n − s(start)) and min(1, m / fade_out) (m = s(end) − 1 − n), where not 0.
+    pub(crate) fade_in: u64,
+    pub(crate) fade_out: u64,
 }
 
 /// One clip: song ticks `start..end` play its pattern from data tick `offset` on, repeating.

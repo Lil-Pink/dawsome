@@ -76,6 +76,34 @@ pub fn text_width(content: &str, size: f32) -> f32 {
     paragraph.min_width()
 }
 
+/// `content` in lines of `room` at text size `size`, broken between words; a word wider than
+/// `room` alone takes a line of its own (cut by [`fit_width`] where drawn).
+pub fn wrap(content: &str, room: f32, size: f32) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut end = 0;
+    for (at, word) in content.split(' ').scan(0, |at, word| {
+        let here = *at;
+        *at += word.len() + 1;
+        Some((here, word))
+    }) {
+        let word_end = at + word.len();
+        match start {
+            Some(from) if text_width(&content[from..word_end], size) > room => {
+                lines.push(&content[from..end]);
+                start = Some(at);
+            }
+            Some(_) => {}
+            None => start = Some(at),
+        }
+        end = word_end;
+    }
+    if let Some(from) = start {
+        lines.push(&content[from..end]);
+    }
+    lines
+}
+
 /// The width of the widest of `values` at text size `size`, rounded up to a whole pixel: the
 /// room a readout keeps whatever it shows, so what follows it stays put as its value changes.
 /// Why measured and not a digit count: the bundled font's digits are proportional (its '1' is
@@ -91,6 +119,31 @@ pub fn widest<S: AsRef<str>>(values: impl IntoIterator<Item = S>, size: f32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Lines break between words at the room: the whole text when it fits, else each line the
+    // most words that fit, none lost or doubled; a word wider than the room is a line alone.
+    #[test]
+    fn text_wraps_between_words_at_its_room() {
+        let text = "No MIDI input found. Plug a keyboard in, then restart";
+        let whole = text_width(text, 12.0);
+        assert_eq!(wrap(text, whole + 1.0, 12.0), vec![text]);
+        let lines = wrap(text, whole * 0.6, 12.0);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.join(" "), text);
+        for line in &lines {
+            assert!(text_width(line, 12.0) <= whole * 0.6, "{line:?} fits");
+        }
+        let next = lines[1].split(' ').next().expect("a word");
+        assert!(
+            text_width(&format!("{} {next}", lines[0]), 12.0) > whole * 0.6,
+            "the first line takes every word that fits"
+        );
+        assert_eq!(
+            wrap("a verylongword b", 1.0, 12.0),
+            ["a", "verylongword", "b"]
+        );
+        assert!(wrap("", 100.0, 12.0) == [""]);
+    }
 
     // At the mixer's name size, in the 40 px a strip at x 756 keeps left of a slot panel at
     // x 800 (its name starts 4 px in): a short name stays whole, a long one is cut to a start

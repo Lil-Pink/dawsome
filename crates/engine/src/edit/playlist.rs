@@ -13,6 +13,7 @@ use crate::project::{
     TrackId, ValidationError, CLIP_GAIN_RANGE, MAX_TRACKS,
 };
 use crate::time::Ticks;
+use crate::warp::{self, ClipWarp};
 
 pub(super) fn place(
     project: &mut Project,
@@ -34,6 +35,7 @@ pub(super) fn place(
         .0
         .checked_add(count)
         .ok_or(EditError::ClipIdsExhausted)?;
+    project.check_audio_clip_count(audio_clips(clips.iter()))?;
     let ids = (first.0..next).map(ClipId);
     for (id, clip) in ids.clone().zip(&clips) {
         // Only a project that never passed `validate` can hold an ID at or above the next one.
@@ -45,6 +47,11 @@ pub(super) fn place(
     project.playlist.clips.extend(ids.zip(clips));
     project.playlist.next_clip_id = ClipId(next);
     Ok(Applied::playlist(Edit::UnplaceClips { first, count }))
+}
+
+/// How many of `clips` are audio clips.
+fn audio_clips<'c>(clips: impl Iterator<Item = &'c Clip>) -> usize {
+    clips.filter(|clip| clip.audio_channel().is_some()).count()
 }
 
 pub(super) fn unplace(
@@ -87,6 +94,11 @@ pub(super) fn duplicate(
     };
     let shift = latest.0 - earliest.0;
     originals.sort_by_key(|&(id, clip)| (clip.start, id));
+    // A copy plays what its clip plays, so it takes the clip's markers along.
+    let warps: Vec<Option<ClipWarp>> = originals
+        .iter()
+        .map(|(id, _)| project.playlist.warps.get(id).cloned())
+        .collect();
     let copies = originals
         .into_iter()
         .map(|(_, clip)| Clip {
@@ -95,7 +107,14 @@ pub(super) fn duplicate(
             ..clip.clone()
         })
         .collect();
-    place(project, first, copies)
+    let applied = place(project, first, copies)?;
+    for (id, warp) in (first.0..).map(ClipId).zip(warps) {
+        if let Some(warp) = warp {
+            project.playlist.warps.insert(id, warp);
+        }
+    }
+    // The inverse takes the copies away, and their markers with them.
+    Ok(applied)
 }
 
 pub(super) fn delete(project: &mut Project, ids: &[ClipId]) -> Result<Applied, EditError> {
@@ -131,6 +150,7 @@ pub(super) fn restore(
         }
         project.check_clip(*id, clip)?;
     }
+    project.check_audio_clip_count(audio_clips(clips.iter().map(|(_, clip)| clip)))?;
     let ids = clips.iter().map(|&(id, _)| id).collect();
     project.playlist.clips.extend(clips);
     Ok(Applied::playlist(Edit::DeleteClips { ids }))
@@ -300,6 +320,8 @@ struct AudioItem {
     frame_offset: u64,
     gain: f32,
     stretch: Option<ClipStretch>,
+    fade_in: u64,
+    fade_out: u64,
 }
 
 impl AudioItem {
@@ -309,6 +331,8 @@ impl AudioItem {
             frame_offset: self.frame_offset,
             gain: self.gain,
             stretch: self.stretch,
+            fade_in: self.fade_in,
+            fade_out: self.fade_out,
         }
     }
 }
@@ -326,6 +350,8 @@ fn audio_item(project: &Project, id: ClipId) -> Result<(&Clip, AudioItem), EditE
             frame_offset,
             gain,
             stretch,
+            fade_in,
+            fade_out,
         } => Ok((
             clip,
             AudioItem {
@@ -333,6 +359,8 @@ fn audio_item(project: &Project, id: ClipId) -> Result<(&Clip, AudioItem), EditE
                 frame_offset,
                 gain,
                 stretch,
+                fade_in,
+                fade_out,
             },
         )),
         ClipItem::Pattern { .. } | ClipItem::Automation { .. } => {
@@ -374,6 +402,7 @@ pub(super) fn add_audio_clip(
         });
     }
     let next_clip = clip.0.checked_add(1).ok_or(EditError::ClipIdsExhausted)?;
+    project.check_audio_clip_count(1)?;
     let placed = Clip::of_audio(channel, track, start, length);
     // The channel goes in first so the clip check finds it; a refused clip takes it out.
     project
@@ -506,6 +535,47 @@ pub(super) fn set_clip_gain(
     }))
 }
 
+pub(super) fn set_clip_fades(
+    project: &mut Project,
+    id: ClipId,
+    fade_in: u64,
+    fade_out: u64,
+) -> Result<Applied, EditError> {
+    let (clip, _) = audio_item(project, id)?;
+    let frames = project.clip_frames(clip).unwrap_or(0);
+    let fade_in = fade_in.min(frames);
+    let fade_out = fade_out.min(frames - fade_in);
+    restore_clip_fades(project, id, fade_in, fade_out)
+}
+
+pub(super) fn restore_clip_fades(
+    project: &mut Project,
+    id: ClipId,
+    fade_in: u64,
+    fade_out: u64,
+) -> Result<Applied, EditError> {
+    let (_, audio) = audio_item(project, id)?;
+    let inverse = Edit::RestoreClipFades {
+        clip: id,
+        fade_in: audio.fade_in,
+        fade_out: audio.fade_out,
+    };
+    let item = AudioItem {
+        fade_in,
+        fade_out,
+        ..audio
+    }
+    .item();
+    if let Some(clip) = project.playlist.clips.get_mut(&id) {
+        clip.item = item;
+    }
+    Ok(Applied::playlist(inverse))
+}
+
+/// Stretches audio clip `id` anew, with its offset and length. On a warped clip a new mode or
+/// pitch keeps the markers; a new length scales every marker's `out` by new / old half up (and
+/// is refused when that breaks a rule); no stretch takes them away (with the edit's step that
+/// follows every edit, [`super::apply`]).
 pub(super) fn set_clip_stretch(
     project: &mut Project,
     id: ClipId,
@@ -514,11 +584,39 @@ pub(super) fn set_clip_stretch(
     length: Ticks,
 ) -> Result<Applied, EditError> {
     let (clip, audio) = audio_item(project, id)?;
-    let inverse = Edit::SetClipStretch {
+    let mut inverse = Edit::SetClipStretch {
         clip: id,
         stretch: audio.stretch,
         frame_offset: audio.frame_offset,
         length: clip.length,
+    };
+    let held = project.playlist.warps.get(&id);
+    let rescaled = match (audio.stretch, stretch, held) {
+        (Some(old), Some(new), Some(held)) if old.frames != new.frames => {
+            let moved = ClipWarp {
+                source_frames: held.source_frames,
+                markers: warp::scaled(&held.markers, old.frames, new.frames),
+            };
+            if let Some(reason) = moved.problem(new.frames) {
+                return Err(ValidationError::InvalidWarp { clip: id.0, reason }.into());
+            }
+            // Why the undo clears the markers before the old stretch and sets them after: the
+            // old length would scale the moved list back, and half up both ways may not give
+            // the list it had.
+            inverse = Edit::Transaction(vec![
+                Edit::SetClipWarp {
+                    clip: id,
+                    warp: None,
+                },
+                inverse,
+                Edit::SetClipWarp {
+                    clip: id,
+                    warp: Some(held.clone()),
+                },
+            ]);
+            Some(moved)
+        }
+        _ => None,
     };
     let target = Clip {
         length,
@@ -532,7 +630,32 @@ pub(super) fn set_clip_stretch(
     };
     project.check_clip(id, &target)?;
     project.playlist.clips.insert(id, target);
+    if let Some(moved) = rescaled {
+        project.playlist.warps.insert(id, moved);
+    }
     Ok(Applied::playlist(inverse))
+}
+
+/// Gives stretched audio clip `id` the warp markers `warp` (none: its entry goes); the inverse
+/// gives back the list it had.
+pub(super) fn set_clip_warp(
+    project: &mut Project,
+    id: ClipId,
+    warp: Option<ClipWarp>,
+) -> Result<Applied, EditError> {
+    audio_item(project, id)?;
+    if let Some(warp) = &warp {
+        project.check_warp(id, warp)?;
+    }
+    let warps = &mut project.playlist.warps;
+    let old = match warp {
+        Some(warp) => warps.insert(id, warp),
+        None => warps.remove(&id),
+    };
+    Ok(Applied::playlist(Edit::SetClipWarp {
+        clip: id,
+        warp: old,
+    }))
 }
 
 /// Makes pattern clip `id` play `pattern`; the inverse gives it back the pattern it played.

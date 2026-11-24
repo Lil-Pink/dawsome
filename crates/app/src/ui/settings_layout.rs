@@ -29,6 +29,7 @@
 use iced::{Point, Rectangle, Size};
 
 use crate::ui::color_wheel::WheelPart;
+use crate::ui::fonts;
 use crate::ui::palette::ThemeId;
 use crate::ui::theme_page::ColorTarget;
 
@@ -47,6 +48,33 @@ pub const INSET: f32 = 12.0;
 pub const CHECKBOX: f32 = 14.0;
 /// Where a row's text starts: after the checkbox and a gap.
 pub const LABEL_X: f32 = INSET + CHECKBOX + 8.0;
+/// [`NO_PORTS`] in the lines of `room`, measured once a room. Why kept: every position on the
+/// page asks how many rows the MIDI section takes, and measuring text goes through the font
+/// system each time, a frame's worth of work for a line that changes only with the width.
+fn no_ports_lines(room: f32) -> Vec<&'static str> {
+    thread_local! {
+        static KEPT: std::cell::RefCell<Vec<(u32, Vec<&'static str>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    KEPT.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if let Some((_, lines)) = kept.iter().find(|(width, _)| *width == room.to_bits()) {
+            return lines.clone();
+        }
+        let lines = crate::ui::text_fit::wrap(NO_PORTS, room, fonts::size::LABEL);
+        // A few widths at most: the window's, and the zooms a user steps through.
+        if kept.len() >= 8 {
+            kept.remove(0);
+        }
+        kept.push((room.to_bits(), lines.clone()));
+        lines
+    })
+}
+
+/// What the MIDI input section says when no port is found. Why the restart: a device plugged in
+/// after the program started may stay hidden from it (on Windows under its newer MIDI service).
+pub const NO_PORTS: &str =
+    "No MIDI input found. Plug a keyboard in, then restart Dawsome if it does not appear.";
 /// How far right a row's text box reaches on the Theme page.
 pub const TEXT_WIDTH: f32 = 360.0;
 /// The octave stepper: its label, the two buttons and the octave's name between them (the
@@ -292,7 +320,7 @@ impl Layout {
     /// The rows `section` holds under its title.
     fn rows(&self, section: Section) -> usize {
         match section {
-            Section::Midi => 1 + self.ports.max(1) + self.notes,
+            Section::Midi => 1 + self.port_rows() + self.notes,
             Section::Typing | Section::Hints | Section::Display => 1,
             Section::Output => self.outputs + self.output_lines,
             Section::Input => self.inputs + self.input_lines,
@@ -380,14 +408,37 @@ impl Layout {
         self.words_of(self.row(row))
     }
 
-    /// The line saying no port was found, when none was.
+    /// The line saying no port was found, when none was: its first row.
+    #[cfg(test)]
     pub fn empty_message(&self) -> Option<Rectangle> {
         (self.ports == 0).then(|| self.label(1))
     }
 
+    /// The line saying no port was found, when none was, in the rows it takes: one where the
+    /// column has room for it, more where it is narrow (two or three columns on a page).
+    pub fn empty_lines(&self) -> Vec<(Rectangle, &'static str)> {
+        if self.ports > 0 {
+            return Vec::new();
+        }
+        no_ports_lines(self.label(1).width)
+            .into_iter()
+            .enumerate()
+            .map(|(row, words)| (self.label(1 + row), words))
+            .collect()
+    }
+
+    /// The rows under "All ports": a port's each, else the empty line's.
+    fn port_rows(&self) -> usize {
+        if self.ports == 0 {
+            self.empty_lines().len()
+        } else {
+            self.ports
+        }
+    }
+
     /// Note line `line` under the ports (and under the empty line, when shown).
     pub fn note(&self, line: usize) -> Rectangle {
-        let after = 1 + self.ports.max(1);
+        let after = 1 + self.port_rows();
         self.label(after + line)
     }
 
@@ -1056,5 +1107,57 @@ mod tests {
         assert_eq!(layout.note(0).y, 100.0);
         assert_eq!(layout.typing_title().y, 152.0);
         assert_eq!(layout.hit(Point::new(18.0, 80.0)), None, "the empty line");
+        assert_eq!(layout.empty_lines().len(), 1);
+    }
+
+    // The empty line is 478 px at 12 px in the bundled font (its advances, as gen_u1 reads
+    // them): one row in a column whose words have 498 px (720 px wide: one column of 520, less
+    // 22 for the box), two in a page of three columns 1200 px wide (each (1200 − 24 − 64) / 3 =
+    // 370.67 inside, 348.67 for the words), where the note and the typing title move down a row (124, 176) and every row's
+    // words fit; a port listed, none.
+    #[test]
+    fn the_empty_line_wraps_in_a_narrow_column() {
+        use crate::ui::text_fit::text_width;
+        let one = Layout {
+            width: 720.0,
+            ..Layout::default()
+        };
+        assert_eq!(one.empty_lines().len(), 1);
+        assert_eq!(one.empty_lines()[0].1, NO_PORTS);
+        let three = Layout {
+            notes: 1,
+            width: 1200.0,
+            ..Layout::default()
+        };
+        assert_eq!(three.columns().count, 3);
+        let lines = three.empty_lines();
+        assert_eq!(
+            lines.iter().map(|(rect, _)| rect.y).collect::<Vec<_>>(),
+            [76.0, 100.0]
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|(_, words)| *words)
+                .collect::<Vec<_>>()
+                .join(" "),
+            NO_PORTS
+        );
+        for (rect, words) in &lines {
+            assert!(
+                (rect.width - (1112.0 / 3.0 - 22.0)).abs() < 1e-3,
+                "{}",
+                rect.width
+            );
+            assert!(text_width(words, size::LABEL) <= rect.width, "{words}");
+        }
+        assert_eq!(three.note(0).y, 124.0);
+        assert_eq!(three.typing_title().y, 176.0);
+        let listed = Layout {
+            ports: 1,
+            width: 1200.0,
+            ..Layout::default()
+        };
+        assert!(listed.empty_lines().is_empty());
     }
 }

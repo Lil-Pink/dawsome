@@ -8,8 +8,10 @@
 //! edge scrolls the view towards it on each of the window's ticks
 //! ([`Arranger::scroll_at_edge`]), and counts from the place pressed, so its target stays under
 //! the pointer as the view moves. Audio clips also trim at both edges, stretch with an Alt drag
-//! of the right edge, and take a gain drag on their readout; automation clips take presses on
-//! their points and tension handles.
+//! of the right edge, slip their audio with a Ctrl+Shift drag of the body, and take a gain drag
+//! on their readout; automation clips take presses on their points and tension handles. A
+//! selected audio clip in warp mode ([`Arranger::warping`]) takes presses on its warp markers
+//! instead of its body's moves, slip and fade handles.
 
 use std::collections::BTreeSet;
 
@@ -26,13 +28,15 @@ use crate::app::ClipLink;
 use crate::ui::clip_gesture::{self, ClipSnap, SnapGrid};
 use crate::ui::clips;
 use crate::ui::grid_rules::PIXELS_PER_NOTCH;
-use crate::ui::hint::{ClipRow, TrackRow};
+use crate::ui::hint::{ClipRow, HoverMessage, TrackRow};
 use crate::ui::playlist::{automation_handles, automation_points};
 use crate::ui::playlist_layout::{
-    self, ClipPart, Grid, HeaderHit, Lanes, LoopEdge, RulerBand, EDGE_SCROLL_INSET,
+    self, ClipHandle, ClipPart, Grid, HeaderHit, Lanes, LoopEdge, RulerBand, EDGE_SCROLL_INSET,
     GAIN_READOUT_WIDTH, LANE_HEIGHT, POINT_REACH, TITLE_HEIGHT, TRACK_HEADER_WIDTH,
 };
 use crate::ui::scroll::{self, BarMessage, Span};
+use crate::ui::warp_gesture::{self, ClipMap};
+use dawsome_engine::warp::{ClipWarp, WarpMarker};
 
 /// The tension "Exponential" sets from the curve menu.
 const MENU_TENSION: f32 = 0.5;
@@ -65,6 +69,13 @@ pub enum PlaylistMessage {
     },
     /// The cursor moved while a track gesture is held.
     TracksDragged(Point),
+    /// The cursor moved over the tracks with nothing held: where it is while it is over a clip
+    /// (what Split cuts with nothing selected), and the hint bar's word when what it is over
+    /// changed. One message for both, since a canvas publishes one per event.
+    Pointer {
+        at: Option<Point>,
+        hover: Option<HoverMessage>,
+    },
     TracksReleased(Point),
     TracksScrolled {
         at: Point,
@@ -108,6 +119,8 @@ pub enum PlaylistMessage {
     ClipPitch(i8),
     /// The strip's close button.
     CloseProperties,
+    /// The strip's Warp switch: warp mode on its clip, or off.
+    ToggleWarp,
     /// The timeline's scroll bar asks for another view.
     Bar(BarMessage),
 }
@@ -126,6 +139,9 @@ pub enum Command {
     /// An Alt drag of an audio clip's right edge ended here: stretch the clip's file to end
     /// there. The app knows the file's length, which the edit needs.
     Stretch { clip: ClipId, end: Ticks },
+    /// A Ctrl+Shift drag of an audio clip's body ended: its audio moves this many ticks (already
+    /// snapped) inside it. The app knows the sound's length, where the offset stops.
+    Slip { clip: ClipId, ticks: Ticks },
     /// The properties strip chose how the clip's file is fitted to it; the app knows the
     /// file's length, which the edit needs.
     StretchMode {
@@ -142,6 +158,9 @@ pub enum Command {
     EditSample(ClipId),
     /// A clip menu row: unlink the clip or link it back (the app refuses it under a take).
     Link(ClipLink),
+    /// A double press on the body of a clip in warp mode at song frame `song`: a marker there,
+    /// or on the transient within `reach` frames. The app knows the sound and its transients.
+    AddWarpMarker { clip: ClipId, song: u64, reach: u64 },
 }
 
 /// A drag in progress, as it was pressed.
@@ -195,6 +214,31 @@ enum Gesture {
         from: Point,
         to: Point,
     },
+    /// An audio clip's body with Ctrl+Shift held: its audio slides inside it, the clip staying
+    /// put; `free` while Alt is held (no snap).
+    Slip {
+        id: ClipId,
+        from: Point,
+        to: Point,
+        free: bool,
+    },
+    /// An audio clip's fade handle dragged across: the fade in (`fade_in`) or the fade out
+    /// follows the pointer; `free` while Alt is held (no snap).
+    Fade {
+        id: ClipId,
+        fade_in: bool,
+        to: Point,
+        free: bool,
+    },
+    /// Warp marker `index` of clip `id` (in warp mode) dragged along time by its handle, from
+    /// `from`; `free` while Alt is held (no snap).
+    Warp {
+        id: ClipId,
+        index: usize,
+        from: Point,
+        to: Point,
+        free: bool,
+    },
     /// Up and down on an audio clip's gain readout.
     Gain {
         id: ClipId,
@@ -217,7 +261,7 @@ enum Gesture {
 }
 
 /// A press on a clip: which clip and part, where, with which button, whether it repeats the
-/// last press, and whether Alt is held.
+/// last press, whether Alt is held, and whether Ctrl+Shift (a slip) is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ClipPress {
     id: ClipId,
@@ -226,6 +270,7 @@ struct ClipPress {
     button: mouse::Button,
     double: bool,
     alt: bool,
+    slip: bool,
 }
 
 /// The curve menu, open over a tension handle: the automation, the segment's first point and
@@ -247,6 +292,20 @@ pub enum Preview {
     Box(Point, Point),
     /// The loop range the ruler would set.
     Loop(LoopRange),
+    /// An audio clip's audio moved this many ticks inside it: its waveform is drawn there.
+    Slip { clip: ClipId, ticks: Ticks },
+    /// An audio clip's fades as a held handle leaves them: the clip is drawn with them.
+    Fades {
+        clip: ClipId,
+        fade_in: u64,
+        fade_out: u64,
+    },
+    /// An audio clip's warp markers as a held handle leaves them: its waveform is drawn through
+    /// them.
+    Warp {
+        clip: ClipId,
+        markers: Vec<WarpMarker>,
+    },
 }
 
 /// The playlist's state between frames.
@@ -275,6 +334,12 @@ pub struct Arranger {
     pub hover: Option<Point>,
     /// The audio clip whose properties strip the header shows (a double press opens it).
     pub properties: Option<ClipId>,
+    /// The audio clip warp mode was turned on for; it holds while that clip stays selected
+    /// ([`Arranger::warping`]).
+    warp: Option<ClipId>,
+    /// Where the pointer is over a clip, with nothing held: what Split cuts with nothing
+    /// selected.
+    pointer: Option<Point>,
     gesture: Option<Gesture>,
     /// The view as it was at the press that began the held gesture: a drag counts from the
     /// place pressed, wherever the view has moved since.
@@ -324,6 +389,8 @@ impl Arranger {
             clip_menu: None,
             hover: None,
             properties: None,
+            warp: None,
+            pointer: None,
             gesture: None,
             press_view: grid,
             edge_scrolled: false,
@@ -445,11 +512,119 @@ impl Arranger {
                     | Gesture::TrimStart { .. }
                     | Gesture::TrimEnd { .. }
                     | Gesture::Stretch { .. }
+                    | Gesture::Slip { .. }
+                    | Gesture::Fade { .. }
+                    | Gesture::Warp { .. }
                     | Gesture::Gain { .. }
                     | Gesture::MovePoint { .. }
                     | Gesture::Tension { .. }
             )
         )
+    }
+
+    /// The audio clip in warp mode: the one it was turned on for, while it is selected. Why tied
+    /// to the selection: a press elsewhere selects something else, and the mode then ends with
+    /// no step of its own to remember.
+    pub fn warping(&self) -> Option<ClipId> {
+        self.warp.filter(|id| self.selection.contains(id))
+    }
+
+    /// The Warp switch or its key: warp mode off when it is on; else on for `preferred` (the
+    /// properties strip's clip) or the one audio clip selected, which then becomes the
+    /// selection alone. `Err` when there is no such clip.
+    pub fn toggle_warp(
+        &mut self,
+        project: &Project,
+        preferred: Option<ClipId>,
+    ) -> Result<bool, ()> {
+        if self.warping().is_some() {
+            self.warp = None;
+            return Ok(false);
+        }
+        let audio = |id: &ClipId| {
+            project
+                .playlist
+                .clips
+                .get(id)
+                .is_some_and(|clip| clip.audio_channel().is_some())
+        };
+        let selected: Vec<ClipId> = self.selection.iter().copied().filter(audio).collect();
+        let id = match (preferred.filter(audio), selected.as_slice()) {
+            (Some(id), _) | (None, &[id]) => id,
+            _ => return Err(()),
+        };
+        self.selection = BTreeSet::from([id]);
+        self.warp = Some(id);
+        Ok(true)
+    }
+
+    /// Where the pointer is over a clip with nothing held, as the tracks canvas last said.
+    pub fn pointer(&self) -> Option<Point> {
+        self.pointer
+    }
+
+    /// Whether a slip is held, which the cursor shows.
+    pub fn slipping(&self) -> bool {
+        matches!(self.gesture, Some(Gesture::Slip { .. }))
+    }
+
+    /// The clip handle a drag holds, a fade handle or a warp marker's: the lanes leave it to the
+    /// held drag's picture, which draws it hot where the release puts it.
+    pub fn held_handle(&self) -> Option<(ClipId, ClipHandle)> {
+        match self.gesture {
+            Some(Gesture::Fade { id, fade_in, .. }) => Some((
+                id,
+                if fade_in {
+                    ClipHandle::FadeIn
+                } else {
+                    ClipHandle::FadeOut
+                },
+            )),
+            Some(Gesture::Warp { id, index, .. }) => Some((id, ClipHandle::Warp(index))),
+            _ => None,
+        }
+    }
+
+    /// What Split cuts, and where: the selected clips at the song marker `marker`; with nothing
+    /// selected, the clip under the pointer at the pointer's tick, on the nearest snap line
+    /// unless `free` (Alt held). `None` with nothing selected and no clip under the pointer.
+    pub fn split_target(
+        &self,
+        project: &Project,
+        marker: Ticks,
+        free: bool,
+    ) -> Option<(BTreeSet<ClipId>, Ticks)> {
+        if !self.selection.is_empty() {
+            return Some((self.selection.clone(), marker));
+        }
+        let at = self.pointer?;
+        let (id, _) = self.clip_under(project, at)?;
+        let raw = self.grid.tick_at(at.x);
+        let tick = if free {
+            raw
+        } else {
+            self.snapping().nearest(raw)
+        };
+        Some((BTreeSet::from([id]), tick))
+    }
+
+    /// The ticks a held slip of clip `id` moves its audio by: the drag from `from` to `to`,
+    /// snapped as a move snaps unless `free`.
+    fn slip_drag(
+        &self,
+        project: &Project,
+        id: ClipId,
+        from: Point,
+        to: Point,
+        free: bool,
+    ) -> Option<Ticks> {
+        let clip = project.playlist.clips.get(&id)?;
+        let dragged = self.dragged(from, to);
+        Some(if free {
+            dragged
+        } else {
+            clip_gesture::slip_ticks(clip.start, dragged, self.snapping())
+        })
     }
 
     /// The scroll one of the window's ticks gives while the held drag has the pointer past the
@@ -493,6 +668,9 @@ impl Arranger {
             | Gesture::TrimStart { to, .. }
             | Gesture::TrimEnd { to, .. }
             | Gesture::Stretch { to, .. }
+            | Gesture::Slip { to, .. }
+            | Gesture::Fade { to, .. }
+            | Gesture::Warp { to, .. }
             | Gesture::MovePoint { to, .. }
             | Gesture::MoveChange { to, .. } => Some(*to),
             Gesture::Gain { .. } | Gesture::Tension { .. } => None,
@@ -541,9 +719,14 @@ impl Arranger {
         self.gesture = None;
     }
 
-    /// Esc: ends a rename without committing it, or else selects nothing.
+    /// Esc: closes a menu, or leaves warp mode, or ends a rename without committing it, or else
+    /// selects nothing.
     pub fn escape(&mut self) {
         if self.track_menu.take().is_some() || self.clip_menu.take().is_some() {
+            return;
+        }
+        if self.warping().is_some() {
+            self.warp = None;
             return;
         }
         if self.rename.take().is_none() {
@@ -565,6 +748,15 @@ impl Arranger {
         if self.properties.is_some_and(|id| !clips.contains_key(&id)) {
             self.properties = None;
         }
+        let audio = |id: &ClipId| {
+            clips
+                .get(id)
+                .is_some_and(|clip| clip.audio_channel().is_some())
+        };
+        if self.warp.is_some_and(|id| !audio(&id)) {
+            self.warp = None;
+        }
+        self.end_warp_off_selection();
         if let Some((track, _)) = &self.rename {
             if !project.playlist.tracks.contains_key(track) {
                 self.rename = None;
@@ -637,6 +829,33 @@ impl Arranger {
                 let end = clip_gesture::stretched_end(clip, self.dragged(*from, *to), unit);
                 Some(Preview::Clips(vec![(clip.start, end, index)]))
             }
+            Gesture::Slip { id, from, to, free } => Some(Preview::Slip {
+                clip: *id,
+                ticks: self.slip_drag(project, *id, *from, *to, *free)?,
+            }),
+            Gesture::Fade {
+                id,
+                fade_in,
+                to,
+                free,
+            } => {
+                let (fade_in, fade_out) = self.dragged_fades(project, *id, *fade_in, *to, *free)?;
+                Some(Preview::Fades {
+                    clip: *id,
+                    fade_in,
+                    fade_out,
+                })
+            }
+            Gesture::Warp {
+                id,
+                index,
+                from,
+                to,
+                free,
+            } => Some(Preview::Warp {
+                clip: *id,
+                markers: self.dragged_marker(project, *id, *index, (*from, *to), *free)?,
+            }),
             // The flag moving draws itself on the ruler.
             Gesture::Gain { .. }
             | Gesture::MovePoint { .. }
@@ -683,6 +902,27 @@ impl Arranger {
     /// Handles one canvas or header message; `brush` is the pattern a press on empty lane
     /// space places. Returns what the app should do, if anything.
     pub fn update(
+        &mut self,
+        message: PlaylistMessage,
+        project: &Project,
+        brush: Option<PatternId>,
+        modifiers: Modifiers,
+    ) -> Option<Command> {
+        let command = self.handle(message, project, brush, modifiers);
+        self.end_warp_off_selection();
+        command
+    }
+
+    /// Warp mode ends for good once its clip leaves the selection, so selecting the clip again
+    /// later does not bring it back unasked.
+    fn end_warp_off_selection(&mut self) {
+        if self.warp.is_some() && self.warping().is_none() {
+            self.warp = None;
+        }
+    }
+
+    /// [`Arranger::update`]'s message, before warp mode is checked against the selection.
+    fn handle(
         &mut self,
         message: PlaylistMessage,
         project: &Project,
@@ -765,7 +1005,16 @@ impl Arranger {
                 })
             }
             PlaylistMessage::TracksDragged(at) | PlaylistMessage::RulerDragged(at) => {
+                if let Some(Gesture::Slip { free, .. } | Gesture::Warp { free, .. }) =
+                    &mut self.gesture
+                {
+                    *free = modifiers.alt();
+                }
                 self.drag_to(at);
+                None
+            }
+            PlaylistMessage::Pointer { at, .. } => {
+                self.pointer = at;
                 None
             }
             PlaylistMessage::TracksReleased(at) | PlaylistMessage::RulerReleased(at) => {
@@ -791,6 +1040,11 @@ impl Arranger {
             }
             PlaylistMessage::CloseProperties => {
                 self.properties = None;
+                None
+            }
+            PlaylistMessage::ToggleWarp => {
+                // The strip shows only for an audio clip, so there is always one to warp.
+                let _ = self.toggle_warp(project, self.properties);
                 None
             }
             // The thumb dragged moves the view smoothly while held and lands it on a whole
@@ -891,6 +1145,41 @@ impl Arranger {
             .map(|(_, id, part)| (id, part))
     }
 
+    /// The handle the pointer at tracks point `at` is on, of the clip under it: in warp mode a
+    /// marker's ([`playlist_layout::warp_handles`]), else a fade handle
+    /// ([`playlist_layout::fade_handle_at`]). Out of warp mode the pointer over a clip shows its
+    /// fade handles ([`playlist_layout::shows_fade_handles`]), so any handle found here is drawn,
+    /// and is drawn hot.
+    pub fn handle_under(&self, project: &Project, at: Point) -> Option<(ClipId, ClipHandle)> {
+        let (id, _) = self.clip_under(project, at)?;
+        let clip = project.playlist.clips.get(&id)?;
+        let ClipItem::Audio {
+            fade_in, fade_out, ..
+        } = clip.item
+        else {
+            return None;
+        };
+        let top = self
+            .grid
+            .row_top_of(clip_gesture::index_of(project, clip.track)?)?;
+        let rect = playlist_layout::clip_rect(&self.grid, clip, top);
+        let body_top = top + TITLE_HEIGHT;
+        let handle = if self.warping() == Some(id) {
+            let map = ClipMap::of(project, id, None)?;
+            playlist_layout::warp_handles(rect, body_top, &map)
+                .into_iter()
+                .position(|shown| shown.is_some_and(|(_, reach)| reach.contains(at)))
+                .map(ClipHandle::Warp)
+        } else {
+            let frames = project.clip_frames(clip).unwrap_or(0);
+            let reach = |fade| playlist_layout::fade_reach(fade, frames, rect.width);
+            let reaches = (reach(fade_in), reach(fade_out));
+            playlist_layout::fade_handles(rect, body_top, reaches.0, reaches.1)
+                .and_then(|handles| playlist_layout::fade_handle_at(handles, reaches, at))
+        };
+        handle.map(|handle| (id, handle))
+    }
+
     fn press_tracks(
         &mut self,
         project: &Project,
@@ -951,6 +1240,7 @@ impl Arranger {
                 button,
                 double,
                 alt: modifiers.alt(),
+                slip: modifiers.command() && modifiers.shift(),
             };
             if let Some(command) = self.press_clip_parts(project, press) {
                 return command;
@@ -1098,6 +1388,9 @@ impl Arranger {
                 | Gesture::TrimStart { to, .. }
                 | Gesture::TrimEnd { to, .. }
                 | Gesture::Stretch { to, .. }
+                | Gesture::Slip { to, .. }
+                | Gesture::Fade { to, .. }
+                | Gesture::Warp { to, .. }
                 | Gesture::Gain { to, .. }
                 | Gesture::MovePoint { to, .. }
                 | Gesture::Tension { to, .. },
@@ -1122,6 +1415,47 @@ impl Arranger {
                 let clip = project.playlist.clips.get(&id)?;
                 let end = clip_gesture::stretched_end(clip, self.dragged(from, to), unit);
                 return (end != clip.end()).then_some(Command::Stretch { clip: id, end });
+            }
+            Gesture::Slip { id, from, to, .. } => {
+                let ticks = self.slip_drag(project, id, from, to, modifiers.alt())?;
+                return (ticks.0 != 0).then_some(Command::Slip { clip: id, ticks });
+            }
+            Gesture::Fade {
+                id,
+                fade_in,
+                to,
+                free,
+            } => {
+                let (new_in, new_out) = self.dragged_fades(project, id, fade_in, to, free)?;
+                let ClipItem::Audio {
+                    fade_in, fade_out, ..
+                } = project.playlist.clips.get(&id)?.item
+                else {
+                    return None;
+                };
+                ((new_in, new_out) != (fade_in, fade_out)).then_some(Edit::SetClipFades {
+                    clip: id,
+                    fade_in: new_in,
+                    fade_out: new_out,
+                })
+            }
+            Gesture::Warp {
+                id,
+                index,
+                from,
+                to,
+                ..
+            } => {
+                let markers =
+                    self.dragged_marker(project, id, index, (from, to), modifiers.alt())?;
+                let held = project.playlist.warps.get(&id)?;
+                (markers != held.markers).then(|| Edit::SetClipWarp {
+                    clip: id,
+                    warp: Some(ClipWarp {
+                        markers,
+                        ..held.clone()
+                    }),
+                })
             }
             Gesture::Gain { id, gain, from, to } => {
                 let step = if modifiers.shift() {
@@ -1190,18 +1524,83 @@ impl Arranger {
             button,
             double,
             alt,
+            slip,
         } = press;
         let clip = project.playlist.clips.get(&id)?;
         let left = button == mouse::Button::Left;
         match clip.item {
-            ClipItem::Audio { gain, .. } => {
+            ClipItem::Audio {
+                gain,
+                fade_in,
+                fade_out,
+                ..
+            } => {
                 let index = clip_gesture::index_of(project, clip.track)?;
                 let top = self.grid.row_top_of(index)?;
                 let rect = playlist_layout::clip_rect(&self.grid, clip, top);
+                // The handle drawn under the pointer: in warp mode a marker's (fade handles are
+                // off there, where a marker's handle may be wanted), else a fade handle.
+                let handle = self
+                    .handle_under(project, at)
+                    .filter(|&(under, _)| under == id)
+                    .map(|(_, handle)| handle);
+                match (left, handle) {
+                    (true, Some(ClipHandle::Warp(index))) => {
+                        if double {
+                            return Some(
+                                warp_gesture::removed(project, id, index).map(Command::Edit),
+                            );
+                        }
+                        self.gesture = Some(Gesture::Warp {
+                            id,
+                            index,
+                            from: at,
+                            to: at,
+                            free: alt,
+                        });
+                        return Some(None);
+                    }
+                    (true, Some(side @ (ClipHandle::FadeIn | ClipHandle::FadeOut))) => {
+                        let side = side == ClipHandle::FadeIn;
+                        if double {
+                            let cleared = if side { (0, fade_out) } else { (fade_in, 0) };
+                            return Some(((fade_in, fade_out) != cleared).then_some(
+                                Command::Edit(Edit::SetClipFades {
+                                    clip: id,
+                                    fade_in: cleared.0,
+                                    fade_out: cleared.1,
+                                }),
+                            ));
+                        }
+                        self.gesture = Some(Gesture::Fade {
+                            id,
+                            fade_in: side,
+                            to: at,
+                            free: alt,
+                        });
+                        return Some(None);
+                    }
+                    _ => {}
+                }
+                if self.warping() == Some(id) && left {
+                    if let Some(handled) = self.press_warp(project, press, rect, top) {
+                        return Some(handled);
+                    }
+                }
                 let readout = at.y < top + TITLE_HEIGHT
                     && at.x >= rect.x + rect.width - GAIN_READOUT_WIDTH
                     && part == ClipPart::Body;
                 match (left, part, readout) {
+                    // Below the title strip only: the strip keeps its gain readout and moves.
+                    (true, ClipPart::Body, false) if slip && at.y >= top + TITLE_HEIGHT => {
+                        self.gesture = Some(Gesture::Slip {
+                            id,
+                            from: at,
+                            to: at,
+                            free: alt,
+                        });
+                        Some(None)
+                    }
                     (true, ClipPart::LeftEdge, _) => {
                         self.gesture = Some(Gesture::TrimStart {
                             id,
@@ -1327,9 +1726,124 @@ impl Arranger {
         }
     }
 
+    /// A left press on clip `press.id`'s body in warp mode off its markers' handles (`rect` the
+    /// clip, `top` its row's): under the title strip a double press adds a marker, and a single
+    /// press does nothing, so the body's moves and slip cannot be hit by mistake. `None` for the
+    /// title strip and the edges, which keep their gestures.
+    fn press_warp(
+        &mut self,
+        project: &Project,
+        press: ClipPress,
+        rect: Rectangle,
+        top: f32,
+    ) -> Option<Option<Command>> {
+        let ClipPress {
+            id,
+            part,
+            at,
+            double,
+            ..
+        } = press;
+        let body = top + TITLE_HEIGHT;
+        if part != ClipPart::Body || at.y < body {
+            return None;
+        }
+        if !double {
+            return Some(None);
+        }
+        let clip = project.playlist.clips.get(&id)?;
+        let sample = |tick: Ticks| {
+            time::tick_to_sample(tick, project.sample_rate, project.tempo, project.ppq)
+        };
+        let (start, end) = (sample(clip.start)?, sample(clip.end())?);
+        let played = end.saturating_sub(start);
+        let song = warp_gesture::frame_at_x(rect.x, rect.width, start, played, at.x);
+        let per_px = played as f64 / f64::from(rect.width.max(1.0));
+        let reach = (f64::from(warp_gesture::TRANSIENT_REACH) * per_px).round() as u64;
+        Some(Some(Command::AddWarpMarker {
+            clip: id,
+            song,
+            reach,
+        }))
+    }
+
+    /// Clip `id`'s markers with marker `index`'s handle dragged from `drag.0` to `drag.1`: that
+    /// moment of the audio played where the pointer is, on the snap's nearest line (`free`: the
+    /// pointer's own frame), stopped by its neighbours and the ratios ([`warp_gesture::dragged`]).
+    /// A press let go of where it was moves nothing.
+    fn dragged_marker(
+        &self,
+        project: &Project,
+        id: ClipId,
+        index: usize,
+        drag: (Point, Point),
+        free: bool,
+    ) -> Option<Vec<WarpMarker>> {
+        let map = ClipMap::of(project, id, None)?;
+        let (from, to) = drag;
+        if from == to {
+            return Some(map.markers);
+        }
+        let clip = project.playlist.clips.get(&id)?;
+        let song = if free {
+            let index = clip_gesture::index_of(project, clip.track)?;
+            let rect = playlist_layout::clip_rect(&self.grid, clip, self.grid.row_top_of(index)?);
+            warp_gesture::frame_at_x(rect.x, rect.width, map.start, map.played, to.x)
+        } else {
+            let line = self.snapping().nearest(self.grid.tick_at(to.x));
+            time::tick_to_sample(
+                Ticks(line.0.max(0)),
+                project.sample_rate,
+                project.tempo,
+                project.ppq,
+            )?
+        };
+        Some(warp_gesture::dragged(&map, index, map.out_at(song)))
+    }
+
     /// The trim a held edge drag would commit: the right edge moves the end; the left edge moves
     /// the start and the frame offset with it at the project's tempo, and stops where the file
     /// starts. Both snap to the grid (Alt does not) and keep the clip a tick long.
+    /// Clip `id`'s fades with its fade in's (`fade_in`) or fade out's handle at `to`: the
+    /// pointer's tick on the snap (`free`: as it is), inside the clip, gives the fade's length
+    /// in frames from the clip's start or to its end, stopping at the other fade.
+    fn dragged_fades(
+        &self,
+        project: &Project,
+        id: ClipId,
+        fade_in: bool,
+        to: Point,
+        free: bool,
+    ) -> Option<(u64, u64)> {
+        let clip = project.playlist.clips.get(&id)?;
+        let ClipItem::Audio {
+            fade_in: old_in,
+            fade_out: old_out,
+            ..
+        } = clip.item
+        else {
+            return None;
+        };
+        let raw = self.grid.tick_at(to.x);
+        let tick = if free {
+            raw
+        } else {
+            self.snapping().nearest(raw)
+        };
+        let tick = Ticks(tick.0.clamp(clip.start.0, clip.end().0));
+        let sample = |tick: Ticks| {
+            time::tick_to_sample(tick, project.sample_rate, project.tempo, project.ppq)
+        };
+        let (start, end) = (sample(clip.start)?, sample(clip.end())?);
+        let at = sample(tick)?;
+        let frames = end - start;
+        Some(if fade_in {
+            ((at - start).min(frames - old_out.min(frames)), old_out)
+        } else {
+            (old_in, (end - at).min(frames - old_in.min(frames)))
+        })
+    }
+
     fn trim_edit(&self, project: &Project, modifiers: Modifiers) -> Option<Edit> {
         let (id, from, to, left) = match self.gesture.as_ref()? {
             Gesture::TrimStart { id, from, to } => (*id, *from, *to, true),
@@ -1690,6 +2204,46 @@ mod tests {
                 length: Ticks(1152)
             }))
         );
+    }
+
+    // p38_both's clip (ticks 304..384, 20000 frames, fading in over 1000 and out over 3000) at
+    // the closest zoom, 256 px a bar (2/3 px a tick): x 322.67..376, 53.33 px, its body from
+    // y 10. The fades reach 2.67 and 8 px, so the handles' centres, 5 px under the body's top,
+    // are (327.67, 15), the fade in's kept 5 px inside the corner, and (368, 15). Not selected,
+    // the pointer over it shows them, so the pointer is on each at its centre and on the fade
+    // in's at (327.7, 9), a pixel up in the title strip, within 6.5 px; a left press there holds
+    // the fade in. Mid-body is on none. In warp mode the fade handles are not drawn, and the
+    // pointer is on neither; at the default zoom (64 px a bar) the clip is 13.3 px wide, under
+    // the 24 px that shows them, and the pointer by its corner, (175.67, 15), is on none.
+    #[test]
+    fn the_pointer_is_on_a_fade_handle_only_where_one_is_drawn() {
+        let project = load(include_str!("../../../../tests/fixtures/p38_both.json"));
+        let closest = || opened().with_zoom(256.0);
+        let mut arranger = closest();
+        let on =
+            |arranger: &Arranger, x: f32, y: f32| arranger.handle_under(&project, Point::new(x, y));
+        assert!(arranger.selection.is_empty());
+        assert_eq!(
+            on(&arranger, 327.7, 15.0),
+            Some((ClipId(1), ClipHandle::FadeIn))
+        );
+        assert_eq!(
+            on(&arranger, 368.0, 15.0),
+            Some((ClipId(1), ClipHandle::FadeOut))
+        );
+        assert_eq!(
+            on(&arranger, 327.7, 9.0),
+            Some((ClipId(1), ClipHandle::FadeIn))
+        );
+        assert_eq!(on(&arranger, 349.0, 20.0), None);
+        let mut held = closest();
+        assert!(held
+            .update(press((327.7, 9.0)), &project, None, NONE)
+            .is_none());
+        assert_eq!(held.held_handle(), Some((ClipId(1), ClipHandle::FadeIn)));
+        assert_eq!(arranger.toggle_warp(&project, Some(ClipId(1))), Ok(true));
+        assert_eq!(on(&arranger, 327.7, 15.0), None, "warp mode");
+        assert_eq!(on(&opened(), 175.67, 15.0), None, "narrower than 24 px");
     }
 
     // A right press deletes the clip under it, or the whole selection when it is in it.

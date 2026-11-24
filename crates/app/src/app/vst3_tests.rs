@@ -192,7 +192,10 @@ fn sha256(frames: &[[f32; 2]]) -> String {
         sha.update(left.to_le_bytes());
         sha.update(right.to_le_bytes());
     }
-    format!("{:x}", sha.finalize())
+    sha.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// `frames` against the render answer `answer` of p27_expected.json: its probes (f32s the JSON

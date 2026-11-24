@@ -734,8 +734,8 @@ impl MidiPorts {
         let names = match &self.source {
             PortSource::Given(names) => names.clone(),
             PortSource::Devices | PortSource::Only(_) => match device_names() {
-                Ok(mut names) => {
-                    self.problem = None;
+                Ok((mut names, unread)) => {
+                    self.problem = unread;
                     if let PortSource::Only(prefix) = &self.source {
                         names.retain(|name| name.starts_with(prefix.as_str()));
                     }
@@ -781,13 +781,10 @@ impl MidiPorts {
         for connection in closed {
             unreleased |= !connection.close();
         }
-        let wanted: Vec<String> = self
-            .names
-            .iter()
-            .filter(|name| plays(name))
-            .filter(|name| !self.connections.iter().any(|c| &c.name == *name))
-            .cloned()
-            .collect();
+        let wanted = {
+            let connected: Vec<&str> = self.connected_names();
+            to_open(&self.names, &connected, &plays)
+        };
         for name in wanted {
             let router = router.for_port(self.monitor);
             match open(&name, router.clone()) {
@@ -937,20 +934,65 @@ fn hidden_port_for(name: &str, client: &str) -> bool {
         .is_some_and(|(owner, _)| owner == client || owner.starts_with("RtMidi"))
 }
 
-/// The names of the system's MIDI input ports.
-fn device_names() -> Result<Vec<String>, String> {
+/// The ports of `listed` to open: each that `plays` and is not in `connected`, once. Why once: a
+/// port opens by its name, so a name listed twice (two ports of one name) would reach the first
+/// port twice; WinMM refuses the second handle as in use (by this program's first), which
+/// Settings would blame on another program, and a system that shares a port between programs
+/// would deliver every note twice.
+fn to_open(listed: &[String], connected: &[&str], plays: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut wanted: Vec<String> = Vec::new();
+    for name in listed {
+        if plays(name) && !connected.contains(&name.as_str()) && !wanted.contains(name) {
+            wanted.push(name.clone());
+        }
+    }
+    wanted
+}
+
+/// The names of the system's MIDI input ports, and the line [`unread_ports`] gives for those it
+/// counts but could not name.
+fn device_names() -> Result<(Vec<String>, Option<String>), String> {
     let input =
         MidiInput::new(&client_name()).map_err(|error| format!("MIDI input is off: {error}"))?;
-    Ok(input
+    let names: Vec<String> = input
         .ports()
         .iter()
         .filter_map(|port| input.port_name(port).ok())
-        .collect())
+        .collect();
+    let unread = unread_ports(input.port_count(), names.len());
+    Ok((names, unread))
+}
+
+/// What to say when the system counts `count` MIDI input ports and only `read` of them could be
+/// named; `None` when none is missing. Why: midir's WinMM backend leaves out, without a word, a
+/// port whose driver does not answer its device-interface query (under Wine every port went so:
+/// five counted, none listed), and the list then reads "No MIDI input found" while a
+/// device is there. A port plugged in or out between the two reads can say so for one listing.
+fn unread_ports(count: usize, read: usize) -> Option<String> {
+    match count.saturating_sub(read) {
+        0 => None,
+        1 => Some("1 MIDI input port could not be read from the system".to_owned()),
+        unread => Some(format!(
+            "{unread} MIDI input ports could not be read from the system"
+        )),
+    }
+}
+
+/// The line Settings shows when port `name` cannot be opened for `error` (midir's words). A port
+/// open in another program says so and what to do: WinMM gives each input port to one program at
+/// a time (MMSYSERR_ALLOCATED), and the connection is tried again at each listing, so it opens
+/// once that program lets go.
+fn open_problem(name: &str, error: &str) -> String {
+    if error.contains("MMSYSERR_ALLOCATED") {
+        format!("{name} is in use by another program: close that program and it connects")
+    } else {
+        format!("Cannot open MIDI input {name}: {error}")
+    }
 }
 
 /// A connection to the system's port `name` whose messages go to `router`.
 fn open(name: &str, router: Router) -> Result<MidiInputConnection<()>, String> {
-    let failed = |error: String| format!("Cannot open MIDI input {name}: {error}");
+    let failed = |error: String| open_problem(name, &error);
     let client = client_name();
     let mut input = MidiInput::new(&client).map_err(|error| failed(error.to_string()))?;
     // System exclusive, clock and active sensing play nothing here.
@@ -964,6 +1006,10 @@ fn open(name: &str, router: Router) -> Result<MidiInputConnection<()>, String> {
         .connect(&port, &client, move |_, bytes, _| router.deliver(bytes), ())
         .map_err(|error| failed(error.to_string()))
 }
+
+#[cfg(test)]
+#[path = "midi_port_problems_tests.rs"]
+mod port_problems_tests;
 
 #[cfg(test)]
 mod tests {

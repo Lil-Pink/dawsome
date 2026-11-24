@@ -1,6 +1,6 @@
 # Dawsome
 
-The reference for Dawsome 0.1.5: every panel, gesture and setting. The README is the short introduction.
+The reference for Dawsome 0.1.6: every panel, gesture and setting. The README is the short introduction.
 
 Dawsome is a pattern-based digital audio workstation for Linux and Windows. Program beats in the
 channel rack, write melodies in the piano roll, arrange patterns, audio and automation in the
@@ -110,6 +110,68 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   selected, a chain right of the header's Fit unlinks every selected clip (each its own copy,
   "Pattern 1 (copy)", "(copy 2)"…) and, crossed once they play copies, links them back, one
   undo step a click; a clip's menu (Ctrl+right-click) does the same for that clip.
+  - **Slip and split**: Ctrl+Shift+drag an audio clip's body (under its title strip) and the
+    audio slides inside the clip while the clip keeps its place and length: drag right and
+    earlier audio plays, the waveform following the hand as you drag. The drag moves by whole
+    snap units as a move does (Alt: free) and stops at the sound's first and last frame; one
+    undo step. **Split** (Ctrl+E, or the Edit menu) cuts every selected clip that the song
+    marker crosses in two at the marker; with nothing selected it cuts the clip under the
+    pointer where the pointer is, on the nearest snap line (Alt: free). The right part goes on
+    playing what the clip played after the cut, and the right parts are selected afterwards;
+    all the cuts of one Split are one undo step. A song holds 4096 audio clips at most, and a
+    Split that would pass that is refused with the reason. Pattern clips do not slip; a split
+    pattern clip stays linked to its pattern. A note the cut runs through ends at the cut, as
+    at any clip's end: a channel that plays its sample whole still plays it whole.
+  - **Fades and crossfades**: point at an audio clip at least 24 px wide, or select it, and a
+    round handle in the accent colour shows at each top corner of its body; a clip you are not
+    pointing at shows none. Drag the left one inward for a fade in, the right one for a fade
+    out (on the snap, Alt: free; each stops at the other); the handle grows and the pointer
+    turns to a sideways arrow as you point at it, and the hint bar says the fade's length while
+    you drag. The handle then sits where the fade ends; the fade shows as a line from the
+    clip's foot to its top, the part of the clip above the line shaded and the waveform
+    following it; a double click on a handle takes its fade off; one undo step each. Fades are linear and counted in frames, so they keep their
+    length when the tempo changes. A split keeps the fade in on the left part and the fade out
+    on the right. **Crossfade** (Ctrl+Shift+X, or the Edit menu) on two selected audio clips
+    that overlap on one track fades the earlier out and the later in across the overlap, one
+    undo step. Where a clip's edge cuts into its sound (it starts past the sound's start or
+    stops before its end), a 2 ms ramp plays there so the cut does not click, unless the
+    clip's own fade there is longer, or the clip next to it goes on with the same sound (a
+    split's two parts play as the clip did whole). A cut inside a fade, or one that leaves a
+    sliver shorter than 2 ms, gets a tiny ramp at the cut too, so it plays near the whole clip
+    but not exactly as it. A project with a fade is saved as format
+    version 12, which earlier versions of Dawsome refuse to open.
+  - **Transient marks**: a selected audio clip shows a small tick along the top of its body
+    at each hit Dawsome found in its sound, drawn where that hit plays. The finder looks for a
+    sudden rise in loudness, so it is good at clear hits (drums, plucks, short notes) and poor
+    at soft or legato material (pads, bowed or sung lines), which gets few marks or marks in
+    the wrong places. Markers can always be placed by hand. For a long sound the marks appear
+    a moment after the waveform.
+  - **Warp markers**: one clip can stretch by different amounts in different parts. Select an
+    audio clip and press **Warp** in its settings strip (double-click the clip to show it) or
+    Ctrl+Shift+W; Esc, Warp again, or selecting something else leaves warp mode. In warp mode
+    the clip's body takes only marker presses: a double click adds a marker on the nearest
+    transient mark within 8 px, else where you clicked, and pins that moment where it plays now,
+    so adding a marker never moves the audio. Drag a marker's triangle at the top to move that
+    moment of the audio in time (on the snap, Alt: free); the markers either side stay put and
+    the parts between them stretch, the waveform redrawn as you drag. A marker stops 64 frames
+    from its neighbours and the sound's ends, and where a part would stretch past a quarter or
+    four times its length. A double click on a triangle removes the marker. Each add, move or
+    removal is one undo step. The first marker on a clip that is not stretched turns stretching
+    on (Stretch, its pitch kept, at its own length), so the clip is silent for a moment while
+    that first stretch is made; after a move the clip plays its previous stretch until the new
+    one is ready, and its title says "stretching…" meanwhile. The title strip still moves the
+    clip and its edges still trim and stretch it. A clip holds 256 markers at most. A new
+    stretch length that would push a part between markers past a quarter or four times is
+    refused with a notice: remove the warp markers first. An edit of the sound that changes its
+    length (crop, delete) is refused while any of its clips has markers, for the same reason.
+    A project with warp markers is saved as format version 13, which earlier versions refuse.
+  - **Quantize audio** (Ctrl+Shift+Q, or the Edit menu): on each selected audio clip, every
+    transient mark inside the part the clip plays is moved to the nearest line of the snap (a
+    step when Snap is None) with a warp marker, so the hits land on the grid and the audio
+    between them stretches to fit. A hit whose line an earlier hit took, or whose move would
+    break the markers' spacing or stretch limits, stays where it is. All the selected clips
+    change in one undo step, and the toolbar says how many hits moved ("6 of 7 hits moved to
+    the grid"), or that nothing is selected or no hits were found.
   - **Reading the grid**: a bar is the time signature's beats (four quarters in 4/4, three in
     3/4, six eighths in 6/8), and a new pattern is one bar long, so its clip fills one bar. The lanes' lines mark the bars and, between them, the beats; every fourth bar
     (1, 5, 9, …) starts with a brighter double line and has its number written brighter in the
@@ -250,7 +312,10 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   loops, with preview) and MIDI devices (what is plugged in). A click plays the sound at the
   level a new channel plays it (a step of it on a channel just added). Drag a sound or an
   instrument onto the rack or a playlist track, and a MIDI keyboard onto a rack channel to play
-  that channel whatever is selected.
+  that channel whatever is selected. A click on a group's label (the kit, the instrument sets
+  and each kind, your own sets, the plugins and each maker, Audio input) folds it or opens it;
+  on a first start every group shows folded, its label alone, and later starts keep the groups
+  as you left them.
 - **Instrument sets**: multisampled instruments read from SFZ files (key and velocity zones,
   loops, release, round robin), played from the piano roll, a MIDI keyboard or the computer
   keyboard like any instrument.
@@ -289,7 +354,11 @@ Dawsome is not affiliated with Dawesome, the plugin maker, whose name sounds the
   (Ctrl+Shift+R) turns the notes you played in the last 30 s, without recording, into notes.
   Every take is one undo step (Undo keeps an audio take's file).
 - **MIDI**: input ports (the ALSA sequencer on Linux, WinMM on Windows), controller links with
-  learn, and the computer keyboard as a piano (Tab is its sustain pedal). A keyboard's sustain
+  learn, and the computer keyboard as a piano (Tab is its sustain pedal). Until you choose,
+  every input port plays and shows ticked under MIDI input in Settings (F10) and in the
+  Library's MIDI devices; the first tick you change is your choice, and from then on only the
+  ticked ports play. On Windows a device moved to another USB socket may come back as
+  "2- Name"; a port ticked as "Name" plays it while no port of that name itself is found. A keyboard's sustain
   pedal holds the notes you let go of until it lifts (a take records them as they sounded); its
   pitch bend wheel bends the notes you play, ±2 semitones unless the instrument window's Bend
   says more (up to ±24); its mod wheel opens a channel's low-pass filter when it is on, else adds
@@ -731,6 +800,10 @@ programs are given shows the windows a little softer.
 | Ctrl+Shift+Z, Ctrl+Y | redo |
 | Ctrl+A | select all notes in the piano roll |
 | Ctrl+B, Ctrl+D | duplicate the selection one selection length later |
+| Ctrl+E | split the selected clips at the song marker, or the clip under the pointer |
+| Ctrl+Shift+X | crossfade the two selected audio clips that overlap on a track |
+| Ctrl+Shift+W | warp markers on the selected audio clip: warp mode on or off |
+| Ctrl+Shift+Q | quantize audio: the selected audio clips' hits moved onto the snap |
 | Delete, Esc | delete the selection, clear the selection |
 | Up, Down (Shift: an octave) | piano roll: move the selected notes a semitone |
 | Left, Right | piano roll: move the selected notes by the snap |
@@ -745,7 +818,8 @@ programs are given shows the windows a little softer.
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S | new, open, save, save as |
 
 With the mouse: Alt+drag an audio clip's right edge stretches its sound to fill the new length
-(a plain drag trims, adding silence when longer); Alt+wheel changes the playlist's track
+(a plain drag trims, adding silence when longer); Ctrl+Shift+drag an audio clip's body slips
+its audio inside it; Alt+wheel changes the playlist's track
 height; a double click puts a fader back to unity and a pan back to the center; a double click
 on a note deletes it and a right click opens the notes menu; on a playlist clip a right click
 deletes it, Shift+right-click mutes it and Ctrl+right-click opens its menu (unlink, link back).
@@ -987,8 +1061,9 @@ The `XDG_*` variables move these folders as usual; `DAWSOME_CONFIG_HOME`, `DAWSO
   has measured it (loop a cable from the output into the input and press Measure) or it is set
   there by hand; until then such takes land late by it, typically 10 to 40 ms. Plugin latency is
   still not compensated. An input channel is heard a few buffers behind (its window says how
-  far). An input device must offer
-  the project's sample rate: inputs are not resampled.
+  far). An input device that does not offer the project's sample rate runs at a rate of its own
+  and is resampled to the project's, both as it is heard and as a take is written; its channels
+  are then heard a little further behind.
 - The Limiter catches each peak on its own sample, with no lookahead (so no latency): it holds
   the samples under its ceiling, not the true peak between them, which an MP3 encoder or a
   converter can raise a little past it. Projects made before it keep their masters without one.

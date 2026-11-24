@@ -301,6 +301,10 @@ impl Browse {
     }
 }
 
+/// What the toolbar says when a new stretch length would break a clip's warp markers.
+pub(super) const WARP_STRETCH_REFUSED: &str = "That length would stretch a part between the \
+    warp markers past a quarter or four times: remove the warp markers first";
+
 /// A sound loaded for its waveform: the path the project names its file by, the edits it
 /// plays through, and its look.
 type LoadedLook = (PathBuf, SoundEdits, FileLook);
@@ -513,6 +517,7 @@ impl App {
                 self.browse.library.sets = found.sets;
                 self.browse.library.kinds = kinds;
                 self.browse.model.set_shipped(&found.folders);
+                self.fold_new_groups();
                 self.browse.cache.clear();
                 self.scroll_library(0);
                 self.sets_found = true;
@@ -1175,24 +1180,39 @@ impl App {
             .into_iter()
             .collect();
         for (path, edits) in new {
-            let shown = self.editor_look(&path, &edits);
-            let look = shown.clone().unwrap_or(FileLook::Loading);
-            let loaded = self.looks.loaded.entry(path.clone()).or_default();
-            loaded.insert(edits.clone(), look);
-            if shown.is_none() {
-                self.load_look(path, edits);
+            match self.editor_sound(&path, &edits) {
+                Some((peaks, samples, sides)) => {
+                    // The peaks at once; the onsets on a worker, as a loaded file's are made, so
+                    // ten minutes of sound costs the window no frame (their marks follow).
+                    self.set_look(&path, &edits, FileLook::Ready(peaks.clone(), None));
+                    let find = move || {
+                        let onsets = dawsome_media::onsets::of_samples(&samples, sides);
+                        FileLook::Ready(peaks, Some(onsets))
+                    };
+                    self.look_on_worker(path, edits, find);
+                }
+                None => {
+                    self.set_look(&path, &edits, FileLook::Loading);
+                    self.load_look(path, edits);
+                }
             }
         }
         self.forget_edited_looks();
         self.show_files();
     }
 
-    /// The look of `path` through `edits` from the sample editor's peaks, when it shows that
-    /// sound now.
-    fn editor_look(&self, path: &Path, edits: &SoundEdits) -> Option<FileLook> {
+    /// The sample editor's peaks, frames and sides of `path` through `edits`, when it shows
+    /// that sound now.
+    fn editor_sound(&self, path: &Path, edits: &SoundEdits) -> Option<(Peaks, Arc<Vec<f32>>, u8)> {
         let sound = self.sample_editor.as_ref()?.sound.as_ref()?;
         (sound.holds(path, edits) && sound.problem.is_none())
-            .then(|| FileLook::Ready(sound.peaks.clone()))
+            .then(|| (sound.peaks.clone(), sound.shared(), sound.sides()))
+    }
+
+    /// Keeps `look` as the look of `path` through `edits`.
+    fn set_look(&mut self, path: &Path, edits: &SoundEdits, look: FileLook) {
+        let loaded = self.looks.loaded.entry(path.to_path_buf()).or_default();
+        loaded.insert(edits.clone(), look);
     }
 
     /// Lets go of the looks of edited sounds no audio channel plays now (each edit of a long
@@ -1219,13 +1239,21 @@ impl App {
             self.session.samples_dir().to_path_buf(),
             self.session.project().sample_rate,
         );
+        let (name, list) = (path.clone(), edits.clone());
+        self.look_on_worker(path, edits, move || look_of(&dir, &name, rate, &list));
+    }
+
+    /// Makes the look of `path` through `edits` with `make` on a thread of its own (at once when
+    /// nothing runs in the background); the media timer takes the result. When no thread starts,
+    /// a look still loading becomes one that cannot be read, and one already drawn stays.
+    fn look_on_worker(
+        &mut self,
+        path: PathBuf,
+        edits: SoundEdits,
+        make: impl FnOnce() -> FileLook + Send + 'static,
+    ) {
         if !self.host.background {
-            let look = look_of(&dir, &path, rate, &edits);
-            self.looks
-                .loaded
-                .entry(path)
-                .or_default()
-                .insert(edits, look);
+            self.set_look(&path, &edits, make());
             return;
         }
         let done = self.looks.done.0.clone();
@@ -1233,15 +1261,11 @@ impl App {
         let spawned = std::thread::Builder::new()
             .name("dawsome-waveform".into())
             .spawn(move || {
-                let look = look_of(&dir, &name, rate, &list);
-                let _ = done.send((name, list, look));
+                let _ = done.send((name, list, make()));
             });
-        if spawned.is_err() {
-            self.looks
-                .loaded
-                .entry(path)
-                .or_default()
-                .insert(edits, FileLook::Missing);
+        let loaded = self.looks.loaded.entry(path).or_default();
+        if spawned.is_err() && matches!(loaded.get(&edits), None | Some(FileLook::Loading)) {
+            loaded.insert(edits, FileLook::Missing);
         }
     }
 
@@ -1299,7 +1323,7 @@ impl App {
                 };
                 let file = &project.channels.get(&channel)?.sample;
                 self.session
-                    .is_stretching(file, stretch)
+                    .is_stretching(file, stretch, project.playlist.warp(id))
                     .then(|| (id, file.clone()))
             })
             .collect()
@@ -1308,7 +1332,7 @@ impl App {
     /// The frames of the sound audio clip `id` plays (its channel's file through its edits) at
     /// the project's rate, and the fewest frames a time-stretch of it can make; `None`, with a
     /// notice, while it is not loaded.
-    fn clip_file_frames(&mut self, id: ClipId) -> Option<(u64, u64)> {
+    pub(super) fn clip_file_frames(&mut self, id: ClipId) -> Option<(u64, u64)> {
         let project = self.session.project();
         let channel = project
             .playlist
@@ -1316,7 +1340,7 @@ impl App {
             .get(&id)
             .and_then(|clip| clip.audio_channel())
             .and_then(|channel| project.channels.get(&channel));
-        let Some(FileLook::Ready(peaks)) =
+        let Some(FileLook::Ready(peaks, _)) =
             channel.and_then(|channel| clips::look_of(&self.looks.loaded, channel))
         else {
             self.notice = Some("The clip's file is not loaded yet: try again".to_owned());
@@ -1360,6 +1384,7 @@ impl App {
                 let millis = shortest * 1000 / rate;
                 self.notice = Some(format!("Too short to stretch: {millis} ms at least"));
             }
+            Err(StretchRefused::Warp) => self.notice = Some(WARP_STRETCH_REFUSED.to_owned()),
         }
     }
 
@@ -1367,7 +1392,8 @@ impl App {
     /// and length over its file's, once the file is loaded.
     pub(super) fn clip_properties(&self) -> Option<ClipProperties> {
         let project = self.session.project();
-        let clip = project.playlist.clips.get(&self.arranger.properties?)?;
+        let id = self.arranger.properties?;
+        let clip = project.playlist.clips.get(&id)?;
         let ClipItem::Audio {
             channel, stretch, ..
         } = clip.item
@@ -1376,7 +1402,7 @@ impl App {
         };
         let channel = project.channels.get(&channel)?;
         let frames = match clips::look_of(&self.looks.files, channel) {
-            Some(FileLook::Ready(peaks)) => Some(peaks.frames),
+            Some(FileLook::Ready(peaks, _)) => Some(peaks.frames),
             _ => None,
         };
         Some(ClipProperties {
@@ -1385,6 +1411,7 @@ impl App {
             percent: frames.map(|source| {
                 clips::stretch_percent(stretch.map_or(source, |stretch| stretch.frames), source)
             }),
+            warp: self.arranger.warping() == Some(id),
         })
     }
 
@@ -1515,13 +1542,15 @@ fn sample_path(file: &Path, base: Option<&Path>) -> PathBuf {
 fn look_of(dir: &Path, path: &Path, rate: u32, edits: &SoundEdits) -> FileLook {
     let loaded = load_channel_sample(dir, path, rate);
     match loaded.file_rate {
-        Some(_) if edits.is_empty() => FileLook::Ready(Peaks::of(&loaded.buffer)),
-        Some(_) => FileLook::Ready(Peaks::of(&dawsome_engine::dsp::edits::apply(
-            &loaded.buffer,
-            edits,
-        ))),
+        Some(_) if edits.is_empty() => looked(&loaded.buffer),
+        Some(_) => looked(&dawsome_engine::dsp::edits::apply(&loaded.buffer, edits)),
         None => FileLook::Missing,
     }
+}
+
+/// The look of a sound that reads: its peaks and its onsets, both of the same frames.
+fn looked(sound: &dawsome_engine::dsp::sampler::SampleBuffer) -> FileLook {
+    FileLook::Ready(Peaks::of(sound), Some(dawsome_media::onsets::of(sound)))
 }
 
 /// The desktop's folder picker, for "+ Add folder…".

@@ -664,10 +664,11 @@ mod tests {
         );
         // A row more for Capture (was table_row(36)); the MIDI keyboard's line under the roll's
         // (was table_row(37)); a row more for Help (was table_row(38)); three more for the zoom
-        // (was table_row(39)); a row more for Shift+Space (was table_row(42)). The
-        // MIDI line is table_row(43); the page ends a row (24) and 8 px under its top (22 + 8
-        // before the 24 px rows).
-        assert_eq!(content_height(), table_row(43).y + 32.0);
+        // (was table_row(39)); a row more for Shift+Space (was table_row(42)); a row more for
+        // Split (was table_row(43)); a row more for Crossfade (was table_row(44)); a row more
+        // each for Warp and Quantize audio (was table_row(45)). The MIDI line is table_row(47);
+        // the page ends a row (24) and 8 px under its top (22 + 8 before the 24 px rows).
+        assert_eq!(content_height(), table_row(47).y + 32.0);
         assert_eq!(hit(roll_note().center()), None, "the line under the table");
         assert_eq!(hit(midi_note().center()), None, "and the one under it");
     }

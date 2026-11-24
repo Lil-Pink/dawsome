@@ -18,7 +18,7 @@ use dawsome_engine::project::{
 };
 use dawsome_engine::time::{self, MeterMap, MeterUnit, SignatureChange, Ticks, TimeSignature};
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::canvas::{self, Cache, Event, Frame, Geometry, Path, Stroke, Text};
+use iced::widget::canvas::{self, Cache, Event, Frame, Geometry, LineJoin, Path, Stroke, Text};
 use iced::widget::{button, column, container, pin, row, space, stack, text, text_input, Id};
 use iced::{
     mouse, window, Center, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector,
@@ -32,22 +32,25 @@ use crate::ui::clips::{self, FileLook, FileLooks};
 use crate::ui::fonts::size;
 use crate::ui::grid_rules::{self, device_line, NUMBER_BAND_HEIGHT, STRONG_COMPANION_ALPHA};
 use crate::ui::hint::{
-    hover_area, hover_change, link_tip, with_tip, ClipControl, ClipRow, Hover, MenuRow,
-    PlaylistTool, Pointer, TrackRow,
+    hover_area, hover_change, hover_message, link_tip, with_tip, ClipControl, ClipRow, Hover,
+    MenuRow, PlaylistTool, Pointer, TrackRow,
 };
 use crate::ui::menu;
 use crate::ui::palette;
 use crate::ui::panels::{Panel, TITLE_GAP};
 use crate::ui::playlist_layout::{
-    self, ClipPart, Grid, HeaderHit, Lanes, ARM_CENTER_X, ARM_RADIUS, AUTOMATION_LINE,
-    HANDLE_RADIUS, HEADER_HEIGHT, LED_RADIUS, MARKER_WIDTH, NAME_X, POINT_RADIUS, RULER_HEIGHT,
-    SELECTED_OUTLINE, TIME_BAR_HEIGHT, TITLE_HEIGHT, TRACK_HEADER_WIDTH, ZOOM,
+    self, ClipHandle, ClipPart, Grid, HeaderHit, Lanes, ARM_CENTER_X, ARM_RADIUS, AUTOMATION_LINE,
+    FADE_HANDLE, FADE_HANDLE_HOT, HANDLE_RADIUS, HANDLE_RING, HEADER_HEIGHT, LED_RADIUS,
+    MARKER_WIDTH, NAME_X, POINT_RADIUS, RULER_HEIGHT, SELECTED_OUTLINE, TIME_BAR_HEIGHT,
+    TITLE_HEIGHT, TRACK_HEADER_WIDTH, ZOOM,
 };
 use crate::ui::pop_out;
 use crate::ui::rack::draw_mute_light;
 use crate::ui::scroll::Scrollbar;
 use crate::ui::style;
 use crate::ui::text_fit::{fit_width, text_width, widest};
+use crate::ui::warp_gesture::ClipMap;
+use dawsome_engine::warp::{self as warp_map, WarpMarker};
 
 /// The text box a track name is edited in.
 pub const RENAME_INPUT: &str = "playlist-track-rename";
@@ -138,6 +141,8 @@ pub struct ClipProperties {
     pub mode: Option<StretchMode>,
     pub pitch: i8,
     pub percent: Option<u128>,
+    /// Whether the clip is in warp mode: the Warp switch lit.
+    pub warp: bool,
 }
 
 impl<'a> Playlist<'a> {
@@ -531,6 +536,7 @@ fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
         .spacing(4)
         .align_y(Center);
     let mut close = None;
+    let mut warp = None;
     // Every control comes from the list the hint table's test walks.
     for control in ClipControl::ALL {
         let mode = |mode: Option<StretchMode>, label: &str| {
@@ -547,6 +553,14 @@ fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
                 modes = modes.push(mode(Some(StretchMode::Resample), "Resample"))
             }
             ClipControl::Stretch => modes = modes.push(mode(Some(StretchMode::Stretch), "Stretch")),
+            ClipControl::Warp => {
+                warp = Some(small(
+                    control,
+                    "Warp".to_owned(),
+                    properties.warp,
+                    send(PlaylistMessage::ToggleWarp),
+                ));
+            }
             ClipControl::PitchDown => {
                 let step = small(
                     control,
@@ -579,7 +593,7 @@ fn properties_strip<'a>(properties: ClipProperties) -> Element<'a, Message> {
             }
         }
     }
-    let mut strip = row![text("Stretch").size(size::LABEL), modes]
+    let mut strip = row![text("Stretch").size(size::LABEL), modes, warp]
         .spacing(6)
         .align_y(Center);
     if stretched {
@@ -716,10 +730,33 @@ struct ClipAt {
     origin_y: f32,
     /// How many clips play this clip's pattern (0 for other kinds): its "×N".
     shares: usize,
+    /// Whether the pointer is over it, which shows an audio clip's fade handles.
+    hovered: bool,
+    /// Its handle the pointer is on, drawn hot.
+    hot: Option<ClipHandle>,
+    /// Whether a drag holds one of its handles: the held drag's picture draws its handles then.
+    held: bool,
 }
+
+/// The shade over the part of an audio clip's body a fade takes away (above its line), so what
+/// stays light is the fade's shape.
+const FADE_SHADE: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.45);
 
 /// An audio clip's gain, right-aligned at the end of its title strip `rect`, cut to start no
 /// further left than `shown`, the part of the strip in view.
+/// The fades' factor `at` frames into a clip that plays `frames`: min(1, k / fade_in) times
+/// min(1, m / fade_out), m frames before its last; the picture's, in f32.
+fn envelope(at: u64, frames: u64, fade_in: u64, fade_out: u64) -> f32 {
+    let ramp = |k: u64, n: u64| {
+        if n == 0 {
+            1.0
+        } else {
+            (k as f32 / n as f32).min(1.0)
+        }
+    };
+    ramp(at, fade_in) * ramp(frames.saturating_sub(1).saturating_sub(at), fade_out)
+}
+
 fn draw_gain(frame: &mut Frame, rect: Rectangle, shown: Rectangle, gain: f32) {
     let end = rect.x + rect.width - 3.0;
     let words = clips::gain_text(gain);
@@ -1166,6 +1203,9 @@ impl Tracks<'_> {
             };
             return Some(Hover::Track(hit));
         }
+        if let Some((clip, handle)) = self.arranger.handle_under(self.project, at) {
+            return Some(Hover::ClipHandle { clip, handle });
+        }
         if let Some((clip, part)) = self.arranger.clip_under(self.project, at) {
             return Some(Hover::Clip { clip, part });
         }
@@ -1249,6 +1289,10 @@ impl Tracks<'_> {
         clips.sort_by_key(|&(id, clip)| (clip.start, id));
         // Counted over the whole playlist once, not per clip: a clip off screen shares too.
         let counts = copies::clip_counts(self.project);
+        let pointer = self.arranger.pointer();
+        let hovered = pointer.and_then(|at| self.arranger.clip_under(self.project, at));
+        let hot = pointer.and_then(|at| self.arranger.handle_under(self.project, at));
+        let held = self.arranger.held_handle().map(|(id, _)| id);
         for (id, clip) in clips {
             let (row, audible) = rows[&clip.track];
             let selected = self.arranger.selection.contains(&id);
@@ -1264,6 +1308,11 @@ impl Tracks<'_> {
                 audible,
                 origin_y,
                 shares,
+                hovered: hovered.is_some_and(|(under, _)| under == id),
+                hot: hot
+                    .filter(|&(under, _)| under == id)
+                    .map(|(_, handle)| handle),
+                held: held == Some(id),
             };
             self.draw_clip(frame, clip, at);
         }
@@ -1354,6 +1403,9 @@ impl Tracks<'_> {
             audible,
             origin_y,
             shares,
+            hovered,
+            hot,
+            held,
         } = at;
         let grid = self.grid();
         let lane = grid.lane;
@@ -1465,8 +1517,16 @@ impl Tracks<'_> {
                         draw_gain(frame, rect, title_rect, gain);
                     });
                 }
+                let markers = self.project.playlist.warp(id);
                 if !muted {
-                    self.draw_waveform(frame, clip, channel, body_rect, origin_y);
+                    self.draw_waveform(frame, clip, markers, channel, body_rect, origin_y);
+                }
+                self.draw_fades(frame, clip, rect, body_rect);
+                if selected {
+                    self.draw_transients(frame, id, channel, rect, body_rect);
+                }
+                if self.arranger.warping() == Some(id) && !held {
+                    self.draw_warp_markers(frame, id, markers, rect, body_rect, hot);
                 }
             }
             ClipItem::Automation { automation } => {
@@ -1485,6 +1545,300 @@ impl Tracks<'_> {
                     .with_width(SELECTED_OUTLINE),
             );
         }
+        // Over the outline, which runs under them at the corners.
+        let warping = self.arranger.warping() == Some(id);
+        if !held && playlist_layout::shows_fade_handles(hovered, selected, warping) {
+            self.draw_fade_handles(frame, clip, rect, body_rect.y, hot);
+        }
+    }
+
+    /// A held slip: clip `id`'s body drawn again over the lanes with its audio moved `ticks`,
+    /// where the release puts it. Why the waveform and not an outline as other drags show: the
+    /// clip stays where it is, so the moved picture is the only feedback the hand has.
+    fn draw_slip(&self, frame: &mut Frame, id: ClipId, ticks: Ticks, origin_y: f32) {
+        let Some(clip) = self.project.playlist.clips.get(&id) else {
+            return;
+        };
+        let ClipItem::Audio { channel, .. } = clip.item else {
+            return;
+        };
+        let grid = self.grid();
+        let index = crate::ui::clip_gesture::index_of(self.project, clip.track);
+        let Some(top) = index.and_then(|index| grid.row_top_of(index)) else {
+            return;
+        };
+        let Some((left, right)) = visible_span(grid, clip.start, clip.end(), frame.width()) else {
+            return;
+        };
+        let frames = self.file_frames(channel);
+        let Some(offset) =
+            crate::ui::clip_gesture::slipped_offset(self.project, clip, ticks, frames)
+        else {
+            return;
+        };
+        let mut slipped = clip.clone();
+        if let ClipItem::Audio { frame_offset, .. } = &mut slipped.item {
+            *frame_offset = offset;
+        }
+        // Inside the selection's outline, which the lanes' drawing keeps.
+        let body = Rectangle::new(
+            Point::new(left + SELECTED_OUTLINE, top + TITLE_HEIGHT),
+            Size::new(
+                (right - left - 2.0 * SELECTED_OUTLINE).max(0.0),
+                (grid.lane - TITLE_HEIGHT - SELECTED_OUTLINE).max(0.0),
+            ),
+        );
+        let (color, _) = self.audio_look(channel);
+        frame.fill_rectangle(body.position(), body.size(), color);
+        let markers = self.project.playlist.warp(id);
+        self.draw_waveform(frame, &slipped, markers, channel, body, origin_y);
+    }
+
+    /// A held fade handle: clip `id`'s body drawn again over the lanes with the fades the
+    /// release gives it, its waveform under them and the handles where they go.
+    fn draw_faded(&self, frame: &mut Frame, id: ClipId, fades: (u64, u64), origin_y: f32) {
+        let Some(clip) = self.project.playlist.clips.get(&id) else {
+            return;
+        };
+        let mut faded = clip.clone();
+        let ClipItem::Audio {
+            channel,
+            fade_in,
+            fade_out,
+            ..
+        } = &mut faded.item
+        else {
+            return;
+        };
+        (*fade_in, *fade_out) = fades;
+        let channel = *channel;
+        let grid = self.grid();
+        let index = crate::ui::clip_gesture::index_of(self.project, clip.track);
+        let Some(top) = index.and_then(|index| grid.row_top_of(index)) else {
+            return;
+        };
+        let rect = playlist_layout::clip_rect(grid, clip, top);
+        // Inside the selection's outline, which the lanes' drawing keeps.
+        let body = Rectangle::new(
+            Point::new(rect.x + SELECTED_OUTLINE, top + TITLE_HEIGHT),
+            Size::new(
+                (rect.width - 2.0 * SELECTED_OUTLINE).max(0.0),
+                (grid.lane - TITLE_HEIGHT - SELECTED_OUTLINE).max(0.0),
+            ),
+        );
+        let (color, _) = self.audio_look(channel);
+        frame.fill_rectangle(body.position(), body.size(), color);
+        if !clip.muted {
+            let markers = self.project.playlist.warp(id);
+            self.draw_waveform(frame, &faded, markers, channel, body, origin_y);
+        }
+        self.draw_fades(frame, &faded, rect, body);
+        let held = self.arranger.held_handle().map(|(_, handle)| handle);
+        self.draw_fade_handles(frame, &faded, rect, body.y, held);
+    }
+
+    /// A held warp marker: clip `id`'s body drawn again over the lanes with its waveform
+    /// through `markers`, the list the release gives it, and the markers where they go.
+    fn draw_warped(&self, frame: &mut Frame, id: ClipId, markers: &[WarpMarker], origin_y: f32) {
+        let Some(clip) = self.project.playlist.clips.get(&id) else {
+            return;
+        };
+        let ClipItem::Audio { channel, .. } = clip.item else {
+            return;
+        };
+        let grid = self.grid();
+        let index = crate::ui::clip_gesture::index_of(self.project, clip.track);
+        let Some(top) = index.and_then(|index| grid.row_top_of(index)) else {
+            return;
+        };
+        let rect = playlist_layout::clip_rect(grid, clip, top);
+        // Inside the selection's outline, which the lanes' drawing keeps.
+        let body = Rectangle::new(
+            Point::new(rect.x + SELECTED_OUTLINE, top + TITLE_HEIGHT),
+            Size::new(
+                (rect.width - 2.0 * SELECTED_OUTLINE).max(0.0),
+                (grid.lane - TITLE_HEIGHT - SELECTED_OUTLINE).max(0.0),
+            ),
+        );
+        let (color, _) = self.audio_look(channel);
+        frame.fill_rectangle(body.position(), body.size(), color);
+        if !clip.muted {
+            self.draw_waveform(frame, clip, markers, channel, body, origin_y);
+        }
+        self.draw_fades(frame, clip, rect, body);
+        let held = self.arranger.held_handle().map(|(_, handle)| handle);
+        self.draw_warp_markers(frame, id, markers, rect, body, held);
+    }
+
+    /// A selected audio clip's transients: a small tick in the accent at the top of its body
+    /// where each one it plays sounds, through its warp markers.
+    fn draw_transients(
+        &self,
+        frame: &mut Frame,
+        id: ClipId,
+        channel: ChannelId,
+        rect: Rectangle,
+        body: Rectangle,
+    ) {
+        let onsets = self
+            .project
+            .channels
+            .get(&channel)
+            .and_then(|shown| clips::onsets_of(self.files, shown));
+        let map = ClipMap::of(self.project, id, self.file_frames(channel));
+        let (Some(onsets), Some(map)) = (onsets, map) else {
+            return;
+        };
+        // Cut to the body by the layout, not by a clipped frame (see `transient_ticks`).
+        for tick in playlist_layout::transient_ticks(&map, onsets, rect, body, self.scale_factor) {
+            frame.fill_rectangle(tick.position(), tick.size(), style::accent());
+        }
+    }
+
+    /// Clip `id`'s warp markers in warp mode: a line down the body where each marker's moment
+    /// plays, with the triangle at its top that drags it, larger for the `hot` one.
+    fn draw_warp_markers(
+        &self,
+        frame: &mut Frame,
+        id: ClipId,
+        markers: &[WarpMarker],
+        rect: Rectangle,
+        body: Rectangle,
+        hot: Option<ClipHandle>,
+    ) {
+        let Some(map) = ClipMap::of(self.project, id, None).map(|map| ClipMap {
+            markers: markers.to_vec(),
+            ..map
+        }) else {
+            return;
+        };
+        // Kept to the body by hand: the GPU renderer drops what a clipped frame draws here (see
+        // `playlist_layout::transient_ticks`).
+        let inside = |x: f32| x >= body.x && x < body.x + body.width;
+        let shown = playlist_layout::warp_handles(rect, body.y, &map)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, handle)| Some((index, handle?.0)))
+            .filter(|&(_, x)| inside(x));
+        for (index, x) in shown {
+            let (left, width) = device_line(x, self.scale_factor);
+            frame.fill_rectangle(
+                Point::new(left, body.y),
+                Size::new(width, body.height),
+                style::accent(),
+            );
+            let wide = if hot == Some(ClipHandle::Warp(index)) {
+                playlist_layout::WARP_HANDLE_HOT
+            } else {
+                playlist_layout::WARP_HANDLE
+            };
+            let [left, right, point] = playlist_layout::warp_triangle(x, body.y, wide);
+            let triangle = Path::new(|path| {
+                path.move_to(left);
+                path.line_to(right);
+                path.line_to(point);
+                path.close();
+            });
+            // The ring: a stroke twice its width, half of it outside the triangle filled over it.
+            let ring = Stroke::default()
+                .with_color(style::palette().bg)
+                .with_width(2.0 * HANDLE_RING)
+                .with_line_join(LineJoin::Round);
+            frame.stroke(&triangle, ring);
+            frame.fill(&triangle, style::accent());
+        }
+    }
+
+    /// How far an audio clip drawn as `rect` fades in and out, px; `None` for any other clip.
+    fn fade_reaches(&self, clip: &Clip, rect: Rectangle) -> Option<(f32, f32)> {
+        let ClipItem::Audio {
+            fade_in, fade_out, ..
+        } = clip.item
+        else {
+            return None;
+        };
+        let frames = self.project.clip_frames(clip).unwrap_or(0);
+        let reach = |fade| playlist_layout::fade_reach(fade, frames, rect.width);
+        Some((reach(fade_in), reach(fade_out)))
+    }
+
+    /// An audio clip's fades over its body: the part above each fade's line (from the body's
+    /// foot at the clip's edge to its top where the fade ends) shaded, the line over the shade.
+    fn draw_fades(&self, frame: &mut Frame, clip: &Clip, rect: Rectangle, body: Rectangle) {
+        let Some((reach_in, reach_out)) = self.fade_reaches(clip, rect) else {
+            return;
+        };
+        let (foot, right) = (body.y + body.height, rect.x + rect.width);
+        let stroke = Stroke::default()
+            .with_color(style::AUDIO_WAVE)
+            .with_width(1.0);
+        let lines = [
+            (reach_in > 0.0).then(|| {
+                (
+                    Point::new(rect.x, foot),
+                    Point::new(rect.x + reach_in, body.y),
+                )
+            }),
+            (reach_out > 0.0).then(|| {
+                (
+                    Point::new(right - reach_out, body.y),
+                    Point::new(right, foot),
+                )
+            }),
+        ];
+        // Cut to the body's columns by hand, not by a clipped frame, which the GPU renderer
+        // draws none of here (see `playlist_layout::transient_ticks`); the rows are the body's.
+        let span = (body.x, body.x + body.width);
+        for (from, to) in lines.into_iter().flatten() {
+            if let Some(corners) = playlist_layout::fade_wedge(from, to, body.y, span) {
+                let wedge = Path::new(|path| {
+                    path.move_to(corners[0]);
+                    for &corner in &corners[1..] {
+                        path.line_to(corner);
+                    }
+                    path.close();
+                });
+                frame.fill(&wedge, FADE_SHADE);
+            }
+            if let Some((from, to)) = playlist_layout::line_between(from, to, span) {
+                frame.stroke(&Path::line(from, to), stroke);
+            }
+        }
+    }
+
+    /// An audio clip's two fade handles on the top edge of its body (from `body_top`), each a
+    /// disc in the accent in a dark ring, larger for the `hot` one.
+    fn draw_fade_handles(
+        &self,
+        frame: &mut Frame,
+        clip: &Clip,
+        rect: Rectangle,
+        body_top: f32,
+        hot: Option<ClipHandle>,
+    ) {
+        let Some((reach_in, reach_out)) = self.fade_reaches(clip, rect) else {
+            return;
+        };
+        let Some((head, tail)) = playlist_layout::fade_handles(rect, body_top, reach_in, reach_out)
+        else {
+            return;
+        };
+        let mut handles = [(head, ClipHandle::FadeIn), (tail, ClipHandle::FadeOut)];
+        // The hot one last, whole over the other where fades meet.
+        handles.sort_by_key(|&(_, handle)| hot == Some(handle));
+        for (centre, handle) in handles {
+            let wide = if hot == Some(handle) {
+                FADE_HANDLE_HOT
+            } else {
+                FADE_HANDLE
+            };
+            let radius = wide / 2.0;
+            frame.fill(
+                &Path::circle(centre, radius + HANDLE_RING),
+                style::palette().bg,
+            );
+            frame.fill(&Path::circle(centre, radius), style::accent());
+        }
     }
 
     /// The length of the sound `channel` plays (its file through its edits), at the project's
@@ -1492,7 +1846,7 @@ impl Tracks<'_> {
     fn file_frames(&self, channel: ChannelId) -> Option<u64> {
         let channel = self.project.channels.get(&channel)?;
         match clips::look_of(self.files, channel)? {
-            FileLook::Ready(peaks) => Some(peaks.frames),
+            FileLook::Ready(peaks, _) => Some(peaks.frames),
             FileLook::Loading | FileLook::Missing => None,
         }
     }
@@ -1513,18 +1867,20 @@ impl Tracks<'_> {
         match clips::look_of(self.files, channel) {
             Some(FileLook::Missing) => (style::AUDIO_MISSING, format!("(missing) {name}")),
             Some(FileLook::Loading) | None => (body, "loading\u{2026}".to_owned()),
-            Some(FileLook::Ready(_)) => (body, name),
+            Some(FileLook::Ready(..)) => (body, name),
         }
     }
 
     /// The waveform of the file `channel` plays, in `body`: for every pixel column, a 1 px line
     /// from the lowest to the highest value the frames under it hold (times the clip's gain,
     /// cut at the body), around a center line; a stereo file's left side in the top half, its
-    /// right in the bottom.
+    /// right in the bottom. A stretched clip with warp `markers` draws through them, so each
+    /// moment is drawn where it plays.
     fn draw_waveform(
         &self,
         frame: &mut Frame,
         clip: &Clip,
+        markers: &[WarpMarker],
         channel: ChannelId,
         body: Rectangle,
         origin_y: f32,
@@ -1533,6 +1889,8 @@ impl Tracks<'_> {
             frame_offset,
             gain,
             stretch,
+            fade_in,
+            fade_out,
             ..
         } = clip.item
         else {
@@ -1541,7 +1899,7 @@ impl Tracks<'_> {
         let Some(channel) = self.project.channels.get(&channel) else {
             return;
         };
-        let Some(FileLook::Ready(peaks)) = clips::look_of(self.files, channel) else {
+        let Some(FileLook::Ready(peaks, _)) = clips::look_of(self.files, channel) else {
             return;
         };
         let project = self.project;
@@ -1555,11 +1913,17 @@ impl Tracks<'_> {
             .unwrap_or(0)
         };
         let start = sample(clip.start);
-        // The file frame song tick `tick` of the clip plays: a frame of the stretched file is
-        // the file's frame at the same share of its length.
+        let end = sample(clip.end()).max(start);
+        // The file frame song tick `tick` of the clip plays: through the warp markers on a
+        // warped clip (the render's map), else the file's frame at the same share of the
+        // stretched file's length. Why not the map for every stretch: with no markers it rounds
+        // half up where this floors, and the pictures of unwarped clips stay as they were.
         let file_frame = |tick: Ticks| {
             let played = (frame_offset + sample(tick)).saturating_sub(start);
             match stretch.filter(|stretch| stretch.frames > 0) {
+                Some(stretch) if !markers.is_empty() => {
+                    warp_map::source_of_out(markers, peaks.frames, stretch.frames, played)
+                }
                 Some(stretch) => {
                     let scaled =
                         u128::from(played) * u128::from(peaks.frames) / u128::from(stretch.frames);
@@ -1588,6 +1952,9 @@ impl Tracks<'_> {
                 let from = file_frame(grid.tick_at(x));
                 let to = file_frame(grid.tick_at(x + 1.0)).max(from + 1);
                 if let Some((low, high)) = peaks.span(side, from, to) {
+                    // The fades' envelope at the column's song frame, as the clip plays it.
+                    let at = sample(grid.tick_at(x)).saturating_sub(start);
+                    let gain = gain * envelope(at, end - start, fade_in, fade_out);
                     let y_high = (center - high * gain * half).clamp(top, top + band);
                     let y_low = (center - low * gain * half).clamp(top, top + band);
                     frame.fill_rectangle(
@@ -1887,9 +2254,18 @@ impl canvas::Program<Message> for Tracks<'_> {
                 .map(local)
                 .or(state.last)
                 .map(|at| send(PlaylistMessage::TracksReleased(at))),
-            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let now = cursor.position_in(bounds).and_then(|at| self.hover_at(at));
-                hover_change(&mut state.hover, now)
+            // Leaving the window counts as leaving the lanes: the clip it was over hides its
+            // fade handles again.
+            Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) => {
+                let at = cursor.position_in(bounds);
+                let now = at.and_then(|at| self.hover_at(at));
+                // The point is kept only over a clip, where Split cuts with nothing selected:
+                // over anything else the cursor says only what it is over, as it did.
+                let over_clip = matches!(now, Some(Hover::Clip { .. } | Hover::ClipHandle { .. }));
+                let pointer = at.filter(|_| over_clip);
+                let hover = hover_message(&mut state.hover, now);
+                (hover.is_some() || pointer != self.arranger.pointer())
+                    .then(|| send(PlaylistMessage::Pointer { at: pointer, hover }))
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 cursor.position_in(bounds).map(|at| {
@@ -1953,6 +2329,19 @@ impl canvas::Program<Message> for Tracks<'_> {
                 let size = Size::new((from.x - to.x).abs(), (from.y - to.y).abs());
                 overlay.stroke(&Path::rectangle(corner, size), outline);
             }
+            Some(Preview::Slip { clip, ticks }) => {
+                self.draw_slip(&mut overlay, *clip, *ticks, bounds.y);
+            }
+            Some(Preview::Fades {
+                clip,
+                fade_in,
+                fade_out,
+            }) => {
+                self.draw_faded(&mut overlay, *clip, (*fade_in, *fade_out), bounds.y);
+            }
+            Some(Preview::Warp { clip, markers }) => {
+                self.draw_warped(&mut overlay, *clip, markers, bounds.y);
+            }
             Some(Preview::Loop(_)) | None => {}
         }
 
@@ -1978,6 +2367,9 @@ impl canvas::Program<Message> for Tracks<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.arranger.slipping() || self.arranger.held_handle().is_some() {
+            return mouse::Interaction::ResizingHorizontally;
+        }
         if self.arranger.tracks_held() {
             return mouse::Interaction::Grabbing;
         }
@@ -1997,6 +2389,9 @@ impl canvas::Program<Message> for Tracks<'_> {
                 }
                 Some(HeaderHit::Name { .. }) | None => mouse::Interaction::default(),
             };
+        }
+        if self.arranger.handle_under(self.project, at).is_some() {
+            return mouse::Interaction::ResizingHorizontally;
         }
         match self.arranger.clip_under(self.project, at) {
             Some((_, ClipPart::RightEdge | ClipPart::LeftEdge)) => {

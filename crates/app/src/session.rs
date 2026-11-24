@@ -27,6 +27,7 @@ use dawsome_engine::realtime::{
 use dawsome_engine::source::ClipSource;
 use dawsome_engine::time::MilliBpm;
 use dawsome_engine::transport::{Control, ParamTarget};
+use dawsome_engine::warp::WarpMarker;
 use dawsome_media::{InstrumentReport, MediaSounds, Playback, SampleNotice};
 use thiserror::Error;
 
@@ -661,9 +662,10 @@ impl Session {
         self.sounds.report(path)
     }
 
-    /// Whether the clip sound of `path` stretched as `stretch` is still being made.
-    pub fn is_stretching(&self, path: &Path, stretch: ClipStretch) -> bool {
-        self.sounds.is_stretching(path, stretch)
+    /// Whether the clip sound of `path` stretched as `stretch` through `warp` is still being
+    /// made ([`dawsome_media::sounds::MediaSounds::is_stretching`]).
+    pub fn is_stretching(&self, path: &Path, stretch: ClipStretch, warp: &[WarpMarker]) -> bool {
+        self.sounds.is_stretching(path, stretch, warp)
     }
 
     /// Drops the plan updates the player has finished with (their processor slots go back to

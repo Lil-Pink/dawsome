@@ -95,8 +95,66 @@ pub fn is_input_device(name: &str) -> bool {
     !STAND_INS.contains(&name)
 }
 
+/// A device the audio host lists among the inputs, as far as choosing one goes: the name it
+/// shows, the id the host gives it, and the directions it says it has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostInput {
+    pub name: String,
+    pub id: Option<cpal::DeviceId>,
+    pub direction: cpal::DeviceDirection,
+}
+
+impl HostInput {
+    fn of(device: &cpal::Device) -> Self {
+        Self {
+            name: device.to_string(),
+            id: device.id().ok(),
+            direction: device
+                .description()
+                .map_or(cpal::DeviceDirection::Unknown, |description| {
+                    description.direction()
+                }),
+        }
+    }
+}
+
+/// Whether the window offers `device` as an input: an input device by its name
+/// ([`is_input_device`]) and, on the PipeWire host, no device that also plays. Why: that host
+/// lists every sink among the inputs too, by the sink's description, and recording from one
+/// records what it plays (its monitor); a sound card's sink and its microphone carry the same
+/// description, so the microphone's name opened the sink and recorded silence.
+fn records(device: &HostInput) -> bool {
+    let plays = matches!(
+        device.direction,
+        cpal::DeviceDirection::Duplex | cpal::DeviceDirection::Output
+    );
+    let sink = plays && device.id.as_ref().and_then(audio::pipewire_node).is_some();
+    is_input_device(&device.name) && !sink
+}
+
+/// Which of the host's input devices the window lists, in the host's order: the first of each
+/// name that it offers ([`records`]).
+pub fn listed_inputs(host: &[HostInput]) -> Vec<usize> {
+    let mut listed: Vec<usize> = Vec::new();
+    for (index, device) in host.iter().enumerate() {
+        if records(device) && !listed.iter().any(|&known| host[known].name == device.name) {
+            listed.push(index);
+        }
+    }
+    listed
+}
+
+/// Which of the host's input devices an input source's `device` (a name, never empty) opens:
+/// the one the window lists by that name ([`listed_inputs`]), so a name saved before sinks were
+/// left out opens the input of that name and never a sink's monitor.
+pub fn named_input(host: &[HostInput], device: &str) -> Option<usize> {
+    host.iter()
+        .position(|candidate| records(candidate) && candidate.name == device)
+}
+
 /// The system's input devices: the default first (its name empty), then each device the audio
-/// host lists, once, with its most channels. Listing opens no stream. No test runs it.
+/// host lists ([`listed_inputs`]), with its most channels. Listing opens no stream. No test
+/// runs it.
 pub fn system_devices() -> Result<Vec<DeviceInfo>, String> {
     let host = cpal::default_host();
     let most_channels = |device: &cpal::Device| {
@@ -112,16 +170,17 @@ pub fn system_devices() -> Result<Vec<DeviceInfo>, String> {
             .map_or(2, |device| most_channels(&device)),
         rates: Vec::new(),
     }];
-    let devices = host.input_devices().map_err(|error| error.to_string())?;
-    for device in devices {
-        let name = device.to_string();
-        if is_input_device(&name) && !listed.iter().any(|known| known.name == name) {
-            listed.push(DeviceInfo {
-                name,
-                channels: most_channels(&device),
-                rates: Vec::new(),
-            });
-        }
+    let devices: Vec<cpal::Device> = host
+        .input_devices()
+        .map_err(|error| error.to_string())?
+        .collect();
+    let described: Vec<HostInput> = devices.iter().map(HostInput::of).collect();
+    for index in listed_inputs(&described) {
+        listed.push(DeviceInfo {
+            name: described[index].name.clone(),
+            channels: most_channels(&devices[index]),
+            rates: Vec::new(),
+        });
     }
     Ok(listed)
 }
@@ -689,9 +748,12 @@ fn open_system(
     let found = if device.is_empty() {
         host.default_input_device()
     } else {
-        host.input_devices()
+        let mut devices: Vec<cpal::Device> = host
+            .input_devices()
             .map_err(|error| error.to_string())?
-            .find(|candidate| candidate.to_string() == device)
+            .collect();
+        let described: Vec<HostInput> = devices.iter().map(HostInput::of).collect();
+        named_input(&described, device).map(|index| devices.swap_remove(index))
     };
     let opened = found.ok_or_else(|| format!("{} is not there", device_label(device)))?;
     let float: Vec<_> = opened
@@ -853,6 +915,9 @@ pub fn channels_words(channels: InputChannels) -> String {
         InputChannels::Mono(channel) => format!("{} (mono)", u32::from(channel) + 1),
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod device_choice_tests;
 
 #[cfg(test)]
 mod tests {

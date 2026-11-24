@@ -360,6 +360,204 @@ impl Grid {
     }
 }
 
+/// An audio clip's fade handle: a disc in the accent this wide, and this wide under the pointer.
+pub const FADE_HANDLE: f32 = 8.0;
+pub const FADE_HANDLE_HOT: f32 = 11.0;
+/// The dark ring round a fade handle's disc and a warp marker's triangle. Why the theme's
+/// ground: it is the one tone that stands apart from the title strip (2.65:1 or more), the
+/// waveform (10:1) and the accent in all five themes; Gilt's lighter clip body reads 1.47:1 on
+/// the title strip, and Slate's violet only 1.34:1 there without a ring.
+pub const HANDLE_RING: f32 = 1.0;
+/// A pointer this close to a fade handle's centre is on it: the hot disc and its ring, so the
+/// handle drawn hot is the one a press takes.
+pub const FADE_HANDLE_REACH: f32 = FADE_HANDLE_HOT / 2.0 + HANDLE_RING;
+/// The narrowest audio clip that shows its fade handles: room for both rings and a gap.
+pub const FADE_HANDLES_LEAST: f32 = 24.0;
+
+/// One of an audio clip's handles: its fade in's, its fade out's, or (in warp mode) the warp
+/// marker at that index's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipHandle {
+    FadeIn,
+    FadeOut,
+    Warp(usize),
+}
+
+/// Whether an audio clip shows its fade handles: while the pointer is over it or it is
+/// selected, never in warp mode, where its markers' handles take the top of its body. Why hidden
+/// at rest: two light squares on every clip read as notes on the track.
+pub fn shows_fade_handles(hovered: bool, selected: bool, warping: bool) -> bool {
+    (hovered || selected) && !warping
+}
+
+/// How far `frames` of a fade reach into a clip `width` px wide that plays `clip_frames`.
+pub fn fade_reach(frames: u64, clip_frames: u64, width: f32) -> f32 {
+    if clip_frames == 0 {
+        0.0
+    } else {
+        (width * (frames.min(clip_frames) as f32 / clip_frames as f32)).min(width)
+    }
+}
+
+/// The centres of an audio clip's two fade handles (the fade in's, the fade out's), hanging
+/// from the top edge of the body under `rect`'s title strip (`body_top`), a ringed disc's
+/// radius below it: each at its fade's inner end, `reach_in` px from the clip's start and
+/// `reach_out` px from its end, kept that radius inside the clip, so at a fade of 0 both sit
+/// just inside the top corners; none on a clip narrower than [`FADE_HANDLES_LEAST`]. Why
+/// hanging and not centred on the edge: the title's letters fill the strip's lower rows, and a
+/// disc there covered the first letters of every name.
+pub fn fade_handles(
+    rect: Rectangle,
+    body_top: f32,
+    reach_in: f32,
+    reach_out: f32,
+) -> Option<(Point, Point)> {
+    if rect.width < FADE_HANDLES_LEAST {
+        return None;
+    }
+    let inset = FADE_HANDLE / 2.0 + HANDLE_RING;
+    let (first, last) = (rect.x + inset, rect.x + rect.width - inset);
+    let at = |x: f32| Point::new(x.clamp(first, last), body_top + inset);
+    Some((at(rect.x + reach_in), at(rect.x + rect.width - reach_out)))
+}
+
+/// The fade handle of `handles` (centres, as [`fade_handles`] gives them for the fades' reaches
+/// `reaches`) the pointer at `at` is on: within [`FADE_HANDLE_REACH`] of its centre, the nearer
+/// when both are; when both are as near, the longer fade's, the fade out's when they are as
+/// long. Why the longer: a fade that fills the clip puts its handle on the other's, which has
+/// no room to move.
+pub fn fade_handle_at(
+    handles: (Point, Point),
+    reaches: (f32, f32),
+    at: Point,
+) -> Option<ClipHandle> {
+    let (head, tail) = handles;
+    let mut handles = [(tail, ClipHandle::FadeOut), (head, ClipHandle::FadeIn)];
+    if reaches.0 > reaches.1 {
+        handles.reverse();
+    }
+    // `min_by` keeps the first of equals.
+    handles
+        .into_iter()
+        .map(|(centre, handle)| (centre.distance(at), handle))
+        .filter(|&(distance, _)| distance <= FADE_HANDLE_REACH)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, handle)| handle)
+}
+
+/// The shade over a fade: the part of the body above the fade's line from `from` to `to` (left
+/// to right, from the body's foot to its `top` or back), between x `span.0` and `span.1`, as
+/// the corners of a polygon: the top's two, then the line's end and start. `None` when none of
+/// it is in the span. Why cut here: the GPU renderer drops what a clipped frame draws on the
+/// tracks (see [`transient_ticks`]).
+pub fn fade_wedge(from: Point, to: Point, top: f32, span: (f32, f32)) -> Option<[Point; 4]> {
+    let (start, end) = line_between(from, to, span)?;
+    (end.x > start.x).then(|| [Point::new(start.x, top), Point::new(end.x, top), end, start])
+}
+
+/// A warp marker's handle: a downward triangle this wide, [`WARP_HANDLE_HEIGHT`] tall, hanging
+/// from the top of the body on the marker's line, and this wide under the pointer (its height in
+/// proportion). Why a triangle: a fade handle is a disc, and the two must not be taken for each
+/// other.
+pub const WARP_HANDLE: f32 = 9.0;
+pub const WARP_HANDLE_HEIGHT: f32 = 7.0;
+pub const WARP_HANDLE_HOT: f32 = 12.0;
+
+/// The corners of a warp marker's triangle `width` wide on x `x` hanging from `top`: the top's
+/// left and right, then the point below.
+pub fn warp_triangle(x: f32, top: f32, width: f32) -> [Point; 3] {
+    let height = width * WARP_HANDLE_HEIGHT / WARP_HANDLE;
+    [
+        Point::new(x - width / 2.0, top),
+        Point::new(x + width / 2.0, top),
+        Point::new(x, top + height),
+    ]
+}
+/// A transient's mark: a tick this tall from the top of a selected audio clip's body.
+pub const TRANSIENT_TICK: f32 = 4.0;
+/// A transient's mark is this many device pixels wide: a hit's peak, in the waveform's colour,
+/// reaches the body's top at the same place, and one pixel of accent beside it reads poorly.
+pub const TRANSIENT_TICK_DEVICE_PX: f32 = 2.0;
+
+/// The part of the line from `from` to `to` (left to right) between x `span.0` and `span.1`;
+/// `None` when none of it is.
+pub fn line_between(from: Point, to: Point, span: (f32, f32)) -> Option<(Point, Point)> {
+    let (left, right) = span;
+    if to.x < left || from.x > right {
+        return None;
+    }
+    let at = |x: f32| {
+        if to.x == from.x {
+            return Point::new(x, from.y);
+        }
+        let share = (x - from.x) / (to.x - from.x);
+        Point::new(x, from.y + (to.y - from.y) * share)
+    };
+    let start = if from.x < left { at(left) } else { from };
+    let end = if to.x > right { at(right) } else { to };
+    Some((start, end))
+}
+
+/// The marks of `onsets` (frames of the sound) on a clip drawn as `rect` with its body `body`,
+/// playing them through `map`: a [`TRANSIENT_TICK`] tall tick, [`TRANSIENT_TICK_DEVICE_PX`]
+/// device pixels wide on whole device pixels, at the top of the body where each plays; only the
+/// onsets the clip plays, and only ticks wholly inside `body`. Why the cut here and not by the
+/// frame's clip: the GPU renderer reads a clipped frame's bounds against the window rather than
+/// the canvas, and drew none of the ticks clipped that way.
+pub fn transient_ticks(
+    map: &crate::ui::warp_gesture::ClipMap,
+    onsets: &[u64],
+    rect: Rectangle,
+    body: Rectangle,
+    scale_factor: f32,
+) -> Vec<Rectangle> {
+    let scale = if scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let width = TRANSIENT_TICK_DEVICE_PX / scale;
+    let size = Size::new(width, TRANSIENT_TICK.min(body.height));
+    onsets
+        .iter()
+        .filter_map(|&onset| {
+            let song = map.song_of(map.out_of(onset))?;
+            let x = crate::ui::warp_gesture::x_of_frame(
+                rect.x, rect.width, map.start, map.played, song,
+            );
+            let (left, _) = grid_rules::device_line(x, scale);
+            (left >= body.x && left + width <= body.x + body.width)
+                .then(|| Rectangle::new(Point::new(left, body.y), size))
+        })
+        .collect()
+}
+
+/// The warp markers of a clip drawn as `rect` on `map` that it plays: each marker's x (where its
+/// moment plays) and the box its hot triangle ([`WARP_HANDLE_HOT`] wide, hanging from the
+/// body's top, `body_top`) fills, which the pointer is on it in; in the markers' order, `None`
+/// for a marker outside the part the clip plays.
+pub fn warp_handles(
+    rect: Rectangle,
+    body_top: f32,
+    map: &crate::ui::warp_gesture::ClipMap,
+) -> Vec<Option<(f32, Rectangle)>> {
+    let size = Size::new(
+        WARP_HANDLE_HOT,
+        WARP_HANDLE_HOT * WARP_HANDLE_HEIGHT / WARP_HANDLE,
+    );
+    map.markers
+        .iter()
+        .map(|marker| {
+            let song = map.song_of(marker.out)?;
+            let x = crate::ui::warp_gesture::x_of_frame(
+                rect.x, rect.width, map.start, map.played, song,
+            );
+            let reach = Rectangle::new(Point::new(x - WARP_HANDLE_HOT / 2.0, body_top), size);
+            Some((x, reach))
+        })
+        .collect()
+}
+
 /// `clip` drawn in the row whose top is `top`: from its start to its end, a lane tall.
 pub fn clip_rect(grid: &Grid, clip: &Clip, top: f32) -> Rectangle {
     let left = grid.x_of(clip.start);
@@ -643,6 +841,189 @@ mod tests {
 
     use super::*;
     use crate::ui::grid_rules::{beat_alpha, shaded, strong};
+
+    // p39_plain's clip (song frames 60000..96000, its 24000 frames stretched to 36000, no
+    // markers) drawn 360 px wide from x 100, its body from y 30, 26 px tall, at a scale of 1:
+    // onsets 1000 and 9000 play at out 1500 and 13500, song frames 61500 and 73500, so x = 100 +
+    // 360 · 1500 / 36000 = 115 and 100 + 360 · 13500 / 36000 = 235; each tick 2 px wide and 4
+    // tall at y 30. An onset past the sound plays nowhere; at a scale of 2 a tick is 1 px (2
+    // device px). With the body starting at x 236, both lie outside it and none is drawn.
+    #[test]
+    fn a_clips_transients_are_ticks_inside_its_body() {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/p39_plain.json"
+        ))
+        .expect("p39_plain.json");
+        let project = dawsome_engine::project::Project::load_json(&text).expect("loads");
+        let map = crate::ui::warp_gesture::ClipMap::of(
+            &project,
+            dawsome_engine::project::ClipId(1),
+            Some(24_000),
+        )
+        .expect("an audio clip");
+        let rect = Rectangle::new(Point::new(100.0, 20.0), Size::new(360.0, 36.0));
+        let body = Rectangle::new(Point::new(100.0, 30.0), Size::new(360.0, 26.0));
+        let ticks = transient_ticks(&map, &[1_000, 9_000, 30_000], rect, body, 1.0);
+        let at = |x: f32, width: f32| Rectangle::new(Point::new(x, 30.0), Size::new(width, 4.0));
+        assert_eq!(ticks, [at(115.0, 2.0), at(235.0, 2.0)]);
+        let sharp = transient_ticks(&map, &[1_000, 9_000], rect, body, 2.0);
+        assert_eq!(sharp, [at(115.0, 1.0), at(235.0, 1.0)]);
+        let narrow = Rectangle::new(Point::new(236.0, 30.0), Size::new(224.0, 26.0));
+        assert!(transient_ticks(&map, &[1_000, 9_000], rect, narrow, 1.0).is_empty());
+    }
+
+    // A fade line from (100, 50) to (140, 30) cut to x 110..200 starts a quarter along, at
+    // (110, 45); one wholly left of the span is none.
+    #[test]
+    fn a_line_is_cut_to_a_span_of_columns() {
+        let (from, to) = (Point::new(100.0, 50.0), Point::new(140.0, 30.0));
+        assert_eq!(
+            line_between(from, to, (110.0, 200.0)),
+            Some((Point::new(110.0, 45.0), to))
+        );
+        assert_eq!(line_between(from, to, (150.0, 200.0)), None);
+    }
+
+    // A clip drawn from x 100, 200 px wide, its body from y 30: a ringed disc is 8 + 2 · 1 = 10
+    // px across, so the handles hang 5 px under the body's top, y 35, and at fades of 0 sit 5 px
+    // inside the corners, at (105, 35) and (295, 35); fades reaching 40 and 60 px put them at
+    // their inner ends, (140, 35) and (240, 35); a fade reaching 2 px keeps its handle at 105,
+    // one filling the clip puts it at 295 (and 105 for a fade out). At the least width, 24 px,
+    // the centres are 14 px apart, a 4 px gap between the rings; 23 px wide shows none.
+    #[test]
+    fn fade_handles_sit_at_the_fades_inner_ends_inside_the_corners() {
+        let rect = Rectangle::new(Point::new(100.0, 20.0), Size::new(200.0, 36.0));
+        let at = |x: f32| Point::new(x, 35.0);
+        let handles = |reach_in, reach_out| fade_handles(rect, 30.0, reach_in, reach_out);
+        assert_eq!(handles(0.0, 0.0), Some((at(105.0), at(295.0))));
+        assert_eq!(handles(40.0, 60.0), Some((at(140.0), at(240.0))));
+        assert_eq!(handles(2.0, 200.0), Some((at(105.0), at(105.0))));
+        assert_eq!(handles(200.0, 0.0), Some((at(295.0), at(295.0))));
+        let wide = |width: f32| Rectangle::new(rect.position(), Size::new(width, 36.0));
+        assert_eq!(
+            fade_handles(wide(24.0), 30.0, 0.0, 0.0),
+            Some((at(105.0), at(119.0)))
+        );
+        assert_eq!(fade_handles(wide(23.0), 30.0, 0.0, 0.0), None);
+    }
+
+    // The pointer is on a handle within 11 / 2 + 1 = 6.5 px of its centre: on (140, 30)'s at
+    // (146.5, 30) and (140, 36.5), off it at (146.6, 30). Centres 8 px apart (200 and 208): the
+    // nearer takes the pointer, 203 the fade in's (3 px against 5), 205 the fade out's. Both on
+    // 295 (a fade in filling the clip): the fade in's, the longer, which can move; both on 105
+    // (a fade out filling it): the fade out's.
+    #[test]
+    fn the_pointer_is_on_the_nearer_fade_handle_within_its_hot_disc() {
+        let at = |x: f32, y: f32| Point::new(x, y);
+        let apart = (at(140.0, 30.0), at(240.0, 30.0));
+        let on = |handles, reaches, x, y| fade_handle_at(handles, reaches, at(x, y));
+        assert_eq!(
+            on(apart, (40.0, 60.0), 146.5, 30.0),
+            Some(ClipHandle::FadeIn)
+        );
+        assert_eq!(
+            on(apart, (40.0, 60.0), 140.0, 36.5),
+            Some(ClipHandle::FadeIn)
+        );
+        assert_eq!(on(apart, (40.0, 60.0), 146.6, 30.0), None);
+        assert_eq!(
+            on(apart, (40.0, 60.0), 240.0, 25.0),
+            Some(ClipHandle::FadeOut)
+        );
+        let close = (at(200.0, 30.0), at(208.0, 30.0));
+        assert_eq!(
+            on(close, (100.0, 92.0), 203.0, 30.0),
+            Some(ClipHandle::FadeIn)
+        );
+        assert_eq!(
+            on(close, (100.0, 92.0), 205.0, 30.0),
+            Some(ClipHandle::FadeOut)
+        );
+        let corner = |x| (at(x, 30.0), at(x, 30.0));
+        assert_eq!(
+            on(corner(295.0), (200.0, 0.0), 295.0, 30.0),
+            Some(ClipHandle::FadeIn)
+        );
+        assert_eq!(
+            on(corner(105.0), (0.0, 200.0), 105.0, 30.0),
+            Some(ClipHandle::FadeOut)
+        );
+    }
+
+    #[test]
+    fn fade_handles_show_only_on_a_clip_pointed_at_or_selected_out_of_warp_mode() {
+        assert!(!shows_fade_handles(false, false, false), "at rest");
+        assert!(shows_fade_handles(true, false, false), "pointed at");
+        assert!(shows_fade_handles(false, true, false), "selected");
+        assert!(!shows_fade_handles(true, true, true), "warp mode");
+    }
+
+    // A fade in reaching 40 px on a clip from x 100, its body y 30..56: the shade above its line
+    // from (100, 56) to (140, 30) is the triangle (100, 30), (140, 30), (100, 56), the line's end
+    // repeating the top's right corner. Cut to the body's columns from x 110 (the clip scrolled
+    // under the headers), the line starts a quarter along, at (110, 49.5). A fade out reaching
+    // 20 px on a clip ending at x 300: (280, 30), (300, 30), (300, 56), the line's start
+    // repeating the top's left corner. Every corner lies inside the body; a span left of the
+    // fade has none of it.
+    #[test]
+    fn a_fades_shade_is_the_body_above_its_line_cut_to_the_body() {
+        let at = |x: f32, y: f32| Point::new(x, y);
+        let fade_in = (at(100.0, 56.0), at(140.0, 30.0));
+        let whole = fade_wedge(fade_in.0, fade_in.1, 30.0, (100.0, 300.0));
+        assert_eq!(
+            whole,
+            Some([
+                at(100.0, 30.0),
+                at(140.0, 30.0),
+                at(140.0, 30.0),
+                at(100.0, 56.0)
+            ])
+        );
+        let cut = fade_wedge(fade_in.0, fade_in.1, 30.0, (110.0, 300.0));
+        assert_eq!(
+            cut,
+            Some([
+                at(110.0, 30.0),
+                at(140.0, 30.0),
+                at(140.0, 30.0),
+                at(110.0, 49.5)
+            ])
+        );
+        let fade_out = fade_wedge(at(280.0, 30.0), at(300.0, 56.0), 30.0, (100.0, 300.0));
+        assert_eq!(
+            fade_out,
+            Some([
+                at(280.0, 30.0),
+                at(300.0, 30.0),
+                at(300.0, 56.0),
+                at(280.0, 30.0)
+            ])
+        );
+        let body = Rectangle::new(at(100.0, 30.0), Size::new(200.0, 26.0));
+        let inside = |corner: &Point| {
+            (body.x..=body.x + body.width).contains(&corner.x)
+                && (body.y..=body.y + body.height).contains(&corner.y)
+        };
+        for wedge in [whole, cut, fade_out].into_iter().flatten() {
+            assert!(wedge.iter().all(inside), "{wedge:?} inside {body:?}");
+        }
+        assert_eq!(fade_wedge(fade_in.0, fade_in.1, 30.0, (150.0, 300.0)), None);
+    }
+
+    // A warp marker's triangle on x 200 under a body top of 30: 9 px wide, 7 tall, (195.5, 30),
+    // (204.5, 30), (200, 37); hot, 12 wide and 12 · 7 / 9 = 9.33 tall.
+    #[test]
+    fn a_warp_markers_handle_is_a_downward_triangle() {
+        let at = |x: f32, y: f32| Point::new(x, y);
+        assert_eq!(
+            warp_triangle(200.0, 30.0, WARP_HANDLE),
+            [at(195.5, 30.0), at(204.5, 30.0), at(200.0, 37.0)]
+        );
+        let hot = warp_triangle(200.0, 30.0, WARP_HANDLE_HOT);
+        assert_eq!(hot[..2], [at(194.0, 30.0), at(206.0, 30.0)]);
+        assert!((hot[2].y - (30.0 + 28.0 / 3.0)).abs() < 1e-4, "{hot:?}");
+    }
 
     /// A song of one 4/4 at 96 ppq.
     fn common() -> MeterMap {

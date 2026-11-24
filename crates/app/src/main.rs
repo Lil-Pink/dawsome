@@ -307,6 +307,7 @@ fn main() -> ExitCode {
         }
     };
     let drop_monitor = args::take_drop_monitor(&mut raw);
+    let first_start_asked = args::take_first_start(&mut raw);
     let key_monitor = args::take_key_monitor(&mut raw);
     let sample_editor = match args::take_sample_editor(&mut raw) {
         Ok(editor) => editor,
@@ -422,6 +423,7 @@ fn main() -> ExitCode {
         || midi_monitor.is_some()
         || drop_monitor
         || key_monitor
+        || first_start_asked
         || sample_editor.is_some();
     // Before the first thread (the audio stream, the plugin hosts, the toolkit): on a Wayland
     // session the windows open on X11 through XWayland, so the pop-out windows can stay above
@@ -564,15 +566,18 @@ fn main() -> ExitCode {
     let failed = Arc::clone(&script_failed);
     // A run with nobody at the keyboard opens as its flags say (the defaults: the rack alone,
     // 1000 x 560), so its screenshots never depend on how the user's window last closed.
-    let start_window = if scripted || layout_given {
-        settings::StartWindow {
+    // A first start (no window layout kept) also opens the Library with its groups folded.
+    let (start_window, first_start) = if scripted || layout_given {
+        let window = settings::StartWindow {
             panels: args.panels,
             size: args.window_size,
             maximized: false,
-        }
+        };
+        (window, first_start_asked)
     } else {
         let kept = settings::Settings::load(host.settings_file.as_deref());
-        settings::start_window(kept.window.as_ref(), kept.zoom())
+        let window = settings::start_window(kept.window.as_ref(), kept.zoom());
+        (window, kept.first_start())
     };
     let window_position = args.window_position;
     let mut script = args.script;
@@ -633,6 +638,9 @@ fn main() -> ExitCode {
             }
             app.show_load_notes(&load_notes);
             app.opened_maximized(start_window.maximized);
+            if first_start {
+                app.fold_library_for_first_start();
+            }
             app.shoot(shot_window.unwrap_or_default());
             let extra = app.start_extras(&extras, dump_picker.as_deref());
             if let Some(sfz) = &library_preview {

@@ -207,6 +207,8 @@ pub const USAGE: &str = "usage: dawsome-app [[--load] <project.dawsome|project.j
                  headless check)
   --callouts     on: show the first-run notes not yet put away (a scripted run hides them);
                  off: hide them
+  --first-start  open the Library as a first start does: every group folded as it first
+                 shows (a headless check)
   --scroll       end: the views that scroll along time start scrolled to their bar's end (a
                  headless check)
   --drag-over    the starter kit's first sound held from the Library over this channel's
@@ -604,16 +606,26 @@ pub enum EditorOn {
 /// Takes `--drop-monitor` out of `raw`: whether the run prints where each file dropped on its
 /// window lands (a check of the real drop path; such a run writes no settings).
 pub fn take_drop_monitor(raw: &mut Vec<String>) -> bool {
-    let before = raw.len();
-    raw.retain(|word| word != "--drop-monitor");
-    raw.len() != before
+    take_flag(raw, "--drop-monitor")
 }
 
 /// Takes `--key-monitor` out of `raw`: whether the run prints each key a plugin window passes
 /// on and the player's live notes (a check of the real key path; such a run writes no settings).
 pub fn take_key_monitor(raw: &mut Vec<String>) -> bool {
+    take_flag(raw, "--key-monitor")
+}
+
+/// Takes `--first-start` out of `raw`: whether a scripted run's Library opens as a first
+/// start's does, every group folded as it first shows (a headless check; a scripted run is
+/// otherwise never a first start, opening as its flags say).
+pub fn take_first_start(raw: &mut Vec<String>) -> bool {
+    take_flag(raw, "--first-start")
+}
+
+/// Takes every `flag` out of `raw`: whether there was one.
+fn take_flag(raw: &mut Vec<String>, flag: &str) -> bool {
     let before = raw.len();
-    raw.retain(|word| word != "--key-monitor");
+    raw.retain(|word| word != flag);
     raw.len() != before
 }
 

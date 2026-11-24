@@ -16,7 +16,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 # Native file dialogs through the desktop portal (the desktop's own dialog; Wayland and X11),
 # default features: no GTK and no C library to build against.
-rfd = "0.17"
+rfd = "0.18"
 # `tokio` provides `iced::time::every`, which drives the headless screenshot and quit timers;
 # `advanced` the text measure the toolbar fits its notices to one line with;
 # `image-without-codecs` the Help window's pictures, drawn from pixels the `png` crate below
@@ -37,7 +37,7 @@ iced_winit = { version = "0.14", default-features = false }
 png = "0.18"
 # Resamples the engine's output to the device's rate when the device cannot play the project's.
 # Default features only: the optional `log` feature allocates, and the callback must not.
-rubato = "5.0"
+rubato = "5.1"
 # MIDI input ports through the ALSA sequencer on Linux and WinMM on Windows. Default features:
 # `jack` would replace ALSA at build time, and JACK clients reach the sequencer through the sound
 # server's MIDI bridge anyway; `winrt` would replace WinMM, which every Windows has.
@@ -87,16 +87,16 @@ windows-sys = { version = "0.61", features = [
 # Reads `--play-to` WAV files back in the integration tests.
 hound.workspace = true
 # Calls the VST3 test module's own exports (its restart and its entry count) in the tests.
-libloading = "0.8"
+libloading = "0.9"
 # Hashes rendered frames for the known answers compared to the bit.
-sha2 = "0.10"
+sha2 = "0.11"
 
 # The desktop drop's check (tests/desktop_drop.rs, ignored: it needs an X display) is the other
 # X11 client: it finds the app's window and drops a file on it over XDND, as a file manager does.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `xtest`: the tests that type as a keyboard does, on a nested X server of their own only
 # (tests/support/nested_x.rs).
-x11rb = { version = "0.13", features = ["xtest"] }
+x11rb = { version = "0.14", features = ["xtest"] }
 
 # dawsome-app.exe's icon and version details (build.rs, dawsome-app.rc). Listed for every build
 # machine: cargo matches a build dependency's platform against the machine building, and a

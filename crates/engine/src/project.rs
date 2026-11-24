@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::time::{self, MeterMap, MilliBpm, SignatureChange, Ticks, TimeSignature};
+use crate::warp::{ClipWarp, WarpMarker};
 
 pub(crate) mod automation;
 mod edits;
@@ -126,6 +127,22 @@ pub const METER_FORMAT_VERSION: u32 = 10;
 /// build before it would drop the key when it saved, and the user would find a key they set
 /// gone; by the version it refuses the file, saying which versions it reads.
 pub const KEY_FORMAT_VERSION: u32 = 11;
+
+/// The `format_version` this build writes for a project with an audio clip that fades in or out
+/// ([`ClipItem::Audio`]'s `fade_in`, `fade_out`); it reads as version 11 does, with the fields. A
+/// project without one keeps its version and bytes; this version wins over every other. Why its
+/// own version and not a field a build reads past: a build before it would play the clip
+/// unfaded and save it so; by the version it refuses the file, saying which versions it reads.
+/// The short ramp at an edge that cuts into the sound needs none: it is no field, and every
+/// build that has it plays a file the same.
+pub const FADES_FORMAT_VERSION: u32 = 12;
+
+/// The `format_version` this build writes for a project with an audio clip that has warp
+/// markers ([`Playlist::warps`]); it reads as version 12 does, with the table. A project without
+/// one keeps its version and bytes; this version wins over every other. Why its own version: a
+/// build before it would play the clip at one ratio and drop the markers when it saved; by the
+/// version it refuses the file, saying which versions it reads.
+pub const WARP_FORMAT_VERSION: u32 = 13;
 
 /// The most tracks a playlist holds: the range of the project-file playlist item's track index.
 pub const MAX_TRACKS: usize = 500;
@@ -864,6 +881,20 @@ pub struct Playlist {
     pub tracks: BTreeMap<TrackId, Track>,
     #[serde(with = "id_list")]
     pub clips: BTreeMap<ClipId, Clip>,
+    /// The warp markers of each stretched audio clip that has any, in order ([`crate::warp`]):
+    /// an entry only for a clip with markers. Why beside the clips, not in [`ClipItem::Audio`]:
+    /// the item is `Copy`, read by value all over the program, and a list would end that; and
+    /// it keeps every clip without markers byte for byte as it was. Written only when not
+    /// empty, as `[{"clip":<id>,"frames":S,"markers":[{"source":s,"out":o},...]},...]` (S the
+    /// frames of the sound they were set on); any makes the file version
+    /// [`WARP_FORMAT_VERSION`]. Every edit that removes a clip, or its stretch, takes its
+    /// markers with it, and its undo brings them back.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "warp_list"
+    )]
+    pub warps: BTreeMap<ClipId, ClipWarp>,
     /// Written only when there is one.
     #[serde(rename = "loop", default, skip_serializing_if = "Option::is_none")]
     pub loop_range: Option<LoopRange>,
@@ -880,6 +911,7 @@ impl Default for Playlist {
             next_clip_id: ClipId(1),
             tracks,
             clips: BTreeMap::new(),
+            warps: BTreeMap::new(),
             loop_range: None,
         }
     }
@@ -893,6 +925,13 @@ impl Playlist {
     /// Where the song ends: the latest clip end, muted clips included; tick 0 without clips.
     pub fn end(&self) -> Ticks {
         self.clips.values().map(Clip::end).max().unwrap_or(Ticks(0))
+    }
+
+    /// The warp markers of clip `id`: none for a clip without (or a clip that is not there).
+    pub fn warp(&self, id: ClipId) -> &[WarpMarker] {
+        self.warps
+            .get(&id)
+            .map_or(&[], |warp| warp.markers.as_slice())
     }
 }
 
@@ -966,9 +1005,19 @@ impl Clip {
                 frame_offset: 0,
                 gain: 1.0,
                 stretch: None,
+                fade_in: 0,
+                fade_out: 0,
             },
             offset: Ticks(0),
             muted: false,
+        }
+    }
+
+    /// The stretch of an audio clip, the one kind of clip that can hold warp markers.
+    pub fn stretch(&self) -> Option<ClipStretch> {
+        match self.item {
+            ClipItem::Audio { stretch, .. } => stretch,
+            ClipItem::Pattern { .. } | ClipItem::Automation { .. } => None,
         }
     }
 
@@ -1038,6 +1087,15 @@ pub enum ClipItem {
         /// How the file is made longer or shorter before it plays. Written only when set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stretch: Option<ClipStretch>,
+        /// The fade in and the fade out, in frames at the project's rate: from the clip's start
+        /// the gain is scaled by min(1, k / fade_in), k frames in, and towards its end by
+        /// min(1, m / fade_out), m frames before its last; linear, from absolute positions so a
+        /// render is the same for any block size. The fade edit keeps both within the clip.
+        /// Written only when not 0; one makes the file version [`FADES_FORMAT_VERSION`].
+        #[serde(default, skip_serializing_if = "is_zero_frames")]
+        fade_in: u64,
+        #[serde(default, skip_serializing_if = "is_zero_frames")]
+        fade_out: u64,
     },
     /// An automation's points, from tick `offset` of the clip.
     Automation {
@@ -1127,7 +1185,7 @@ pub enum LoadError {
     #[error("not a valid project file: {0}")]
     Json(#[from] serde_json::Error),
     #[error(
-        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8, 9, 10 and 11)"
+        "format_version {0} is not supported (this build reads versions 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12 and 13)"
     )]
     UnsupportedVersion(u32),
     #[error("tempo_bpm {0} is not a positive tempo")]
@@ -1203,6 +1261,8 @@ pub enum ValidationError {
     },
     #[error("the time signature change at tick {at} is not one this build plays: {reason}")]
     InvalidSignatureChange { at: i64, reason: &'static str },
+    #[error("clip {clip}'s warp markers are not ones this build plays: {reason}")]
+    InvalidWarp { clip: u32, reason: &'static str },
     #[error(
         "channel id {id} is not below next_channel_id {next}, so a new channel could reuse it"
     )]
@@ -1486,13 +1546,14 @@ impl Project {
             1 => serde_json::from_str::<v1::ProjectFile>(text)?.into_project()?,
             // Version 4 added the instrument channel, 5 the sound settings, 6 the input channel,
             // 7 its MIDI out, 8 a sound's edits, 9 the synth channel, 10 a time signature
-            // other than 4/4 and 11 the key, and nothing else, so they read with the same shape; a version 2
+            // other than 4/4, 11 the key, 12 an audio clip's fades and 13 its warp markers, and nothing else, so they read with the same shape; a version 2
             // file is a version 4 file without an instrument channel, a version 4 file a version
             // 5 file without sound settings, a version 5 file a version 6 file without an input
             // channel, a version 6 file a version 7 file without a MIDI out, a version 7 file a
             // version 8 file without edits, a version 8 file a version 9 file without a synth
             // channel, a version 9 file a version 10 file in 4/4, and a version 10 file a
-            // version 11 file without a key.
+            // version 11 file without a key, a version 11 file a version 12 file without fades,
+            // and a version 12 file a version 13 file without warp markers.
             FORMAT_VERSION
             | INSTRUMENT_FORMAT_VERSION
             | SOUND_FORMAT_VERSION
@@ -1501,7 +1562,9 @@ impl Project {
             | EDITS_FORMAT_VERSION
             | SYNTH_FORMAT_VERSION
             | METER_FORMAT_VERSION
-            | KEY_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
+            | KEY_FORMAT_VERSION
+            | FADES_FORMAT_VERSION
+            | WARP_FORMAT_VERSION => serde_json::from_str::<Self>(text)?,
             other => return Err(LoadError::UnsupportedVersion(other)),
         };
         project.mixer.adopt_former_native_ids();
@@ -1553,7 +1616,8 @@ impl Project {
     /// The canonical JSON text of this project, in the current format (version 2; 4 when it has
     /// an instrument channel, 5 when a channel holds sound settings, 6 when it has an input
     /// channel, 7 when one of those has a MIDI out, 8 when a sound has edits, 9 when it has a
-    /// synth channel, 10 when its time signature is not 4/4, 11 when it has a key): compact, fields in a fixed order, channels and patterns by
+    /// synth channel, 10 when its time signature is not 4/4, 11 when it has a key, 12 when an
+    /// audio clip fades, 13 when one has warp markers): compact, fields in a fixed order, channels and patterns by
     /// ID, notes by (tick, channel, key). Equal projects give identical bytes, so an undo can be
     /// checked byte for byte.
     ///
@@ -1596,7 +1660,14 @@ impl Project {
                 .patterns
                 .values()
                 .any(|pattern| pattern.time_signature.is_some());
-        let format_version = if self.key.is_some() {
+        let fades = self.playlist.clips.values().any(|clip| {
+            matches!(clip.item, ClipItem::Audio { fade_in, fade_out, .. } if fade_in > 0 || fade_out > 0)
+        });
+        let format_version = if !self.playlist.warps.is_empty() {
+            WARP_FORMAT_VERSION
+        } else if fades {
+            FADES_FORMAT_VERSION
+        } else if self.key.is_some() {
             KEY_FORMAT_VERSION
         } else if meter {
             METER_FORMAT_VERSION
@@ -1807,10 +1878,56 @@ impl Project {
             }
             self.check_clip(id, clip)?;
         }
+        for (&id, warp) in &playlist.warps {
+            self.check_warp(id, warp)?;
+        }
         playlist
             .loop_range
             .as_ref()
             .map_or(Ok(()), |range| self.check_loop(range))
+    }
+
+    /// The frames clip `clip` plays: s(end) − s(start) at the project's rate and tempo; none
+    /// when a tick is past what the timeline counts.
+    pub fn clip_frames(&self, clip: &Clip) -> Option<u64> {
+        let sample = |tick| time::tick_to_sample(tick, self.sample_rate, self.tempo, self.ppq);
+        sample(clip.end())?.checked_sub(sample(clip.start)?)
+    }
+
+    /// The rules clip `id`'s warp markers must follow: the clip is a stretched audio clip, and
+    /// the list keeps every rule of [`crate::warp::problem`] on the sound's frames it holds and
+    /// the stretch's, the last segment's too. The marker edit checks the lists it sets with it.
+    pub(crate) fn check_warp(&self, id: ClipId, warp: &ClipWarp) -> Result<(), ValidationError> {
+        let refused = |reason| ValidationError::InvalidWarp { clip: id.0, reason };
+        let stretch = self
+            .playlist
+            .clips
+            .get(&id)
+            .and_then(Clip::stretch)
+            .ok_or(refused("only a stretched audio clip holds warp markers"))?;
+        warp.problem(stretch.frames)
+            .map_or(Ok(()), |reason| Err(refused(reason)))
+    }
+
+    /// Refuses `more` audio clips when the playlist would then hold more than
+    /// [`MAX_AUDIO_CLIPS`]: the player keeps a source slot for each. Every edit that adds audio
+    /// clips asks it first.
+    pub(crate) fn check_audio_clip_count(&self, more: usize) -> Result<(), ValidationError> {
+        if more == 0 {
+            return Ok(());
+        }
+        let held = self
+            .playlist
+            .clips
+            .values()
+            .filter(|clip| clip.audio_channel().is_some())
+            .count();
+        match held.checked_add(more) {
+            Some(count) if count <= MAX_AUDIO_CLIPS => Ok(()),
+            count => Err(ValidationError::TooManyAudioClips(
+                count.unwrap_or(usize::MAX),
+            )),
+        }
     }
 
     /// The rules one clip must follow: it sits on an existing track and plays what exists (a
@@ -2004,6 +2121,67 @@ struct VersionProbe {
 
 /// Serde for an ID-keyed map stored as a JSON array of objects whose first field is `"id"`,
 /// such as `[{"id":1,"name":"kick",...}]`. Loading rejects an ID that appears twice.
+/// The warps table as the file holds it: one entry per clip,
+/// `{"clip":<id>,"frames":S,"markers":[...]}`, by clip id (the shape of the automation table's
+/// entries, naming the clip they belong to as a clip names its channel). A clip listed twice is
+/// refused.
+mod warp_list {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ClipId;
+    use crate::warp::{ClipWarp, WarpMarker};
+
+    #[derive(Serialize)]
+    struct EntryRef<'a> {
+        clip: &'a ClipId,
+        frames: u64,
+        markers: &'a [WarpMarker],
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Entry {
+        clip: ClipId,
+        frames: u64,
+        markers: Vec<WarpMarker>,
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        map: &BTreeMap<ClipId, ClipWarp>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(map.iter().map(|(clip, warp)| EntryRef {
+            clip,
+            frames: warp.source_frames,
+            markers: &warp.markers,
+        }))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<ClipId, ClipWarp>, D::Error> {
+        let mut map = BTreeMap::new();
+        for Entry {
+            clip,
+            frames,
+            markers,
+        } in Vec::<Entry>::deserialize(deserializer)?
+        {
+            let warp = ClipWarp {
+                source_frames: frames,
+                markers,
+            };
+            if map.insert(clip, warp).is_some() {
+                let message = format_args!("the warp markers of clip {} appear twice", clip.0);
+                return Err(<D::Error as serde::de::Error>::custom(message));
+            }
+        }
+        Ok(map)
+    }
+}
+
 mod id_list {
     use std::collections::BTreeMap;
     use std::fmt::Debug;
@@ -2560,6 +2738,8 @@ mod tests {
             frame_offset: 0,
             gain: 1.0,
             stretch: None,
+            fade_in: 0,
+            fade_out: 0,
         };
         assert_eq!(
             p4_validated(|p| clip_1(p).item = audio),

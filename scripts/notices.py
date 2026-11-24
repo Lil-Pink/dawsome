@@ -65,12 +65,12 @@ LINE = "-" * 78
 # a missing one stops the script, so a crate update that moves them is noticed.
 C_LIBRARIES = (
     {
-        "name": "LAME 3.100",
+        "name": "LAME 4.0",
         "license": "LGPL-2.0-or-later",
         "crate": "mp3lame-sys",
-        "what": "the MP3 encoder, built from the source in mp3lame-sys's lame-3.100/ (MP3 export)",
+        "what": "the MP3 encoder, built from the source in mp3lame-sys's lame-4.0/ (MP3 export)",
         "repository": "https://lame.sourceforge.io",
-        "texts": ("lame-3.100/COPYING", "lame-3.100/LICENSE"),
+        "texts": ("lame-4.0/COPYING", "lame-4.0/LICENSE"),
     },
     {
         "name": "Signalsmith Stretch",

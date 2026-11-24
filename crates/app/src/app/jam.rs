@@ -1072,6 +1072,26 @@ mod tests {
 {"id":8,"name":"Loop","kind":"audio","sample":"hit.wav","volume":1.0,"pan":0.0,"mute":false}],
 "patterns":[{"id":1,"name":"Pattern 1","length_bars":1,"notes":[]}]}"#;
 
+    /// An instrument channel's JSON playing the set at `path`, the path written as a JSON
+    /// string. Why serde_json: a path pasted between quotes by hand is invalid JSON once it holds
+    /// a backslash, as every path on Windows does ("invalid escape").
+    fn instrument_json(id: u32, name: &str, path: &str) -> String {
+        let path = serde_json::to_string(path).expect("a path as JSON");
+        format!(
+            r#"{{"id":{id},"name":"{name}","kind":"instrument","instrument":{path},"volume":1.0,"pan":0.0,"mute":false}}"#
+        )
+    }
+
+    // A Windows path, backslashes and all, makes valid JSON that reads back as the same path.
+    #[test]
+    fn a_windows_path_makes_a_valid_channel() {
+        let path = r"C:\Users\me\dawsome\crates\app/../../tests/fixtures/p36_sets/tone/tone.sfz";
+        let json = instrument_json(2, "Bass", path);
+        let channel: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(channel["instrument"].as_str(), Some(path));
+        assert_eq!(channel["name"].as_str(), Some("Bass"));
+    }
+
     /// [`RACK`] written into a folder of its own named after `test`, its sets' sounds the Jam
     /// fixtures' hit, and an app on it.
     fn rack(test: &str) -> (Folder, App, Player) {
@@ -1753,9 +1773,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("a folder");
         let set = |id: u32, name: &str, set: &str| {
-            format!(
-                r#"{{"id":{id},"name":"{name}","kind":"instrument","instrument":"{FIXTURES}/p36_sets/{set}","volume":1.0,"pan":0.0,"mute":false}}"#
-            )
+            instrument_json(id, name, &format!("{FIXTURES}/p36_sets/{set}"))
         };
         let lead = r#"{"id":4,"name":"Lead","kind":"synth","processor":{"id":"dawsome.synth","params":{}},"volume":1.0,"pan":0.0,"mute":false}"#;
         let project = format!(

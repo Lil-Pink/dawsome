@@ -527,6 +527,12 @@ def long_case():
     frames = [long_frame(k) for k in range(rendered)]
     # The ops on the frames a bar plays: the fade over the first 4800, the gain from 48000 on.
     out = apply(frames, [LONG_OPS[0], op("gain", 48000, rendered, centi_db=-600)])
+    # The clip stops 96000 frames into the ten minutes, so its end ramps over the 2 ms declick
+    # (gen_p38_expected.py's rule, imported here alone: it imports this generator).
+    p38 = module("gen_p38_expected")
+    n_out = p38.declick(LONG_RATE)
+    out = [[f32(v * p38.factor(k, rendered - 1 - k, 0, n_out)) for v in frame]
+           for k, frame in enumerate(out)]
     left, right = stereo_render(out, rendered)
     flat = [x for pair in zip(left, right) for x in pair]
     return {"fixture": "p30_long.json", "sound": "p30_long.wav", "rate": LONG_RATE,

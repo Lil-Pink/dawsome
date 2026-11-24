@@ -3,7 +3,10 @@
 Expected values come from these rules, never from engine code:
   tick->sample  s(t) = floor(t*60*sr*1000 / (mbpm*96))            (the one integer rule)
   audio clip    song sample n in [s(start), s(start+length)) plays file frame frame_offset + n - s(start);
-                frames past the file end are 0; value = frame * ((gain * channel_gain) * pan_side)
+                frames past the file end are 0; value = frame * ((gain * channel_gain) * pan_side);
+                an edge that cuts into the sound (an offset past 0, an end before the sound's)
+                ramps over the 2 ms declick, 88 frames at 44.1 kHz, the frame scaled first:
+                gen_p38_expected.py's rule (its edge_lengths and factor)
   default clip length L = min{L >= 1 : s(start+L) - s(start) >= frames}
   automation    x = (n - S_i)/(S_{i+1} - S_i) in f64, v = v_i + (v_{i+1} - v_i)*f(x),
                 param = min + v*(max - min) in f64, rounded to f32 once; channel volume range 0..4
@@ -28,6 +31,16 @@ def oracle():
     spec.loader.exec_module(module)
     return module
 
+def p38():
+    """gen_p38_expected.py beside this script, whose edge_lengths and factor state the declick."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.dont_write_bytecode = True                   # no __pycache__ beside the fixtures
+    spec = importlib.util.spec_from_file_location("gen_p38", os.path.join(here, "gen_p38_expected.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+P38 = p38()
 PPQ = 96; BAR = 384; BEAT = 96; STEP = 24
 def s(t, sr, mbpm): return t * 60 * sr * 1000 // (mbpm * PPQ)
 def f32(x): return struct.unpack("<f", struct.pack("<f", x))[0]
@@ -124,12 +137,21 @@ out("    default length of a 1000-frame file dropped at tick 384:", default_len(
 EXPECTED["place"] = {"frames": S768, "first": S384, "values": f32list(RAMP48), "default_length": default_len(384, 1000, sr, mb)}
 # ---------------- (2) trim / gain / mute ----------------
 sr, mb = 44100, 120000
+def ramps(name):
+    """Each audio clip of fixture `name`'s (N_in, N_out), by its id: SAW is every clip's sound."""
+    clips = FIX[name]["playlist"]["clips"]
+    return {c["id"]: P38.edge_lengths(clips, c, lambda t: s(t, sr, mb), len(SAW), sr)
+            for c in clips}
+def ramped(value, k, m, lengths): return f32(value * P38.factor(k, m, *lengths))
+TRIM_RAMPS = ramps("p8_trim")
 def trim_frame(n):
     W = s(288, sr, mb)
     if n >= W: n = n - W                                     # song end 288 wraps to 0
-    if n < s(96, sr, mb): return SAW[100 + n]
-    if n < s(192, sr, mb): return 0.0                        # clip 3 muted
-    if n < s(288, sr, mb): return f32(SAW[n - s(192, sr, mb)] * f32(0.5 * 1.0))
+    one, two = s(96, sr, mb), s(192, sr, mb)
+    if n < one: return ramped(SAW[100 + n], n, one - 1 - n, TRIM_RAMPS[1])
+    if n < two: return 0.0                                   # clip 3 muted
+    if n < s(288, sr, mb):
+        return f32(ramped(SAW[n - two], n - two, s(288, sr, mb) - 1 - n, TRIM_RAMPS[2]) * f32(0.5 * 1.0))
     return 0.0
 picks = [0, 22049, 22050, 44099, 44100, 66149, 66150, 88199]
 out("(2) p8_trim --song --bars 1 (88200 frames, wrap at", s(288, sr, mb), "):", ", ".join("%d:%r" % (n, trim_frame(n)) for n in picks))
@@ -138,7 +160,12 @@ W = s(288, sr, mb)
 EXPECTED["trim"] = {"frames": s(384, sr, mb), "spots": [[n, trim_frame(n)] for n in picks],
                     "runs": [[p * W, p * W + s(96, sr, mb), 100, 1.0] for p in (0, 1)]
                           + [[p * W + s(192, sr, mb), p * W + s(288, sr, mb), 0, f32(0.5 * 1.0)] for p in (0, 1)
-                             if p * W + s(192, sr, mb) < s(384, sr, mb)]}
+                             if p * W + s(192, sr, mb) < s(384, sr, mb)],
+                    # The frames the declick ramps, each as trim_frame gives it: the runs' plain
+                    # product holds everywhere else.
+                    "ramped": [[n, trim_frame(n)] for n in range(s(384, sr, mb))
+                               if (n % W < s(96, sr, mb) and min(n % W, s(96, sr, mb) - 1 - n % W) < P38.declick(sr))
+                               or (s(192, sr, mb) <= n % W < s(288, sr, mb) and s(288, sr, mb) - 1 - n % W < P38.declick(sr))]}
 # ---------------- (3) resample ----------------
 n_out = -(-12000 * 44100 // 48000)
 pk = [(p * 44100 / 48000, v) for p, v in ((1000, 0.125), (4800, 0.5), (9600, 0.25))]
@@ -189,13 +216,15 @@ gv = [(n, f32(0.0 + (0.0 + (1.0 - 0.0) * (n - 0) / (S1 - 0)) * (1.0 - 0.0))) for
 out("(6) delay mix automated 0 -> 1 over tick 0..96 (mix range 0..1): set_param calls", len(gv), "first", gv[:3], "last", gv[-2:])
 EXPECTED["grid"] = {"calls": [list(c) for c in gv]}
 # ---------------- (7) streaming spot values ----------------
+STREAM_RAMPS = ramps("p8_stream")
 def stream_frame(song_n):
     total = 0.0
     for c in FIX["p8_stream"]["playlist"]["clips"]:
         a, b = s(c["start"], sr, mb), s(c["start"] + c["length"], sr, mb)
         if a <= song_n < b:
             k = c.get("frame_offset", 0) + song_n - a
-            total += SAW[k] if k < len(SAW) else 0.0
+            value = SAW[k] if k < len(SAW) else 0.0
+            total = f32(total + ramped(value, song_n - a, b - 1 - song_n, STREAM_RAMPS[c["id"]]))
     return total
 def song_pos(o):                                         # output frame -> song sample, loop 480..864 on
     W, R = s(864, sr, mb), s(480, sr, mb)

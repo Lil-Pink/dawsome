@@ -789,6 +789,7 @@ impl App {
                 self.host.set_catalogue(scanned.catalogue);
                 self.scan = None;
                 // The Library lists the catalogue's instruments.
+                self.fold_new_groups();
                 self.browse.cache.clear();
                 match self.session.retry_plugins() {
                     // The notice the failed plugins left gives way to what is still failing.

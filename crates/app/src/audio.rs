@@ -238,13 +238,13 @@ fn alsa_default_card(_: &cpal::DeviceId) -> Option<&str> {
 
 /// The PipeWire node `id` names, when it is one of the PipeWire host's.
 #[cfg(target_os = "linux")]
-fn pipewire_node(id: &cpal::DeviceId) -> Option<&str> {
+pub fn pipewire_node(id: &cpal::DeviceId) -> Option<&str> {
     (id.host() == cpal::HostId::PipeWire).then(|| id.id())
 }
 
 /// No PipeWire host outside Linux.
 #[cfg(not(target_os = "linux"))]
-fn pipewire_node(_: &cpal::DeviceId) -> Option<&str> {
+pub fn pipewire_node(_: &cpal::DeviceId) -> Option<&str> {
     None
 }
 

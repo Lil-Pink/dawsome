@@ -10,6 +10,7 @@ pub mod decode;
 pub mod edited;
 pub mod export;
 pub mod latency;
+pub mod onsets;
 pub mod paths;
 pub mod peaks;
 pub mod record;

@@ -406,6 +406,8 @@ mod tests {
         app.ports = crate::midi::MidiPorts::new(crate::midi::PortSource::Given(vec![
             "Synth:Synth MIDI 1 24:0".to_owned(),
         ]));
+        // Chosen not to play (a first run plays every port), so its row says the out alone.
+        app.settings.midi_inputs = crate::settings::MidiInputs::none();
         let rows = app.library_ports(&[]);
         assert_eq!(rows[0].arrow().as_deref(), Some("\u{2192} out: Synth"));
         change(&mut app, MidiOutChange::Port(None));

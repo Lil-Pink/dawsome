@@ -20,6 +20,7 @@ use dawsome_engine::dsp::sampler::SampleBuffer;
 use dawsome_engine::project::{ChannelKind, ClipItem, ClipStretch, Project, SoundEdits};
 use dawsome_engine::sfz::{self, Ignored};
 use dawsome_engine::source::{ClipSource, MemorySource, SourceRead};
+use dawsome_engine::warp::WarpMarker;
 use sha2::{Digest, Sha256};
 
 use crate::decode::probe;
@@ -192,12 +193,21 @@ struct LoadedSet {
     built: Option<Instrument>,
 }
 
-/// A clip's file as the project names it, the edits it plays through, and how it is stretched.
-type StretchKey = (PathBuf, SoundEdits, ClipStretch);
+/// A clip's file as the project names it, the edits it plays through, and how it is stretched
+/// (with its warp markers).
+type StretchKey = (PathBuf, SoundEdits, ClipStretch, Vec<WarpMarker>);
 
 /// A stretch as it is kept once made: the file as it is on disk, so a rewritten file is
-/// stretched anew, its edits (none: the file itself) and how it is stretched.
-type MadeKey = (FileKey, SoundEdits, ClipStretch);
+/// stretched anew, its edits (none: the file itself) and how it is stretched (with its warp
+/// markers).
+type MadeKey = (FileKey, SoundEdits, ClipStretch, Vec<WarpMarker>);
+
+/// A made stretch's set: all of its key but the markers, which a marker edit changes alone.
+type StretchSet = (FileKey, SoundEdits, ClipStretch);
+
+fn set_of((file, edits, stretch, _): &MadeKey) -> StretchSet {
+    (file.clone(), edits.clone(), *stretch)
+}
 
 /// A stretch the worker finished: as asked for, as kept, and what it gave.
 type MadeStretch = (StretchKey, MadeKey, StretchOutcome);
@@ -240,6 +250,11 @@ pub struct MediaSounds {
     stretched: HashMap<MadeKey, Stretched>,
     /// Stretches the worker is making.
     stretching: HashSet<StretchKey>,
+    /// For each set, the stretch of it made last (by its markers): what a clip plays for now
+    /// while the stretch of its moved markers is made. Why: a marker drag ends in a new render,
+    /// and silence until it is ready would drop the clip out at every drag; a new length or
+    /// mode sounds different anyway, so it stays silent until ready, as it always has.
+    last_stretched: HashMap<StretchSet, MadeKey>,
     /// The stretch worker's queue, once it runs, and what it hands back.
     stretcher: Option<mpsc::Sender<(StretchKey, MadeKey, StretchJob)>>,
     made: (mpsc::Sender<MadeStretch>, mpsc::Receiver<MadeStretch>),
@@ -283,6 +298,7 @@ impl MediaSounds {
             loaded: mpsc::channel(),
             stretched: HashMap::new(),
             stretching: HashSet::new(),
+            last_stretched: HashMap::new(),
             stretcher: None,
             made: mpsc::channel(),
             edited: HashMap::new(),
@@ -409,19 +425,21 @@ impl MediaSounds {
             || !self.editing.is_empty()
     }
 
-    /// Whether the clip of `path` stretched as `stretch` is still being made (of the file, or
-    /// of its edited sound).
-    pub fn is_stretching(&self, path: &Path, stretch: ClipStretch) -> bool {
+    /// Whether the clip of `path` stretched as `stretch` through `warp` is still being made (of
+    /// the file, or of its edited sound), whether it plays silence meanwhile or, after a marker
+    /// edit, the render of its old list: either way what plays is not yet what the clip shows.
+    pub fn is_stretching(&self, path: &Path, stretch: ClipStretch, warp: &[WarpMarker]) -> bool {
         self.stretching
             .iter()
-            .any(|(file, _, made)| file == path && *made == stretch)
+            .any(|(file, _, made, markers)| file == path && *made == stretch && markers == warp)
     }
 
     /// The sound of a clip of `path` played through `edits` (none: the file itself) and
-    /// stretched as `stretch`: made already, found in the cache or made now (offline, or with
-    /// no worker), or, live, made on the worker while the clip plays silence. An edited clip
-    /// stretches the edited sound, once it is made. A file that cannot be stretched plays
-    /// silence, with a notice.
+    /// stretched as `stretch` through the hint's markers: made already, found in the cache or
+    /// made now (offline, or with no worker), or, live, made on the worker while the clip plays
+    /// silence, or for now the stretch of its set made last ([`MediaSounds::last_stretched`]).
+    /// An edited clip stretches the edited sound, once it is made. A file that cannot be
+    /// stretched plays silence, with a notice.
     fn stretched_clip(
         &mut self,
         path: &Path,
@@ -429,15 +447,17 @@ impl MediaSounds {
         stretch: ClipStretch,
         hint: ClipHint,
     ) -> ClipSound {
-        let key = (path.to_path_buf(), edits.clone(), stretch);
+        let warp = hint.warp.to_vec();
+        let key = (path.to_path_buf(), edits.clone(), stretch, warp.clone());
         let made = (
             FileKey::of(&self.file(path), self.rate),
             edits.clone(),
             stretch,
+            warp.clone(),
         );
         if !self.stretched.contains_key(&made) {
             if self.stretching.contains(&key) {
-                return ClipSound::Loading;
+                return self.stretched_for_now(path, &made, hint);
             }
             let edited = if edits.is_empty() {
                 None
@@ -454,6 +474,7 @@ impl MediaSounds {
                 file: self.file(path),
                 rate: self.rate,
                 stretch,
+                warp,
                 cache: self.playback.stretch_dir.clone(),
                 stream_threshold: self.stream_threshold(),
                 edited,
@@ -461,12 +482,17 @@ impl MediaSounds {
             if self.playback.waiting == Waiting::Never
                 && self.queue_stretch(key, made.clone(), &job)
             {
-                return ClipSound::Loading;
+                return self.stretched_for_now(path, &made, hint);
             }
             let outcome = job.run();
             self.keep_stretched(path, made.clone(), outcome);
         }
-        match self.stretched.get(&made).cloned() {
+        self.play_stretched(path, &made, hint)
+    }
+
+    /// The made stretch `made` as a clip plays it: from memory, or streamed from the cache.
+    fn play_stretched(&mut self, path: &Path, made: &MadeKey, hint: ClipHint) -> ClipSound {
+        match self.stretched.get(made).cloned() {
             Some(Stretched::Memory(buffer)) => ClipSound::Memory(buffer),
             Some(Stretched::Cached(file)) => self
                 .stream(path, &file, hint)
@@ -475,17 +501,37 @@ impl MediaSounds {
         }
     }
 
+    /// While `made` is being made: the stretch of its set made last, for now, when there is one
+    /// (another list of markers), else nothing yet.
+    fn stretched_for_now(&mut self, path: &Path, made: &MadeKey, hint: ClipHint) -> ClipSound {
+        let earlier = self
+            .last_stretched
+            .get(&set_of(made))
+            .filter(|earlier| *earlier != made && self.stretched.contains_key(*earlier))
+            .cloned();
+        match earlier {
+            Some(earlier) => ClipSound::ForNow(Box::new(self.play_stretched(path, &earlier, hint))),
+            None => ClipSound::Loading,
+        }
+    }
+
     /// Keeps what a stretch of the clip file `path` gave, and says why when it failed: that
     /// clip plays silence.
     fn keep_stretched(&mut self, path: &Path, made: MadeKey, outcome: StretchOutcome) {
         self.notices.extend(outcome.notices);
-        let stretched = outcome.result.unwrap_or_else(|error| {
-            self.notices.push(SampleNotice::Unstretchable {
-                path: self.file(path),
-                reason: error.to_string(),
-            });
-            Stretched::Memory(SampleBuffer::from(Vec::new()))
-        });
+        let stretched = match outcome.result {
+            Ok(stretched) => {
+                self.last_stretched.insert(set_of(&made), made.clone());
+                stretched
+            }
+            Err(error) => {
+                self.notices.push(SampleNotice::Unstretchable {
+                    path: self.file(path),
+                    reason: error.to_string(),
+                });
+                Stretched::Memory(SampleBuffer::from(Vec::new()))
+            }
+        };
         self.stretched.insert(made, stretched);
     }
 
@@ -998,11 +1044,11 @@ impl Sounds for MediaSounds {
     /// its file, and each one kept is a whole file in memory.
     fn forget_unused(&mut self, project: &Project) {
         if !self.stretched.is_empty() {
-            let playing: HashSet<MadeKey> = project
+            let mut playing: HashSet<MadeKey> = project
                 .playlist
                 .clips
-                .values()
-                .filter_map(|clip| {
+                .iter()
+                .filter_map(|(&id, clip)| {
                     let ClipItem::Audio {
                         channel,
                         stretch: Some(stretch),
@@ -1013,9 +1059,14 @@ impl Sounds for MediaSounds {
                     };
                     let channel = project.channels.get(&channel)?;
                     let file = FileKey::of(&self.file(&channel.sample), self.rate);
-                    Some((file, channel.edits.clone(), stretch))
+                    let warp = project.playlist.warp(id).to_vec();
+                    Some((file, channel.edits.clone(), stretch, warp))
                 })
                 .collect();
+            // The last made of each set a clip plays stays, to play for now.
+            let sets: HashSet<StretchSet> = playing.iter().map(set_of).collect();
+            self.last_stretched.retain(|set, _| sets.contains(set));
+            playing.extend(self.last_stretched.values().cloned());
             self.stretched.retain(|made, _| playing.contains(made));
         }
         // The edited sounds the channels play, and the last made of each file they play.
@@ -1344,6 +1395,7 @@ mod tests {
     use dawsome_engine::realtime;
     use dawsome_engine::time::Ticks;
     use dawsome_engine::transport::Control;
+    use dawsome_engine::warp::ClipWarp;
 
     use super::*;
 
@@ -1518,11 +1570,12 @@ mod tests {
         fs::remove_dir_all(&dir).expect("removed");
     }
 
-    fn hint() -> ClipHint {
+    fn hint() -> ClipHint<'static> {
         ClipHint {
             first_frame: 0,
             loop_frame: None,
             stretch: None,
+            warp: &[],
         }
     }
 
@@ -1789,6 +1842,80 @@ mod tests {
         }
     }
 
+    /// The frames of a clip's sound held in memory, and whether it is one for now.
+    fn held(sound: ClipSound) -> (Vec<f32>, bool) {
+        match sound {
+            ClipSound::Memory(buffer) => (buffer.samples().to_vec(), false),
+            ClipSound::ForNow(sound) => (held(*sound).0, true),
+            ClipSound::Stream(_) | ClipSound::Loading => panic!("a sound in memory"),
+        }
+    }
+
+    // Live, a warped clip whose markers move plays the stretch of its old list for now while
+    // the new one is made, and that stretch is kept while it waits even when no clip plays its
+    // list any more; a new length has no earlier stretch of its own, so it waits in silence.
+    #[test]
+    fn live_moved_markers_play_the_last_stretch_of_the_same_length_meanwhile() {
+        let mut sounds = MediaSounds::new(&fixtures(), 48_000, live(None, None));
+        let file = Path::new("p39_sound/tone.wav");
+        const ONE: [WarpMarker; 1] = [WarpMarker {
+            source: 12_000,
+            out: 24_000,
+        }];
+        const TWO: [WarpMarker; 1] = [WarpMarker {
+            source: 12_000,
+            out: 20_000,
+        }];
+        let warped = |warp: &'static [WarpMarker], frames| ClipHint {
+            stretch: Some(ClipStretch {
+                mode: StretchMode::Resample,
+                frames,
+                pitch: 0,
+            }),
+            warp,
+            ..hint()
+        };
+        let (one, two) = (&ONE, &TWO);
+        assert!(matches!(
+            sounds.clip(file, warped(one, 36_000)),
+            Ok(ClipSound::Loading)
+        ));
+        wait_for(&mut sounds, file);
+        let (first, for_now) = held(sounds.clip(file, warped(one, 36_000)).expect("infallible"));
+        assert!(!for_now && first.len() == 36_000);
+        let (meanwhile, for_now) =
+            held(sounds.clip(file, warped(two, 36_000)).expect("infallible"));
+        assert!(for_now && sounds.is_loading(file));
+        assert_eq!(meanwhile, first, "the stretch of the list it had");
+        // The clip whose new list is being made says it is stretching; one whose list is in,
+        // with the same stretch, does not.
+        let stretch = warped(two, 36_000).stretch.expect("stretched");
+        assert!(sounds.is_stretching(file, stretch, two));
+        assert!(!sounds.is_stretching(file, stretch, one));
+        let mut moved = Project::load_json(
+            &fs::read_to_string(fixtures().join("p39_warp1.json")).expect("p39_warp1"),
+        )
+        .expect("loads");
+        moved.playlist.warps.insert(
+            ClipId(1),
+            ClipWarp {
+                source_frames: 24_000,
+                markers: two.to_vec(),
+            },
+        );
+        sounds.forget_unused(&moved);
+        let (still, for_now) = held(sounds.clip(file, warped(two, 36_000)).expect("infallible"));
+        assert!(for_now && still == first, "kept while the new one is made");
+        wait_for(&mut sounds, file);
+        let (second, for_now) = held(sounds.clip(file, warped(two, 36_000)).expect("infallible"));
+        assert!(!for_now && second.len() == 36_000 && second != first);
+        assert!(matches!(
+            sounds.clip(file, warped(two, 30_000)),
+            Ok(ClipSound::Loading)
+        ));
+        wait_for(&mut sounds, file);
+    }
+
     // Live, one op past a short sound held in memory (the file, for a first op) is applied on
     // this thread at once; a list that is not is made on the worker while the channel plays, for
     // now, the edited sound made last, and once in it is kept.
@@ -1865,6 +1992,7 @@ mod tests {
             first_frame: 0,
             loop_frame: None,
             stretch: None,
+            warp: &[],
         };
         let meanwhile = sounds.edited_clip(file, &edits, hint).expect("infallible");
         assert!(meanwhile.for_now);

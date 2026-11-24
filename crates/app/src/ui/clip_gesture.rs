@@ -9,9 +9,10 @@ use std::fmt;
 use dawsome_engine::edit::Edit;
 use dawsome_engine::project::{
     Clip, ClipId, ClipItem, ClipStretch, LoopRange, PatternId, Project, StretchMode, TrackId,
-    STRETCH_PITCH_RANGE,
+    MAX_AUDIO_CLIPS, STRETCH_PITCH_RANGE,
 };
 use dawsome_engine::time::{self, MeterMap, MeterUnit, Ticks};
+use dawsome_engine::warp::{self, ClipWarp};
 
 use crate::ui::note_gesture::{snap_down, snap_nearest};
 use crate::ui::playlist_layout::LoopEdge;
@@ -217,6 +218,9 @@ pub enum StretchRefused {
     Ratio,
     /// The stretched file would be shorter than the `shortest` frames a time-stretch can make.
     TooShort { shortest: u64 },
+    /// The clip's warp markers, scaled to the new length, would break a rule (a part between
+    /// them stretched past a quarter or four times, or two closer than the least spacing).
+    Warp,
 }
 
 /// `value · num / den` rounded half up, in exact integers; `None` past `u64::MAX` or for a
@@ -304,6 +308,17 @@ pub fn stretched(
     }
     if stretch.mode == StretchMode::Stretch && frames < shortest {
         return Err(StretchRefused::TooShort { shortest });
+    }
+    // The stretch edit scales the markers by new / old and refuses a list that then breaks a
+    // rule; the gesture says so rather than leave the drag unexplained.
+    if let Some(warp) = project.playlist.warps.get(&id) {
+        let scaled = ClipWarp {
+            markers: warp::scaled(&warp.markers, from, frames),
+            ..warp.clone()
+        };
+        if scaled.problem(frames).is_some() {
+            return Err(StretchRefused::Warp);
+        }
     }
     Ok(Some(Edit::SetClipStretch {
         clip: id,
@@ -414,6 +429,279 @@ pub fn duplicated(project: &Project, ids: &BTreeSet<ClipId>) -> Option<(Edit, BT
     Some((edit, copies))
 }
 
+/// Why a split changed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitRefused {
+    /// The song would hold more than [`MAX_AUDIO_CLIPS`] audio clips.
+    TooManyAudioClips,
+}
+
+/// The edit Split commits on the clips `ids` at song tick `tick`, and the IDs of the parts it
+/// adds. Each clip `tick` falls strictly inside is cut there: the left part keeps its start and
+/// ends at `tick`; the right part is a new clip from `tick` to the old end that plays on from
+/// where the left stops, its audio frame offset moved by s(tick) − s(start) (stretched frames on
+/// a stretched clip), a pattern's or an automation's offset by the ticks. Why the offset is not
+/// reduced by the pattern's length: the right part then plays what the whole clip did after
+/// `tick` even once the pattern is made longer or shorter. One transaction, so one undo step: the
+/// lefts resized, then the rights placed from `next_clip_id` in the order of the cut clips' IDs.
+/// `Ok(None)` when `tick` falls inside none of them.
+/// Why Crossfade did nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossfadeRefused {
+    /// The selection is not two audio clips.
+    NotTwoAudioClips,
+    /// The two are on different tracks.
+    OtherTracks,
+    /// The later starts where the earlier has ended.
+    NoOverlap,
+    /// The later ends before the earlier does: the earlier's fade out, which counts back from
+    /// its own end, would miss the overlap.
+    Contained,
+}
+
+/// Crossfade on the clips `ids`: exactly two audio clips on one track that overlap. The earlier
+/// (by start, then ID) fades out and the later fades in over the frames they share, s(the
+/// earlier end of the two) − s(the later start), each fade edit clamped to its clip; one step.
+/// `None` when both already fade so.
+pub fn crossfade(
+    project: &Project,
+    ids: &BTreeSet<ClipId>,
+) -> Result<Option<Edit>, CrossfadeRefused> {
+    let clips: Vec<(ClipId, &Clip)> = ids
+        .iter()
+        .filter_map(|id| Some((*id, project.playlist.clips.get(id)?)))
+        .filter(|(_, clip)| clip.audio_channel().is_some())
+        .collect();
+    let [mut earlier, mut later] = clips[..] else {
+        return Err(CrossfadeRefused::NotTwoAudioClips);
+    };
+    if ids.len() != 2 {
+        return Err(CrossfadeRefused::NotTwoAudioClips);
+    }
+    if (later.1.start, later.0) < (earlier.1.start, earlier.0) {
+        std::mem::swap(&mut earlier, &mut later);
+    }
+    if earlier.1.track != later.1.track {
+        return Err(CrossfadeRefused::OtherTracks);
+    }
+    let shared_end = earlier.1.end().min(later.1.end());
+    if shared_end <= later.1.start {
+        return Err(CrossfadeRefused::NoOverlap);
+    }
+    if later.1.end() < earlier.1.end() {
+        return Err(CrossfadeRefused::Contained);
+    }
+    let sample =
+        |at: Ticks| time::tick_to_sample(at, project.sample_rate, project.tempo, project.ppq);
+    let overlap = sample(shared_end)
+        .zip(sample(later.1.start))
+        .and_then(|(end, start)| end.checked_sub(start))
+        .ok_or(CrossfadeRefused::NoOverlap)?;
+    let (
+        ClipItem::Audio {
+            fade_in: earlier_in,
+            fade_out: earlier_out,
+            ..
+        },
+        ClipItem::Audio {
+            fade_in: later_in,
+            fade_out: later_out,
+            ..
+        },
+    ) = (earlier.1.item, later.1.item)
+    else {
+        return Err(CrossfadeRefused::NotTwoAudioClips);
+    };
+    // What the two fade edits leave, clamped as they clamp: when that is what the clips hold,
+    // the command changes nothing and is no edit (no undo step).
+    let frames = |clip: &Clip| project.clip_frames(clip).unwrap_or(0);
+    let (earlier_frames, later_frames) = (frames(earlier.1), frames(later.1));
+    let earlier_kept = earlier_in.min(earlier_frames);
+    let earlier_new = (earlier_kept, overlap.min(earlier_frames - earlier_kept));
+    let later_kept = overlap.min(later_frames);
+    let later_new = (later_kept, later_out.min(later_frames - later_kept));
+    if earlier_new == (earlier_in, earlier_out) && later_new == (later_in, later_out) {
+        return Ok(None);
+    }
+    Ok(Some(Edit::Transaction(vec![
+        Edit::SetClipFades {
+            clip: earlier.0,
+            fade_in: earlier_in,
+            fade_out: overlap,
+        },
+        Edit::SetClipFades {
+            clip: later.0,
+            fade_in: overlap,
+            fade_out: later_out,
+        },
+    ])))
+}
+
+pub fn split(
+    project: &Project,
+    ids: &BTreeSet<ClipId>,
+    tick: Ticks,
+) -> Result<Option<(Edit, BTreeSet<ClipId>)>, SplitRefused> {
+    let sample =
+        |at: Ticks| time::tick_to_sample(at, project.sample_rate, project.tempo, project.ppq);
+    let mut edits = Vec::new();
+    let mut rights = Vec::new();
+    let mut marked = Vec::new();
+    for &id in ids {
+        let Some(clip) = project.playlist.clips.get(&id) else {
+            continue;
+        };
+        if !(clip.start < tick && tick < clip.end()) {
+            continue;
+        }
+        let mut right = Clip {
+            start: tick,
+            length: Ticks(clip.end().0 - tick.0),
+            ..clip.clone()
+        };
+        match &mut right.item {
+            ClipItem::Audio {
+                frame_offset,
+                fade_in,
+                ..
+            } => {
+                let moved = sample(tick)
+                    .zip(sample(clip.start))
+                    .and_then(|(at, start)| at.checked_sub(start))
+                    .and_then(|moved| frame_offset.checked_add(moved));
+                let Some(moved) = moved else {
+                    continue;
+                };
+                *frame_offset = moved;
+                // The fade in stays on the left part's start, the fade out on the right part's
+                // end: the cut itself is no fade.
+                *fade_in = 0;
+            }
+            ClipItem::Pattern { .. } | ClipItem::Automation { .. } => {
+                right.offset = Ticks(clip.offset.0.saturating_add(tick.0 - clip.start.0));
+            }
+        }
+        edits.push(Edit::ResizeClip {
+            id,
+            length: Ticks(tick.0 - clip.start.0),
+        });
+        if let ClipItem::Audio {
+            fade_in, fade_out, ..
+        } = clip.item
+        {
+            // The stored fade in stays whole, even past the left part's end (the render's
+            // min(1, k / N) holds it), so an undo and the generator's rule agree.
+            if fade_out > 0 {
+                edits.push(Edit::RestoreClipFades {
+                    clip: id,
+                    fade_in,
+                    fade_out: 0,
+                });
+            }
+        }
+        rights.push(right);
+        // Markers describe the whole sound's map and a clip is a window on it, so the right
+        // part plays through the very list the clip had.
+        marked.push(project.playlist.warps.get(&id).cloned());
+    }
+    if rights.is_empty() {
+        return Ok(None);
+    }
+    let audio = |clips: &mut dyn Iterator<Item = &Clip>| {
+        clips.filter(|clip| clip.audio_channel().is_some()).count()
+    };
+    let held = audio(&mut project.playlist.clips.values());
+    if held + audio(&mut rights.iter()) > MAX_AUDIO_CLIPS {
+        return Err(SplitRefused::TooManyAudioClips);
+    }
+    let first = project.playlist.next_clip_id;
+    // IDs past u32's end are left out here; the placing edit refuses them.
+    let new: BTreeSet<ClipId> = (0..rights.len())
+        .filter_map(|k| first.0.checked_add(u32::try_from(k).ok()?))
+        .map(ClipId)
+        .collect();
+    edits.push(Edit::PlaceClips {
+        first,
+        clips: rights,
+    });
+    let warps = new
+        .iter()
+        .zip(marked)
+        .filter_map(|(&clip, warp)| Some((clip, warp?)));
+    edits.extend(warps.map(|(clip, warp)| Edit::SetClipWarp {
+        clip,
+        warp: Some(warp),
+    }));
+    Ok(Some((Edit::Transaction(edits), new)))
+}
+
+/// The ticks a slip's drag of `dragged` moves the audio of a clip starting at `start`, snapped
+/// as a move snaps: whole units of `grid` from the line the clip starts on. Past the song's start
+/// (where a grid has no lines) a drag to the left is the mirror of the same drag to the right.
+pub fn slip_ticks(start: Ticks, dragged: Ticks, grid: SnapGrid) -> Ticks {
+    let line = grid.down(start).0;
+    let to = line.saturating_add(dragged.0);
+    if to >= 0 {
+        Ticks(grid.nearest(Ticks(to)).0 - line)
+    } else {
+        let mirrored = line.saturating_sub(dragged.0);
+        Ticks(line - grid.nearest(Ticks(mirrored)).0)
+    }
+}
+
+/// The frame offset audio clip `clip` has after a slip of `ticks` (already snapped): the frames
+/// F the ticks span from its start (s(start + d) − s(start), and the mirror for a drag to the
+/// left, so a slip and its opposite cancel), taken off its offset, which stays from frame 0 to
+/// the last frame: the stretched file's on a stretched clip, else the sound's of `sound_frames`
+/// frames when known, else with no upper stop. Dragging right plays earlier audio, so the
+/// picture follows the hand. `None` for a clip that is not audio.
+pub fn slipped_offset(
+    project: &Project,
+    clip: &Clip,
+    ticks: Ticks,
+    sound_frames: Option<u64>,
+) -> Option<u64> {
+    let ClipItem::Audio {
+        frame_offset,
+        stretch,
+        ..
+    } = clip.item
+    else {
+        return None;
+    };
+    let sample =
+        |at: Ticks| time::tick_to_sample(at, project.sample_rate, project.tempo, project.ppq);
+    let reach = Ticks(clip.start.0.saturating_add(ticks.0.saturating_abs()));
+    let frames = i128::from(sample(reach)?.checked_sub(sample(clip.start)?)?);
+    let frames = if ticks.0 < 0 { -frames } else { frames };
+    let last = match stretch {
+        Some(stretch) => Some(stretch.frames.saturating_sub(1)),
+        None => sound_frames.map(|frames| frames.saturating_sub(1)),
+    };
+    let offset = (i128::from(frame_offset) - frames).max(0);
+    let offset = last.map_or(offset, |last| offset.min(i128::from(last)));
+    u64::try_from(offset).ok()
+}
+
+/// The edit a slip of `ticks` on audio clip `id` commits: the clip's start and length kept, its
+/// frame offset moved ([`slipped_offset`]). `None` when the offset stays or the clip is not audio.
+pub fn slipped(
+    project: &Project,
+    id: ClipId,
+    ticks: Ticks,
+    sound_frames: Option<u64>,
+) -> Option<Edit> {
+    let clip = project.playlist.clips.get(&id)?;
+    let (_, frame_offset, _) = audio_clip(project, id)?;
+    let offset = slipped_offset(project, clip, ticks, sound_frames)?;
+    (offset != frame_offset).then_some(Edit::TrimAudioClip {
+        clip: id,
+        start: clip.start,
+        length: clip.length,
+        frame_offset: offset,
+    })
+}
+
 /// A loop range drawn from tick `press` to tick `cursor`: every grid cell from the one pressed
 /// to the one under the cursor, switched on, and at least `step` long so a pass is never empty.
 pub fn drawn_loop(press: Ticks, cursor: Ticks, grid: SnapGrid, step: Ticks) -> LoopRange {
@@ -455,6 +743,7 @@ mod tests {
     const P4_TWO_CLIPS: &str = include_str!("../../../../tests/fixtures/p4_two_clips.json");
     const P4_MESSY: &str = include_str!("../../../../tests/fixtures/p4_messy.json");
     const P9_STRETCH_UI: &str = include_str!("../../../../tests/fixtures/p9_stretch_ui.json");
+    const P39_WARP1: &str = include_str!("../../../../tests/fixtures/p39_warp1.json");
 
     /// p9_tone440.wav is one second at 44.1 kHz.
     const TONE: u64 = 44_100;
@@ -539,6 +828,26 @@ mod tests {
             Ok(None),
             "it plays none of its audio"
         );
+    }
+
+    // gen_p39's "last_segment_ratio": p39_warp1 (S 24000, T 36000, marker (12000, 24000), the
+    // clip 240..384 at 250 frames a tick) Alt-dragged to end at 269, 29 ticks: T 7250, a uniform
+    // ratio of 0.30 that fits, but the marker scales to (12000, 4833) and its last part, 12000
+    // frames of sound made 2417, is under a quarter. Refused, with nothing changed; to 300 (60
+    // ticks, T 15000, the marker (12000, 10000), the last part 12000 made 5000) it stretches.
+    #[test]
+    fn p39_an_alt_drag_that_breaks_the_warp_markers_is_refused() {
+        let project = load(P39_WARP1);
+        assert_eq!(
+            stretched(&project, ClipId(1), Ticks(269), 24_000, SHORTEST),
+            Err(StretchRefused::Warp)
+        );
+        let Ok(Some(Edit::SetClipStretch { stretch, .. })) =
+            stretched(&project, ClipId(1), Ticks(300), 24_000, SHORTEST)
+        else {
+            panic!("a stretch");
+        };
+        assert_eq!(stretch.map(|stretch| stretch.frames), Some(15_000));
     }
 
     // Both lengths scale half up: from an offset of 4100 (40000 frames played) to a bar (88200):
@@ -681,6 +990,299 @@ mod tests {
 
     fn load(text: &str) -> Project {
         Project::load_json(text).expect("fixture loads")
+    }
+
+    /// A fixture's text, as the generator wrote it.
+    fn fixture(name: &str) -> String {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/");
+        std::fs::read_to_string(format!("{path}{name}")).expect("a p37 fixture")
+    }
+
+    fn p37() -> serde_json::Value {
+        serde_json::from_str(&fixture("p37_expected.json")).expect("p37_expected.json parses")
+    }
+
+    fn ids_of(value: &serde_json::Value) -> BTreeSet<ClipId> {
+        let ids = value.as_array().expect("ids");
+        ids.iter()
+            .map(|id| ClipId(id.as_u64().expect("an id") as u32))
+            .collect()
+    }
+
+    // gen_p37's four splits: each is one transaction whose document is the generator's (the
+    // lefts shortened, the rights from next_clip_id in the order of the cut clips' ids, their
+    // offsets by s(t) - s(start) or in ticks) and whose undo gives back the file's bytes.
+    #[test]
+    fn p37_a_split_is_one_step_to_the_generators_document_and_back() {
+        let want = p37();
+        for (name, case) in want["cuts"].as_object().expect("cuts") {
+            let before = fixture(case["fixture"].as_str().expect("fixture"));
+            let mut project = load(&before);
+            let tick = Ticks(case["tick"].as_i64().expect("tick"));
+            let Ok(Some((change, new))) = split(&project, &ids_of(&case["ids"]), tick) else {
+                panic!("{name}: a split");
+            };
+            assert!(matches!(change, Edit::Transaction(_)), "{name}: one step");
+            assert_eq!(new, ids_of(&case["new"]), "{name}");
+            let applied = dawsome_engine::edit::apply(&mut project, change).expect("applies");
+            let after = project.to_json().expect("saves");
+            assert_eq!(after, case["after"].as_str().expect("after"), "{name}");
+            assert_eq!(
+                after + "\n",
+                fixture(case["cut"].as_str().expect("cut")),
+                "{name}: the file the command line renders"
+            );
+            dawsome_engine::edit::apply(&mut project, applied.inverse).expect("undoes");
+            assert_eq!(project.to_json().expect("saves") + "\n", before, "{name}");
+        }
+    }
+
+    // gen_p38's faded clip split: the left part keeps its fade in and loses its fade out, the
+    // right part the reverse (0 at the cut), in one step whose undo gives back the file's bytes.
+    #[test]
+    fn p38_a_split_keeps_each_fade_on_its_outer_edge() {
+        let want: serde_json::Value =
+            serde_json::from_str(&fixture("p38_expected.json")).expect("p38_expected.json parses");
+        let case = &want["split"];
+        let before = fixture(case["fixture"].as_str().expect("fixture"));
+        let mut project = load(&before);
+        let tick = Ticks(case["tick"].as_i64().expect("tick"));
+        let ids = BTreeSet::from([ClipId(case["clip"].as_u64().expect("clip") as u32)]);
+        let Ok(Some((change, _))) = split(&project, &ids, tick) else {
+            panic!("a split");
+        };
+        assert!(matches!(change, Edit::Transaction(_)), "one step");
+        let applied = dawsome_engine::edit::apply(&mut project, change).expect("applies");
+        let after = project.to_json().expect("saves");
+        assert_eq!(after, case["after"].as_str().expect("after"));
+        dawsome_engine::edit::apply(&mut project, applied.inverse).expect("undoes");
+        assert_eq!(project.to_json().expect("saves") + "\n", before);
+    }
+
+    // gen_p39's warped clip split at 300, without fades and with them: both parts hold the whole
+    // marker list (the generator's p39_warp3_split and p39_warp3_faded_split, whose renders are
+    // the uncut clip's bits); one step, undone to the file's bytes and redone to the split's.
+    #[test]
+    fn p39_a_split_warped_clip_gives_both_parts_the_whole_list_and_undoes_exactly() {
+        for (whole, cut) in [
+            ("p39_warp3.json", "p39_warp3_split.json"),
+            ("p39_warp3_faded.json", "p39_warp3_faded_split.json"),
+        ] {
+            let before = fixture(whole);
+            let mut project = load(&before);
+            let Ok(Some((change, new))) = split(&project, &BTreeSet::from([ClipId(1)]), Ticks(300))
+            else {
+                panic!("{whole}: a split");
+            };
+            assert_eq!(new, BTreeSet::from([ClipId(2)]));
+            let applied = dawsome_engine::edit::apply(&mut project, change).expect("applies");
+            let after = project.to_json().expect("saves");
+            assert_eq!(after + "\n", fixture(cut), "{whole}");
+            let undone =
+                dawsome_engine::edit::apply(&mut project, applied.inverse).expect("undoes");
+            assert_eq!(
+                project.to_json().expect("saves") + "\n",
+                before,
+                "{whole}: undone"
+            );
+            dawsome_engine::edit::apply(&mut project, undone.inverse).expect("redoes");
+            assert_eq!(
+                project.to_json().expect("saves") + "\n",
+                fixture(cut),
+                "{whole}: redone"
+            );
+        }
+    }
+
+    // gen_p38's splits inside a fade in (p38_split at 205, with a fade out; p38_fade_in at 305,
+    // without): the left part keeps its stored fade in whole and no fade out, the right part no
+    // fade in and the stored fade out, the generator's documents; one step, undone to the
+    // file's bytes and redone to the split's.
+    #[test]
+    fn p38_a_split_inside_a_fade_keeps_the_stored_fades_and_undoes_exactly() {
+        let want: serde_json::Value =
+            serde_json::from_str(&fixture("p38_expected.json")).expect("p38_expected.json parses");
+        for case in want["split_inside"].as_array().expect("split_inside") {
+            let name = case["fixture"].as_str().expect("fixture");
+            let before = fixture(name);
+            let mut project = load(&before);
+            let tick = Ticks(case["tick"].as_i64().expect("tick"));
+            let ids = BTreeSet::from([ClipId(1)]);
+            let Ok(Some((change, _))) = split(&project, &ids, tick) else {
+                panic!("{name}: a split");
+            };
+            let applied = dawsome_engine::edit::apply(&mut project, change).expect("applies");
+            let after = project.to_json().expect("saves");
+            assert_eq!(after, case["after"].as_str().expect("after"), "{name}");
+            let undone =
+                dawsome_engine::edit::apply(&mut project, applied.inverse).expect("undoes");
+            assert_eq!(
+                project.to_json().expect("saves") + "\n",
+                before,
+                "{name}: undone"
+            );
+            dawsome_engine::edit::apply(&mut project, undone.inverse).expect("redoes");
+            assert_eq!(project.to_json().expect("saves"), after, "{name}: redone");
+        }
+    }
+
+    // Crossfade on p38_crossfade with clip 1 given a fade in nearly its whole length (25000 of
+    // 26000 frames, so its fade out can only take the 1000 left of the 6000 overlap) and its
+    // fades taken off clip 2: one step, undone to the bytes and redone; pressed again on the
+    // pair it left, it changes nothing, so it is no edit at all.
+    #[test]
+    fn crossfade_undoes_to_the_bytes_and_again_is_no_edit() {
+        let mut project = load(&fixture("p38_crossfade.json"));
+        for (clip, fade_in) in [(ClipId(1), 25000), (ClipId(2), 0)] {
+            let set = Edit::SetClipFades {
+                clip,
+                fade_in,
+                fade_out: 0,
+            };
+            dawsome_engine::edit::apply(&mut project, set).expect("sets");
+        }
+        let ids = BTreeSet::from([ClipId(1), ClipId(2)]);
+        let before = project.to_json().expect("saves");
+        let Ok(Some(change)) = crossfade(&project, &ids) else {
+            panic!("a crossfade");
+        };
+        let applied = dawsome_engine::edit::apply(&mut project, change).expect("applies");
+        let after = project.to_json().expect("saves");
+        assert_eq!(
+            crossfade(&project, &ids),
+            Ok(None),
+            "again: nothing to change"
+        );
+        let undone = dawsome_engine::edit::apply(&mut project, applied.inverse).expect("undoes");
+        assert_eq!(project.to_json().expect("saves"), before);
+        dawsome_engine::edit::apply(&mut project, undone.inverse).expect("redoes");
+        assert_eq!(project.to_json().expect("saves"), after);
+    }
+
+    // Crossfade on a clip that holds the other whole (clip 2 moved to 250..300, inside clip 1's
+    // 200..304): the earlier clip's fade out would count back from its own end, past the
+    // overlap, so the pair is refused.
+    #[test]
+    fn crossfade_refuses_a_clip_inside_the_other() {
+        let mut project = load(&fixture("p38_crossfade.json"));
+        let inside = Edit::TrimAudioClip {
+            clip: ClipId(2),
+            start: Ticks(250),
+            length: Ticks(50),
+            frame_offset: 30000,
+        };
+        dawsome_engine::edit::apply(&mut project, inside).expect("moves");
+        let ids = BTreeSet::from([ClipId(1), ClipId(2)]);
+        assert_eq!(crossfade(&project, &ids), Err(CrossfadeRefused::Contained));
+    }
+
+    // Crossfade's refusals: one clip, two on different tracks (p38_short_fade), two on one track
+    // with a gap between (p38_seam_gap), a pattern clip with an audio clip (p37_cut_two).
+    #[test]
+    fn crossfade_needs_two_overlapping_audio_clips_on_one_track() {
+        let ids = |list: &[u32]| list.iter().copied().map(ClipId).collect::<BTreeSet<_>>();
+        let gap = load(&fixture("p38_seam_gap.json"));
+        assert_eq!(
+            crossfade(&gap, &ids(&[1])),
+            Err(CrossfadeRefused::NotTwoAudioClips)
+        );
+        assert_eq!(
+            crossfade(&gap, &ids(&[1, 2])),
+            Err(CrossfadeRefused::NoOverlap)
+        );
+        let tracks = load(&fixture("p38_short_fade.json"));
+        assert_eq!(
+            crossfade(&tracks, &ids(&[1, 2])),
+            Err(CrossfadeRefused::OtherTracks)
+        );
+        let mixed = load(&fixture("p37_cut_two.json"));
+        assert_eq!(
+            crossfade(&mixed, &ids(&[1, 2])),
+            Err(CrossfadeRefused::NotTwoAudioClips)
+        );
+        let done = load(&fixture("p38_crossfade.json"));
+        assert_eq!(crossfade(&done, &ids(&[1, 2])), Ok(None), "already so");
+    }
+
+    // p37_cut_two at 150: clip 3 (0..96) ends before it and clip 4 starts on it, so neither is
+    // cut; at a clip's own start or end nothing is either.
+    #[test]
+    fn a_split_cuts_only_the_clips_the_tick_falls_inside() {
+        let project = load(&fixture("p37_cut_two.json"));
+        let ids = |list: &[u32]| list.iter().copied().map(ClipId).collect::<BTreeSet<_>>();
+        assert_eq!(split(&project, &ids(&[3, 4]), Ticks(150)), Ok(None));
+        assert_eq!(split(&project, &ids(&[2]), Ticks(100)), Ok(None));
+        assert_eq!(split(&project, &ids(&[2]), Ticks(384)), Ok(None));
+        assert_eq!(split(&project, &BTreeSet::new(), Ticks(150)), Ok(None));
+    }
+
+    // A song already holding 4096 audio clips refuses a split that makes another; a pattern
+    // clip in it still cuts.
+    #[test]
+    fn a_split_past_the_audio_clip_limit_is_refused() {
+        let mut project = load(&fixture("p37_cut_two.json"));
+        let model = project.playlist.clips[&ClipId(4)].clone();
+        let mut next = project.playlist.next_clip_id.0;
+        let audio = |project: &Project| {
+            let clips = project.playlist.clips.values();
+            clips.filter(|clip| clip.audio_channel().is_some()).count()
+        };
+        while audio(&project) < MAX_AUDIO_CLIPS {
+            project.playlist.clips.insert(ClipId(next), model.clone());
+            next += 1;
+        }
+        project.playlist.next_clip_id = ClipId(next);
+        let one = |id| BTreeSet::from([ClipId(id)]);
+        assert_eq!(
+            split(&project, &one(2), Ticks(150)),
+            Err(SplitRefused::TooManyAudioClips)
+        );
+        assert!(matches!(split(&project, &one(5), Ticks(150)), Ok(Some(_))));
+    }
+
+    // gen_p37's slips on p37_slip: each document after, or no edit for an offset that stays.
+    #[test]
+    fn p37_a_slip_moves_the_audio_and_keeps_the_clip() {
+        let want = p37();
+        let before = fixture("p37_slip.json");
+        for step in want["slip"]["steps"].as_array().expect("steps") {
+            let mut project = load(&before);
+            let clip = ClipId(step["clip"].as_u64().expect("clip") as u32);
+            let ticks = Ticks(step["ticks"].as_i64().expect("ticks"));
+            let frames = step["sound_frames"].as_u64();
+            let slip = slipped(&project, clip, ticks, frames);
+            let Some(after) = step["after"].as_str() else {
+                assert_eq!(slip, None, "{step}");
+                continue;
+            };
+            let Some(Edit::TrimAudioClip { start, length, .. }) = slip.clone() else {
+                panic!("a trim: {slip:?}");
+            };
+            let shown = &project.playlist.clips[&clip];
+            assert_eq!((start, length), (shown.start, shown.length), "{step}");
+            dawsome_engine::edit::apply(&mut project, slip.expect("an edit")).expect("applies");
+            assert_eq!(project.to_json().expect("saves"), after, "{step}");
+        }
+        let project = load(&fixture("p37_cut_pattern.json"));
+        assert_eq!(
+            slipped(&project, ClipId(1), Ticks(96), None),
+            None,
+            "a pattern clip"
+        );
+    }
+
+    // A slip's drag snaps as a move's: whole units from the line the clip starts on. A clip at
+    // 40 on bars: 200 ticks rounds to a bar, 150 to none, -250 to a bar back; at 100 on beats
+    // (line 96) 50 ticks goes to 192, one beat; with no snap the drag as it is.
+    #[test]
+    fn a_slip_snaps_its_drag_as_a_move_does() {
+        let beat = SnapGrid::Every(Ticks(96));
+        let tick = SnapGrid::Every(Ticks(1));
+        assert_eq!(slip_ticks(Ticks(40), Ticks(200), BAR), Ticks(384));
+        assert_eq!(slip_ticks(Ticks(40), Ticks(150), BAR), Ticks(0));
+        assert_eq!(slip_ticks(Ticks(40), Ticks(-250), BAR), Ticks(-384));
+        assert_eq!(slip_ticks(Ticks(100), Ticks(50), beat), Ticks(96));
+        assert_eq!(slip_ticks(Ticks(100), Ticks(-37), tick), Ticks(-37));
     }
 
     const BAR_TICKS: Ticks = Ticks(384);

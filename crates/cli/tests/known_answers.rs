@@ -1529,7 +1529,8 @@ fn p8_place_starts_an_audio_clip_on_its_bar() {
 }
 
 // (2) A trimmed clip (100 frames into the file, one beat long), a clip at gain 0.5 and a muted
-// clip, with the song-end wrap at 66150 reading by position again.
+// clip, with the song-end wrap at 66150 reading by position again. The edges that cut into the
+// sound ramp over the 88-frame declick: those frames as the generator gives them.
 #[test]
 fn p8_trim_offsets_gains_and_mutes_audio_clips() {
     let expected = &p8_expected()["trim"];
@@ -1542,6 +1543,15 @@ fn p8_trim_offsets_gains_and_mutes_audio_clips() {
             let value = saw.get(file_from + n - from).copied().unwrap_or(0.0);
             *frame = value * gain;
         }
+    }
+    let ramped = expected["ramped"].as_array().expect("ramped");
+    assert_eq!(
+        ramped.len(),
+        4 * 88 + 88,
+        "two passes of clip 1's two edges, clip 2's end"
+    );
+    for spot in ramped {
+        frames[json_usize(&spot[0])] = json_f32(&spot[1]);
     }
     for spot in expected["spots"].as_array().expect("spots") {
         assert_eq!(
@@ -2070,4 +2080,93 @@ fn on_linux_xdg_cache_home_moves_the_cache_folder_too() {
         .join("clap-catalogue.json")
         .is_file());
     assert_eq!(stretched_files(&platform), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Split: every project gen_p37_expected.py cuts renders the same before and after the cut, and
+// both are the render its rules give (an audio clip read from its offset, a resampled one from
+// the stretched file, a sampler's whole sound from each note), by SHA-256 of the interleaved
+// float values, with probes to say where when they differ. 48 kHz at 174.5 BPM, where s(t) -
+// s(start) is a frame more than s(t - start) at each cut.
+// ---------------------------------------------------------------------------------------------
+
+fn p37_expected() -> serde_json::Value {
+    let path = repo_root().join("tests/fixtures/p37_expected.json");
+    let text = fs::read_to_string(&path).expect("p37_expected.json (run gen_p37_expected.py)");
+    serde_json::from_str(&text).expect("p37_expected.json parses")
+}
+
+#[test]
+fn p37_a_split_leaves_what_plays_as_it_was() {
+    use sha2::{Digest, Sha256};
+    let expected = p37_expected();
+    for (name, case) in expected["cuts"].as_object().expect("cuts") {
+        let want = &case["render"];
+        let dir = temp_dir(&format!("p37_{name}"));
+        let cache = dir.join("cache");
+        for file in ["fixture", "cut"] {
+            let fixture = case[file].as_str().expect("a fixture");
+            let fixture = fixture.trim_end_matches(".json");
+            let audio = rendered_stretch(fixture, &dir, &cache, &[]);
+            assert_eq!(audio.frames(), json_usize(&want["frames"]), "{fixture}");
+            for probe in want["probes"].as_array().expect("probes") {
+                let at = json_usize(&probe[0]);
+                let got = (audio.channels[0][at], audio.channels[1][at]);
+                let side = |index: usize| json_f32(&probe[index]);
+                assert_eq!(got, (side(1), side(2)), "{fixture} at frame {at}");
+            }
+            let mut hash = Sha256::new();
+            for frame in 0..audio.frames() {
+                hash.update(audio.channels[0][frame].to_le_bytes());
+                hash.update(audio.channels[1][frame].to_le_bytes());
+            }
+            let hex: String = hash
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(hex, want["sha256"].as_str().expect("sha256"), "{fixture}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fades and the declick: every project gen_p38_expected.py writes renders as its rules give: a
+// clip's fades from its absolute positions (k / N in and m / N out, the product rounded once to
+// f32), a 2 ms ramp (96 frames at 48 kHz, 88 at 44.1 kHz) where an edge cuts into the sound and
+// the clip's own fade there is shorter, none where a split's parts meet (the uncut clip's bits),
+// on a resampled clip too, and two overlapping clips faded across each other summed. By SHA-256
+// of the interleaved floats, with probes on the edges to say where when they differ.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn p38_fades_and_the_declick_render_as_their_rules_give() {
+    use sha2::{Digest, Sha256};
+    let path = repo_root().join("tests/fixtures/p38_expected.json");
+    let text = fs::read_to_string(&path).expect("p38_expected.json (run gen_p38_expected.py)");
+    let expected: serde_json::Value = serde_json::from_str(&text).expect("parses");
+    for (name, want) in expected["renders"].as_object().expect("renders") {
+        let dir = temp_dir(&format!("p38_{name}"));
+        let fixture = want["fixture"].as_str().expect("a fixture");
+        let fixture = fixture.trim_end_matches(".json");
+        let audio = rendered_stretch(fixture, &dir, &dir.join("cache"), &[]);
+        assert_eq!(audio.frames(), json_usize(&want["frames"]), "{name}");
+        for probe in want["probes"].as_array().expect("probes") {
+            let at = json_usize(&probe[0]);
+            let got = (audio.channels[0][at], audio.channels[1][at]);
+            let side = |index: usize| json_f32(&probe[index]);
+            assert_eq!(got, (side(1), side(2)), "{name} at frame {at}");
+        }
+        let mut hash = Sha256::new();
+        for frame in 0..audio.frames() {
+            hash.update(audio.channels[0][frame].to_le_bytes());
+            hash.update(audio.channels[1][frame].to_le_bytes());
+        }
+        let hex: String = hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(hex, want["sha256"].as_str().expect("sha256"), "{name}");
+    }
 }

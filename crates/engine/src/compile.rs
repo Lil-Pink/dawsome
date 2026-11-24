@@ -26,11 +26,12 @@ use crate::processor::{
 use crate::project::{
     loop_text, AutomationId, AutomationPoint, AutomationTarget, ChannelId, ChannelKind, Clip,
     ClipId, ClipItem, ClipStretch, InsertId, Pattern, PatternId, ProcessorOwner, ProcessorRef,
-    Project, SoundEdits, MAX_AUDIO_CLIPS, MAX_VOLUME,
+    Project, SoundEdits, TrackId, MAX_AUDIO_CLIPS, MAX_VOLUME,
 };
 use crate::source::{ClipSource, MemorySource, SourceSlot};
 use crate::time::{self, MeterMap, Ticks};
 use crate::transport::ParamTarget;
+use crate::warp::WarpMarker;
 
 /// Why a compile failed. A failed compile changes nothing the next compile depends on.
 #[derive(Debug, Error)]
@@ -70,7 +71,7 @@ pub trait Sounds {
     /// every clip of the file), a source of its own (a stream from disk), or nothing yet while
     /// the file loads. A file that cannot be read is a silent memory sound, as for samples. A
     /// stretched clip (`hint.stretch`) is given the stretched file, never the file itself.
-    fn clip(&mut self, path: &Path, hint: ClipHint) -> Result<ClipSound, Self::Error>;
+    fn clip(&mut self, path: &Path, hint: ClipHint<'_>) -> Result<ClipSound, Self::Error>;
 
     /// The instrument set an instrument channel plays, given its .sfz file's path as the
     /// project writes it, every zone's sound decoded; `None` while they load in the background
@@ -106,7 +107,7 @@ pub trait Sounds {
         &mut self,
         path: &Path,
         edits: &SoundEdits,
-        hint: ClipHint,
+        hint: ClipHint<'_>,
     ) -> Result<EditedSound<ClipSound>, Self::Error> {
         if hint.stretch.is_some() {
             return Ok(EditedSound::ready(ClipSound::Memory(SampleBuffer::from(
@@ -125,15 +126,18 @@ pub trait Sounds {
     fn forget_unused(&mut self, _project: &Project) {}
 }
 
-/// Where a new audio clip will first read its file, so a stream can fill from there.
+/// Where a new audio clip will first read its file, so a stream can fill from there, and how
+/// its file is stretched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClipHint {
+pub struct ClipHint<'w> {
     /// The clip's `frame_offset`.
     pub first_frame: u64,
     /// The frame the loop start plays, when the loop starts inside the clip.
     pub loop_frame: Option<u64>,
     /// How the clip stretches its file; both frames above count the stretched file's.
     pub stretch: Option<ClipStretch>,
+    /// The stretch's warp markers (none: one ratio for the whole file).
+    pub warp: &'w [WarpMarker],
 }
 
 /// What [`Sounds::edited_sample`] and [`Sounds::edited_clip`] give: the edited sound, or one to
@@ -168,6 +172,10 @@ pub enum ClipSound {
     Stream(Box<dyn ClipSource>),
     /// Still loading: the clip plays silence until a later compile gets its sound.
     Loading,
+    /// Not the clip's sound yet but one to play while it is made (a stretch of the same file
+    /// at the same length through the markers it had): played in this plan alone, as an
+    /// edited sound [`for_now`](EditedSound::for_now) is, and asked for again.
+    ForNow(Box<ClipSound>),
 }
 
 /// [`Sounds`] from one function that decodes a file into memory, for every sampler and clip.
@@ -185,7 +193,7 @@ where
 
     /// Why a stretched clip plays silence here: stretching is the media layer's, and a
     /// function that decodes files knows nothing of it.
-    fn clip(&mut self, path: &Path, hint: ClipHint) -> Result<ClipSound, E> {
+    fn clip(&mut self, path: &Path, hint: ClipHint<'_>) -> Result<ClipSound, E> {
         if hint.stretch.is_some() {
             return Ok(ClipSound::Memory(SampleBuffer::from(Vec::new())));
         }
@@ -249,15 +257,19 @@ struct Running {
 type SoundKey = (PathBuf, SoundEdits);
 
 /// An audio clip's source as the player has it: of which file, through which edits, stretched
-/// how, and whether it is only for now (the edited sound still being made). A clip whose file,
-/// edits or stretch changes gets a new source, and one for now is asked for again.
+/// how (its warp markers too), and whether it is only for now (the edited sound still being
+/// made). A clip whose file, edits, stretch or markers change gets a new source, and one for now
+/// is asked for again.
 #[derive(Debug)]
 struct InstalledSource {
     slot: SourceSlot,
     path: PathBuf,
     edits: SoundEdits,
     stretch: Option<ClipStretch>,
+    warp: Vec<WarpMarker>,
     for_now: bool,
+    /// The frames the source holds: where a clip's end stops cutting into its sound.
+    frames: u64,
 }
 
 /// A new audio clip source waiting for its slot: made before anything else changes, so a
@@ -267,6 +279,7 @@ struct NewSource {
     path: PathBuf,
     edits: SoundEdits,
     stretch: Option<ClipStretch>,
+    warp: Vec<WarpMarker>,
     for_now: bool,
     source: Option<Box<dyn ClipSource>>,
 }
@@ -709,8 +722,12 @@ impl Compiler {
                 continue;
             };
             let (path, edits) = (&channel.sample, &channel.edits);
+            let warp = project.playlist.warp(id);
             let installed = self.sources.get(&id).filter(|installed| {
-                installed.path == *path && installed.edits == *edits && installed.stretch == stretch
+                installed.path == *path
+                    && installed.edits == *edits
+                    && installed.stretch == stretch
+                    && installed.warp == warp
             });
             if installed.is_some_and(|installed| !installed.for_now) {
                 continue;
@@ -723,16 +740,20 @@ impl Compiler {
                 Some(buffer) => (ClipSound::Memory(buffer.clone()), false),
                 None if edits.is_empty() => (
                     sounds
-                        .clip(path, clip_hint(project, clip))
+                        .clip(path, clip_hint(project, id, clip))
                         .map_err(CompileError::Load)?,
                     false,
                 ),
                 None => {
                     let edited = sounds
-                        .edited_clip(path, edits, clip_hint(project, clip))
+                        .edited_clip(path, edits, clip_hint(project, id, clip))
                         .map_err(CompileError::Load)?;
                     (edited.sound, edited.for_now)
                 }
+            };
+            let (sound, for_now) = match sound {
+                ClipSound::ForNow(sound) => (*sound, true),
+                sound => (sound, for_now),
             };
             // Still for now: the one the clip plays stays until the edited sound is in.
             if for_now && installed.is_some() {
@@ -746,13 +767,14 @@ impl Compiler {
                     Some(Box::new(MemorySource::new(buffer)))
                 }
                 ClipSound::Stream(source) => Some(source),
-                ClipSound::Loading => None,
+                ClipSound::Loading | ClipSound::ForNow(_) => None,
             };
             new.push(NewSource {
                 clip: id,
                 path: path.clone(),
                 edits: edits.clone(),
                 stretch,
+                warp: warp.to_vec(),
                 for_now,
                 source,
             });
@@ -789,6 +811,7 @@ impl Compiler {
             path,
             edits,
             stretch,
+            warp,
             for_now,
             source,
         } in new
@@ -800,13 +823,16 @@ impl Compiler {
             let Some(slot) = self.free_sources.pop_first() else {
                 continue;
             };
+            let frames = source.frames();
             delta.install_sources.push((slot, source));
             let installed = InstalledSource {
                 slot,
                 path,
                 edits,
                 stretch,
+                warp,
                 for_now,
+                frames,
             };
             self.sources.insert(clip, installed);
         }
@@ -1320,6 +1346,7 @@ fn compile_song(
         .map(|clip| clip.end.0 - clip.start.0)
         .max()
         .unwrap_or(0);
+    let edges = Edges::of(&audible);
     let mut audio: Vec<AudioClipPlan> = audible
         .iter()
         .filter_map(|&(&id, clip)| {
@@ -1332,14 +1359,19 @@ fn compile_song(
             else {
                 return None;
             };
+            let installed = sources.get(&id);
+            let frames = installed.map(|installed| installed.frames);
+            let (fade_in, fade_out) = ramps(project, &edges, (id, clip), frames);
             Some(AudioClipPlan {
                 clip: id,
                 start: clip.start,
                 end: clip.end(),
                 channel,
-                source: sources.get(&id).map(|installed| installed.slot),
+                source: installed.map(|installed| installed.slot),
                 frame_offset,
                 gain,
+                fade_in,
+                fade_out,
             })
         })
         .collect();
@@ -1362,9 +1394,192 @@ fn compile_song(
     }
 }
 
+/// The declick's length at `rate`: 2 ms in frames, rounded half up (96 at 48 kHz, 88 at
+/// 44.1 kHz).
+pub(crate) fn declick_frames(rate: u32) -> u64 {
+    (2 * u64::from(rate) + 500) / 1000
+}
+
+/// The audio clips that play, by (track, start tick) and by (track, end tick): where another
+/// clip may meet an edge. Why not a scan of every clip for each: a song holds up to
+/// [`MAX_AUDIO_CLIPS`], and every compile asks for each one's edges.
+struct Edges<'p> {
+    starting: BTreeMap<(TrackId, Ticks), Vec<Placed<'p>>>,
+    ending: BTreeMap<(TrackId, Ticks), Vec<Placed<'p>>>,
+}
+
+/// A clip with its ID: what tells its warp markers.
+type Placed<'p> = (ClipId, &'p Clip);
+
+impl<'p> Edges<'p> {
+    fn of(audible: &[(&ClipId, &'p Clip)]) -> Self {
+        let mut edges = Edges {
+            starting: BTreeMap::new(),
+            ending: BTreeMap::new(),
+        };
+        for &(&id, clip) in audible {
+            if clip.audio_channel().is_some() {
+                let starting = edges.starting.entry((clip.track, clip.start));
+                starting.or_default().push((id, clip));
+                let ending = edges.ending.entry((clip.track, clip.end()));
+                ending.or_default().push((id, clip));
+            }
+        }
+        edges
+    }
+
+    /// The clips that end where `clip` starts, on its track.
+    fn before(&self, clip: &Clip) -> &[Placed<'p>] {
+        self.ending
+            .get(&(clip.track, clip.start))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The clips that start where `clip` ends, on its track.
+    fn after(&self, clip: &Clip) -> &[Placed<'p>] {
+        self.starting
+            .get(&(clip.track, clip.end()))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The ramps audio clip `clip` plays, (in, out) in frames: its fades, each at least the declick
+/// ([`declick_frames`]) at an edge that cuts into its sound. The start cuts in when the clip
+/// starts past the sound's first frame, the end when it stops before the sound's last
+/// (`frames`, the source's, when it is in; a clip with none plays nothing). Why: a sound cut off
+/// mid-wave steps from or to silence, a click. An edge where another clip that plays goes on
+/// with the same sound ([`continues`]) is no cut, so a split's parts play the uncut clip's
+/// bits. Decided here so the player only multiplies.
+fn ramps(project: &Project, edges: &Edges, placed: Placed, frames: Option<u64>) -> (u64, u64) {
+    let (_, clip) = placed;
+    let ClipItem::Audio {
+        frame_offset,
+        fade_in,
+        fade_out,
+        ..
+    } = clip.item
+    else {
+        return (0, 0);
+    };
+    let declick = declick_frames(project.sample_rate);
+    let played = project.clip_frames(clip).unwrap_or(0);
+    // A seam is no cut only when one clip ends there and one starts (two starting would both
+    // go on at full level: a step), the one goes on with the other's sound, and no ramp from
+    // either part's far edge reaches it (the seam would step from a ramped level).
+    let seam = |before: Placed, after: Placed| {
+        edges.after(before.1).len() == 1
+            && edges.before(after.1).len() == 1
+            && continues(project, before, after)
+            && far_ramps_clear(project, before.1, after.1, frames, declick)
+    };
+    let start_cut =
+        frame_offset > 0 && !matches!(edges.before(clip), [before] if seam(*before, placed));
+    let end_cut = frames.is_some_and(|frames| frame_offset.saturating_add(played) < frames)
+        && !matches!(edges.after(clip), [after] if seam(placed, *after));
+    (
+        if start_cut {
+            fade_in.max(declick)
+        } else {
+            fade_in
+        },
+        if end_cut {
+            fade_out.max(declick)
+        } else {
+            fade_out
+        },
+    )
+}
+
+/// Whether no ramp from the far edges of a seam reaches it: `before`'s fade in (taken up to
+/// `declick` when its start cuts into the sound, whatever meets it there) ends before its last
+/// frame, and `after`'s fade out (likewise at its end, `frames` its sound's) starts after its
+/// first. Why: with a ramp reaching the seam one side is below full level there, so the seam
+/// must ramp too; a split there then plays near the uncut clip, not its bits.
+fn far_ramps_clear(
+    project: &Project,
+    before: &Clip,
+    after: &Clip,
+    frames: Option<u64>,
+    declick: u64,
+) -> bool {
+    let (
+        ClipItem::Audio {
+            frame_offset: before_offset,
+            fade_in,
+            ..
+        },
+        ClipItem::Audio {
+            frame_offset: after_offset,
+            fade_out,
+            ..
+        },
+    ) = (before.item, after.item)
+    else {
+        return false;
+    };
+    let (Some(before_frames), Some(after_frames)) =
+        (project.clip_frames(before), project.clip_frames(after))
+    else {
+        return false;
+    };
+    let ramp_in = if before_offset > 0 {
+        fade_in.max(declick)
+    } else {
+        fade_in
+    };
+    let end_cut = frames.is_some_and(|frames| after_offset.saturating_add(after_frames) < frames);
+    let ramp_out = if end_cut {
+        fade_out.max(declick)
+    } else {
+        fade_out
+    };
+    ramp_in < before_frames && ramp_out < after_frames
+}
+
+/// Whether audio clip `after` goes on from audio clip `before`'s end with the same sound: on the
+/// same track, of the same channel, with the same stretch, warp markers and gain, from
+/// `before`'s end tick at the frame `before` stops at, and neither fades where they meet (a
+/// fade there is a step the other edge's ramp must soften). Why the markers: two lists make two
+/// stretched files, whose frames at the seam need not meet.
+fn continues(project: &Project, (before_id, before): Placed, (after_id, after): Placed) -> bool {
+    let (
+        ClipItem::Audio {
+            channel,
+            frame_offset,
+            gain,
+            stretch,
+            fade_out,
+            ..
+        },
+        ClipItem::Audio {
+            channel: next_channel,
+            frame_offset: next_offset,
+            gain: next_gain,
+            stretch: next_stretch,
+            fade_in: next_fade_in,
+            ..
+        },
+    ) = (before.item, after.item)
+    else {
+        return false;
+    };
+    let stops = project
+        .clip_frames(before)
+        .and_then(|played| frame_offset.checked_add(played));
+    before.track == after.track
+        && channel == next_channel
+        && stretch == next_stretch
+        && project.playlist.warp(before_id) == project.playlist.warp(after_id)
+        && gain.to_bits() == next_gain.to_bits()
+        && after.start == before.end()
+        && stops == Some(next_offset)
+        && fade_out == 0
+        && next_fade_in == 0
+}
+
 /// Where a new clip will first read its file: its frame offset, and the frame the loop start
 /// plays when the loop starts inside the clip (at the project's tempo).
-fn clip_hint(project: &Project, clip: &Clip) -> ClipHint {
+fn clip_hint<'p>(project: &'p Project, id: ClipId, clip: &Clip) -> ClipHint<'p> {
     let (first_frame, stretch) = match clip.item {
         ClipItem::Audio {
             frame_offset,
@@ -1383,6 +1598,7 @@ fn clip_hint(project: &Project, clip: &Clip) -> ClipHint {
         first_frame,
         loop_frame,
         stretch,
+        warp: project.playlist.warp(id),
     }
 }
 

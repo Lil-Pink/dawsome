@@ -221,7 +221,11 @@ impl App {
     pub(super) fn connect_ports(&mut self) {
         let router = self.router();
         let inputs = self.settings.midi_inputs.clone();
-        if self.ports.connect(|name| inputs.plays(name), &router) {
+        let listed = self.ports.names().to_vec();
+        if self
+            .ports
+            .connect(|name| inputs.plays(name, &listed), &router)
+        {
             let result = self.session.send(Control::LiveNotesOff);
             self.report(result);
         }
@@ -232,7 +236,9 @@ impl App {
     pub(super) fn reconnect_ports(&mut self) {
         let router = self.router();
         let inputs = self.settings.midi_inputs.clone();
-        self.ports.reconnect(|name| inputs.plays(name), &router);
+        let listed = self.ports.names().to_vec();
+        self.ports
+            .reconnect(|name| inputs.plays(name, &listed), &router);
         self.route_ports();
     }
 
@@ -607,7 +613,7 @@ impl App {
             .ports
             .names()
             .iter()
-            .any(|name| self.settings.midi_inputs.plays(name));
+            .any(|name| self.settings.midi_inputs.plays(name, self.ports.names()));
         if plays {
             self.select_a_player();
         }
@@ -720,16 +726,16 @@ mod tests {
     fn the_panel_switches_ports_and_moves_the_octave() {
         let (mut app, _player) = app_on(Path::new(F1));
         let names = vec!["Port A".to_owned(), "Port B".to_owned()];
-        app.ports = MidiPorts::new(PortSource::Given(names));
+        app.ports = MidiPorts::new(PortSource::Given(names.clone()));
         let layout = app.settings_layout();
         press(&mut app, layout.checkbox(0).center());
         assert_eq!(app.settings.midi_inputs, MidiInputs::All);
         press(&mut app, layout.checkbox(1).center());
-        assert!(!app.settings.midi_inputs.plays("Port A"));
-        assert!(app.settings.midi_inputs.plays("Port B"));
+        assert!(!app.settings.midi_inputs.plays("Port A", &names));
+        assert!(app.settings.midi_inputs.plays("Port B", &names));
         press(&mut app, layout.label(1).center());
         assert!(
-            app.settings.midi_inputs.plays("Port A"),
+            app.settings.midi_inputs.plays("Port A", &names),
             "the name switches too"
         );
         let base = app.typing.base;

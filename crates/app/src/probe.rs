@@ -19,6 +19,7 @@ use crate::ui::playlist_layout::{HEADER_HEIGHT, RULER_HEIGHT};
 
 mod accent;
 mod ease;
+mod fades;
 mod fixes;
 mod help;
 mod keys;
@@ -28,6 +29,7 @@ mod roll_strip;
 mod sample_editor;
 mod synth;
 mod theme;
+mod warp;
 
 /// The first channel's lit color, the color the rack draws it with.
 fn lit_first_channel() -> [u8; 3] {

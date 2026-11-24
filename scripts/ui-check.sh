@@ -348,6 +348,46 @@ DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
 DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
     probe::fixes::t3_the_panel_icons_keep_their_size --nocapture
 
+# p39_quantize with its clip selected: a tick in the accent at the top of its body for each of
+# the five hits it plays clear of its fade handles (the first two lie under the fade in's), and
+# each handle's disc in the accent (probe/warp.rs). They are drawn wholly inside the body, not into a
+# clipped frame, whose contents the GPU renderer dropped on the tracks.
+shot="$out_dir/w1_transients.png"
+rm -f -- "$shot"
+cargo run -q -p dawsome-app -- --theme graphite --load tests/fixtures/p39_quantize.json \
+    --panels playlist --window-size 1000x400 --null-output --select-clip clip:1 \
+    --screenshot "$shot" --screenshot-after 2000 --quit-after 5000
+DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+    probe::warp::w1_a_selected_clip_marks_its_hits --nocapture
+
+# p38_both's clip moved to ticks 192..960 at full gain, fading in over 48000 frames and out over
+# 36000 (written beside the shots), selected and at rest: selected, a disc in the accent hangs
+# at each fade's inner end; at rest (nothing selected, no pointer over it) no accent at all; in
+# both the body above each fade's line is shaded (probe/fades.rs).
+faded="$out_dir/p38_faded_wide.json"
+scripts/python.sh -I -c 'import json, os, sys
+project = json.load(open(sys.argv[1]))
+project["channels"][0]["sample"] = os.path.abspath("tests/fixtures/p38_sound/flat.wav")
+project["playlist"]["clips"][0].update(
+    start=192, length=768, gain=1.0, fade_in=48000, fade_out=36000)
+json.dump(project, open(sys.argv[2], "w"))' tests/fixtures/p38_both.json "$faded"
+for state in selected rest; do
+    selected=()
+    if [ "$state" = selected ]; then
+        selected=(--select-clip clip:1)
+        probe=h1_a_selected_faded_clip_shows_its_handles_and_shades_its_fades
+    else
+        probe=h2_a_faded_clip_at_rest_shows_no_handles_and_keeps_its_shade
+    fi
+    shot="$out_dir/h_faded_$state.png"
+    rm -f -- "$shot"
+    cargo run -q -p dawsome-app -- --theme graphite --load "$faded" --panels playlist \
+        --window-size 1000x400 --null-output "${selected[@]}" \
+        --screenshot "$shot" --screenshot-after 2000 --quit-after 5000
+    DAWSOME_UI_SHOT="$shot" cargo test -q -p dawsome-app -- --ignored --exact \
+        "probe::fades::$probe" --nocapture
+done
+
 # F1 in 6/8 (--time-signature, which grows its bar to two of 288 ticks): the rack's 24 steps
 # in groups of two, a beat line between groups (probe::tests, gen_p34_expected.py's step grid),
 # and the toolbar's time signature reading "6/8" right of the tempo in its layout dump.

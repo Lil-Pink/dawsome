@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use dawsome_engine::dsp::laws::fader_gain;
 use dawsome_engine::processor::{param_values, ProcessorFactory, Registry};
 use dawsome_engine::project::{
-    ChannelId, ChannelKind, ClipId, Effect, InsertId, PatternId, ProcessorOwner, Project,
+    ChannelId, ChannelKind, ClipId, ClipItem, Effect, InsertId, PatternId, ProcessorOwner, Project,
 };
 use dawsome_engine::time::{self, MilliBpm, Ticks};
 
@@ -30,7 +30,7 @@ use crate::ui::mixer_state::{
 use crate::ui::note_gesture::Snap;
 use crate::ui::panels::Panel;
 use crate::ui::piano_roll::RollPlayer;
-use crate::ui::playlist_layout::{ClipPart, HeaderHit as TrackHit, RulerBand};
+use crate::ui::playlist_layout::{ClipHandle, ClipPart, HeaderHit as TrackHit, RulerBand};
 use crate::ui::rack::swing_text;
 use crate::ui::rack_rows::{RackRow, RackRows};
 use crate::ui::sample_editor::{EditorOp, EditorPart};
@@ -65,6 +65,11 @@ pub enum Hover {
     Clip {
         clip: ClipId,
         part: ClipPart,
+    },
+    /// A handle of an audio clip: a fade handle, or a warp marker's in warp mode.
+    ClipHandle {
+        clip: ClipId,
+        handle: ClipHandle,
     },
     /// An empty part of a playlist lane.
     Lane,
@@ -357,16 +362,22 @@ pub enum EditRow {
     Redo,
     Delete,
     Duplicate,
+    Split,
+    Crossfade,
+    QuantizeAudio,
     SelectAll,
     Settings,
 }
 
 impl EditRow {
-    pub const ALL: [EditRow; 6] = [
+    pub const ALL: [EditRow; 9] = [
         EditRow::Undo,
         EditRow::Redo,
         EditRow::Delete,
         EditRow::Duplicate,
+        EditRow::Split,
+        EditRow::Crossfade,
+        EditRow::QuantizeAudio,
         EditRow::SelectAll,
         EditRow::Settings,
     ];
@@ -460,16 +471,18 @@ pub enum ClipControl {
     NoStretch,
     Resample,
     Stretch,
+    Warp,
     PitchDown,
     PitchUp,
     Close,
 }
 
 impl ClipControl {
-    pub const ALL: [ClipControl; 6] = [
+    pub const ALL: [ClipControl; 7] = [
         ClipControl::NoStretch,
         ClipControl::Resample,
         ClipControl::Stretch,
+        ClipControl::Warp,
         ClipControl::PitchDown,
         ClipControl::PitchUp,
         ClipControl::Close,
@@ -760,6 +773,11 @@ pub struct Context<'a> {
     /// both, so the length still shows where the strip folds its Len readout away.
     pub roll_snap: Snap,
     pub draw_length: Ticks,
+    /// The audio clip in warp mode, whose body takes presses on its markers.
+    pub warping: Option<ClipId>,
+    /// The fades (in, out, frames) a held fade handle gives its clip as the drag stands, which
+    /// the handle's hint says while it is dragged.
+    pub held_fades: Option<(ClipId, u64, u64)>,
 }
 
 /// What the toolbar's Play and the play mode's switch add while the piano roll's player has
@@ -937,6 +955,7 @@ fn parts(hover: &Hover, context: &Context) -> [Option<String>; 3] {
         ),
         Hover::Track(hit) => track_parts(*hit, project),
         Hover::Clip { clip, part } => clip_parts(*clip, *part, context),
+        Hover::ClipHandle { clip, handle } => handle_parts(*clip, *handle, context),
         Hover::Lane => three(
             "Lane",
             None,
@@ -1075,6 +1094,21 @@ fn menu_parts(row: MenuRow, keys: &Keys) -> [Option<String>; 3] {
                 "the selection, after itself",
                 Action::Duplicate,
             ),
+            EditRow::Split => keyed(
+                "Split",
+                "the selected clips at the song marker, or the clip under the pointer",
+                Action::Split,
+            ),
+            EditRow::Crossfade => keyed(
+                "Crossfade",
+                "two selected audio clips that overlap on a track, faded across the overlap",
+                Action::Crossfade,
+            ),
+            EditRow::QuantizeAudio => keyed(
+                "Quantize audio",
+                "the hits of the selected audio clips moved onto the snap (a step when None), by warp markers",
+                Action::QuantizeAudio,
+            ),
             EditRow::SelectAll => keyed("Select all notes", "in the piano roll", Action::SelectAll),
             EditRow::Settings => keyed(
                 "Settings\u{2026}",
@@ -1162,6 +1196,10 @@ fn clip_control_parts(control: ClipControl) -> [Option<String>; 3] {
         ClipControl::NoStretch => two("No stretch", "the clip plays its file as it is"),
         ClipControl::Resample => two("Resample", "to the clip's length, its pitch with it"),
         ClipControl::Stretch => two("Stretch", "to the clip's length, its pitch kept"),
+        ClipControl::Warp => two(
+            "Warp",
+            "warp markers on the clip: double-click adds one, drag its triangle moves it; the first turns stretching on",
+        ),
         ClipControl::PitchDown => two("Pitch", "a semitone down, while stretched"),
         ClipControl::PitchUp => two("Pitch", "a semitone up, while stretched"),
         ClipControl::Close => two("Close", "hides these settings"),
@@ -1758,15 +1796,28 @@ fn clip_parts(clip: ClipId, part: ClipPart, context: &Context) -> [Option<String
     let Some(shown) = context.project.playlist.clips.get(&clip) else {
         return [None, None, None];
     };
-    let (name, does) = if shown.audio_channel().is_some() {
+    let warped = context.project.playlist.warps.contains_key(&clip);
+    let (name, does) = if context.warping == Some(clip) && part == ClipPart::Body {
+        (
+            "Audio clip \u{b7} warp mode",
+            if warped {
+                "double-click adds a warp marker (on the nearest hit); drag a marker's triangle moves that moment (Alt: off the snap); double-click a triangle removes it; Esc or Warp leaves"
+            } else {
+                "double-click adds a warp marker (on the nearest hit): the first turns stretching on, a moment of silence while it is made; Esc or Warp leaves"
+            }
+            .to_owned(),
+        )
+    } else if shown.audio_channel().is_some() {
         (
             "Audio clip",
             match part {
                 ClipPart::Body => {
-                    "drag moves; double-click: the sample editor and stretch settings; right-click deletes; Shift+right-click mutes"
+                    "drag moves; drag a dot at a top corner inward: fade in or out (double-click: none); Ctrl+Shift+drag slips the audio inside it; double-click: the sample editor and stretch settings; right-click deletes; Shift+right-click mutes"
                 }
-                ClipPart::LeftEdge => "drag: trim",
-                ClipPart::RightEdge => "drag: trim \u{b7} Alt+drag: stretch to fit",
+                ClipPart::LeftEdge => "drag: trim \u{b7} the dot at the top: fade in",
+                ClipPart::RightEdge => {
+                    "drag: trim \u{b7} Alt+drag: stretch to fit \u{b7} the dot at the top: fade out"
+                }
             }
             .to_owned(),
         )
@@ -1789,6 +1840,53 @@ fn clip_parts(clip: ClipId, part: ClipPart, context: &Context) -> [Option<String
         )
     };
     [Some(name.to_owned()), None, Some(does)]
+}
+
+/// A clip handle's hint: a fade handle's name, its fade's length (as a held drag leaves it,
+/// while one is held) and what a drag and a double-click do; a warp marker's.
+fn handle_parts(clip: ClipId, handle: ClipHandle, context: &Context) -> [Option<String>; 3] {
+    let project = context.project;
+    let Some(ClipItem::Audio {
+        fade_in, fade_out, ..
+    }) = project.playlist.clips.get(&clip).map(|shown| shown.item)
+    else {
+        return [None, None, None];
+    };
+    let (fade_in, fade_out) = context
+        .held_fades
+        .filter(|&(held, ..)| held == clip)
+        .map_or((fade_in, fade_out), |(_, held_in, held_out)| {
+            (held_in, held_out)
+        });
+    let fade = |name: &str, frames: u64| {
+        [
+            Some(name.to_owned()),
+            (frames > 0).then(|| fade_length(frames, project.sample_rate)),
+            Some("drag to set (Alt: off the snap); double-click to remove".to_owned()),
+        ]
+    };
+    match handle {
+        ClipHandle::FadeIn => fade("Fade in", fade_in),
+        ClipHandle::FadeOut => fade("Fade out", fade_out),
+        ClipHandle::Warp(_) => [
+            Some("Warp marker".to_owned()),
+            None,
+            Some("drag to move this moment (Alt: off the snap); double-click to remove".to_owned()),
+        ],
+    }
+}
+
+/// A fade's length, `frames` at `rate`, as its handle's hint says it: whole milliseconds under
+/// a second, (2000·frames + rate) div (2·rate), rounded half up; from there seconds to two
+/// places, rounded likewise.
+fn fade_length(frames: u64, rate: u32) -> String {
+    let rate = u64::from(rate.max(1));
+    let ms = (2000 * frames + rate) / (2 * rate);
+    if ms < 1000 {
+        return format!("{ms} ms");
+    }
+    let hundredths = (200 * frames + rate) / (2 * rate);
+    format!("{}.{:02} s", hundredths / 100, hundredths % 100)
 }
 
 fn mixer_parts(hit: MixerHit, context: &Context) -> [Option<String>; 3] {
@@ -2147,6 +2245,11 @@ pub fn hover_change<M: From<HoverMessage>>(
     last: &mut Option<Hover>,
     now: Option<Hover>,
 ) -> Option<iced::widget::canvas::Action<M>> {
+    hover_message(last, now).map(|message| iced::widget::canvas::Action::publish(M::from(message)))
+}
+
+/// The word [`hover_change`] publishes, for a canvas that sends it inside a message of its own.
+pub fn hover_message(last: &mut Option<Hover>, now: Option<Hover>) -> Option<HoverMessage> {
     if *last == now {
         return None;
     }
@@ -2156,7 +2259,7 @@ pub fn hover_change<M: From<HoverMessage>>(
         (None, None) => return None,
     };
     *last = now;
-    Some(iced::widget::canvas::Action::publish(M::from(message)))
+    Some(message)
 }
 
 /// A canvas's or widget's word about the cursor.
@@ -2248,7 +2351,70 @@ mod tests {
             roll_player: RollPlayer::default(),
             roll_snap: Snap::Line,
             draw_length: Ticks(24),
+            warping: None,
+            held_fades: None,
         }
+    }
+
+    // p38_both's clip (48 kHz) fades in over 1000 frames, 20.83 ms, said 21 ms, and out over
+    // 3000, 62.5 ms, rounded half up to 63 ms. While a drag holds its fades at 5760 and 60000
+    // frames the hint says those: 120 ms, and 1.25 s (a second or more in seconds, two places).
+    // 47976 frames, 999.5 ms, round up to a second: 1.00 s. p38_fade_out's clip has no fade in,
+    // and its handle's hint names no length. A warp marker's says what its drag does.
+    #[test]
+    fn a_clip_handles_hint_names_it_and_its_fades_length() {
+        let context_of = context;
+        let both = project("p38_both.json");
+        let mut context = context_of(&both);
+        let fade_in = Hover::ClipHandle {
+            clip: ClipId(1),
+            handle: ClipHandle::FadeIn,
+        };
+        let fade_out = Hover::ClipHandle {
+            clip: ClipId(1),
+            handle: ClipHandle::FadeOut,
+        };
+        let does = "drag to set (Alt: off the snap); double-click to remove";
+        assert_eq!(
+            words(&fade_in, &context),
+            format!("Fade in{DOT}21 ms{DOT}{does}")
+        );
+        assert_eq!(
+            words(&fade_out, &context),
+            format!("Fade out{DOT}63 ms{DOT}{does}")
+        );
+        context.held_fades = Some((ClipId(1), 5760, 60_000));
+        assert_eq!(
+            words(&fade_in, &context),
+            format!("Fade in{DOT}120 ms{DOT}{does}")
+        );
+        assert_eq!(
+            words(&fade_out, &context),
+            format!("Fade out{DOT}1.25 s{DOT}{does}")
+        );
+        context.held_fades = Some((ClipId(2), 5760, 60_000));
+        assert_eq!(
+            words(&fade_in, &context),
+            format!("Fade in{DOT}21 ms{DOT}{does}"),
+            "another clip's drag"
+        );
+        assert_eq!(fade_length(47_976, 48_000), "1.00 s");
+        let out_only = project("p38_fade_out.json");
+        assert_eq!(
+            words(&fade_in, &context_of(&out_only)),
+            format!("Fade in{DOT}{does}")
+        );
+        let marker = Hover::ClipHandle {
+            clip: ClipId(1),
+            handle: ClipHandle::Warp(0),
+        };
+        assert_eq!(
+            words(&marker, &context),
+            format!(
+                "Warp marker{DOT}drag to move this moment (Alt: off the snap); double-click to \
+                 remove"
+            )
+        );
     }
 
     // One note at a time (`cut_itself`): a rack channel with it on says so beside its name; one
@@ -2462,6 +2628,13 @@ mod tests {
                 for part in [ClipPart::Body, ClipPart::LeftEdge, ClipPart::RightEdge] {
                     hinted(&Hover::Clip { clip, part }, &context);
                 }
+            }
+        }
+        let faded = project("p38_both.json");
+        let context = super::tests::context(&faded);
+        for &clip in faded.playlist.clips.keys() {
+            for handle in [ClipHandle::FadeIn, ClipHandle::FadeOut, ClipHandle::Warp(0)] {
+                hinted(&Hover::ClipHandle { clip, handle }, &context);
             }
         }
         hinted(&Hover::Lane, &context);

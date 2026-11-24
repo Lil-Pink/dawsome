@@ -319,8 +319,9 @@ rows.
 
 ## A MIDI keyboard
 A MIDI keyboard is a piano-style keyboard that plugs into your computer, usually by USB.
-- Plug it in, then open Settings (**6**) and tick it under **MIDI input** (or tick **All
-  ports**).
+- Plug it in. Until you choose, every MIDI keyboard plays: each is ticked under **MIDI input**
+  in Settings (**6**). Untick one to choose; from then on only the ticked ones play (**All
+  ports** plays every one, those plugged in later too).
 - It shows up in the Library under **MIDI devices**, ticked. Its light blinks as you play, and
   the words after the arrow say which channel it plays.
 - It plays the selected channel. To keep it on one channel whatever is selected, drag it from the
@@ -409,6 +410,24 @@ Drag an audio clip's right edge to trim it: shorter cuts the end off, longer add
 the sound. To stretch the sound to the new length instead, hold **Alt** while you drag the right
 edge: the sound fills the clip, keeping its pitch unless the clip is set to Resample. Drag the
 left edge to trim the start.
+
+To move the sound inside a clip without moving the clip, hold **Ctrl** and **Shift** and drag
+the clip's body: drag right and earlier sound plays. To cut clips in two, select them, click the
+numbers along the top where the cut goes, and press **Ctrl+E** (Split in the Edit menu). With
+nothing selected, **Ctrl+E** cuts the clip under the mouse pointer where the pointer is.
+
+To fade a clip in or out, point at it (or select it): a round handle shows at the top left
+and the top right of its body. Drag one inward; the hint bar shows how long the fade is, and the
+faded corner of the clip turns darker. Double-click a handle to take its fade off. To fade one clip into the next, let them
+overlap on one track, select both and press **Ctrl+Shift+X** (Crossfade in the Edit menu).
+
+A selected audio clip shows small ticks along its top where its sound has a clear hit. To move
+one moment of the sound without moving the rest, press **Warp** in the clip's settings (or
+**Ctrl+Shift+W**), double-click the clip where the moment is to add a marker, and drag the
+marker's triangle along. Double-click a triangle to remove it; **Esc** leaves warp mode. The first
+marker turns stretching on, so the clip goes quiet for a moment while that is made. To line the
+hits of selected clips up with the grid, press **Ctrl+Shift+Q** (Quantize audio in the Edit
+menu).
 
 Double-click the clip for its stretch settings at the top of the Playlist: **Stretch** keeps the
 pitch and gives a **Pitch** of its own, **Resample** plays faster or slower with the pitch moving

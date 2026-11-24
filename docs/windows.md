@@ -64,14 +64,13 @@ scripts/xwin-build.sh        # = cargo xwin build --release --target x86_64-pc-w
 scripts/package.sh windows-x86_64 x86_64-pc-windows-msvc   # the zip, in <target dir>/dist
 ```
 
-It needs `clang`, `clang-cl`, `lld-link`, `llvm-lib`, `llvm-rc` and libclang on the `PATH`, and
-`make`. `llvm-rc` compiles the app's icon and version details (`crates/app/dawsome-app.rc`);
+It needs `clang`, `clang-cl`, `lld-link`, `llvm-lib`, `llvm-rc` and libclang on the `PATH`.
+`llvm-rc` compiles the app's icon and version details (`crates/app/dawsome-app.rc`);
 on Windows the SDK's `rc.exe` does.
 Arguments, when given, go to `cargo xwin` in place of the default build, for example
 `scripts/xwin-build.sh clippy --target x86_64-pc-windows-msvc --workspace --all-targets`. The
-LAME crate picks its build by the machine it runs on, so from Linux it runs LAME's `configure`;
-the script tells `configure` the host is a Windows one and gives its preprocessor check the
-Windows headers. A build on Windows takes the crate's MSVC path and needs none of this.
+LAME crate compiles LAME's C source with the target's compiler on every host, so the
+cross-build needs nothing of its own for it.
 
 ## Where things are kept
 
@@ -99,6 +98,31 @@ and the folders of `CLAP_PATH` (separated by `;`); VST3 plugins in `%COMMONPROGR
 `%LOCALAPPDATA%\Programs\Common\VST3` and the folders of `VST3_PATH`. A project file writes relative sample paths
 with `/` on every platform, so a project folder moves between Windows and Linux; absolute paths
 name one machine's files.
+
+## MIDI input on Windows
+
+- Until you choose, every MIDI input port plays: each shows ticked under MIDI input on the
+  Settings window's General page (F10) and in the Library's MIDI devices. The first tick you
+  change is your choice, and from then on only the ticked ports play (untick them all and none
+  does). "All ports" plays every port, those plugged in later too.
+- Windows names a second device of one name, or a device moved to another USB socket, with a
+  number in front: "2- Name". A port ticked as "Name" plays "2- Name" while no port named
+  "Name" itself is found, and the reverse.
+- "No MIDI input found" under MIDI input: Windows shows no input port to Dawsome. Plug the
+  device in, then restart Dawsome if it does not appear.
+- The ports are read again every 2 s while Settings or the Library is open (every 10 s
+  otherwise), so a device plugged in or switched on shows without a restart. With the newer
+  Windows MIDI service (Windows MIDI Services, Windows 11), Windows may not show a running
+  program a USB device that was plugged in or switched on after the program started; restart
+  Dawsome then. A device that asks on its own screen at power-on whether to start USB MIDI shows
+  only once it is told to.
+- Without that service, a MIDI input port is open in one program at a time. While another
+  program has it (a browser page using Web MIDI, a device's own editor, another music program),
+  Settings says "<port> is in use by another program"; close that program and the port connects
+  at the next reading, with no restart.
+- "MIDI input ports could not be read from the system" under the ports: Windows counts more
+  input ports than the MIDI library could name, so they cannot be ticked. Please report it with
+  the Windows version (Settings, System, About).
 
 ## Limits on Windows
 

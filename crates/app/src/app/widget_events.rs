@@ -115,6 +115,15 @@ impl Window {
         }
     }
 
+    /// The key typing `typed` at `code` pressed and let go of with `modifiers` held from before
+    /// the press to after the release, as a hand holds them: a shortcut such as Ctrl+E.
+    pub fn chord(&mut self, app: &mut App, typed: char, code: key::Code, modifiers: Modifiers) {
+        self.modifiers(app, modifiers);
+        let key = Key::Character(typed.to_string().into());
+        self.key(app, key.clone(), key, code, modifiers, None);
+        self.modifiers(app, Modifiers::empty());
+    }
+
     /// Presses and lets go of the named key `named`, which lies at `code`.
     pub fn tap(&mut self, app: &mut App, named: key::Named, code: key::Code) {
         let key = Key::Named(named);

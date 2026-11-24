@@ -454,18 +454,17 @@ impl<'a> SettingsPanel<'a> {
             );
         };
         title(frame, layout.midi_title(), "MIDI input");
-        let all = matches!(self.inputs, MidiInputs::All);
+        let all = self.inputs.is_all();
         self.draw_row(frame, &layout, 0, "All ports", all);
         for (index, name) in self.ports.iter().enumerate() {
-            let plays = self.inputs.plays(name);
+            let plays = self.inputs.plays(name, self.ports);
             self.draw_row(frame, &layout, index + 1, name, plays);
         }
-        if let Some(rect) = layout.empty_message() {
-            let at = Point::new(rect.x, rect.center_y());
+        for (rect, words) in layout.empty_lines() {
             text(
                 frame,
-                "No MIDI input ports found",
-                at,
+                words,
+                Point::new(rect.x, rect.center_y()),
                 style::palette().text_secondary,
                 size::LABEL,
             );

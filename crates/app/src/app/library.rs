@@ -500,6 +500,33 @@ impl App {
             Some(fold) => self.browse.library.fold(key, fold),
             None => self.browse.library.toggle_group(key),
         }
+        self.folds_changed();
+    }
+
+    /// A first start: from now on each Library group folds the first time it shows, those
+    /// shown now at once, so a new user sees the group labels alone; a group opened since stays
+    /// open. The folds are kept as a press on a label keeps them.
+    pub fn fold_library_for_first_start(&mut self) {
+        self.browse.library.first_look = Some(std::collections::BTreeSet::new());
+        self.fold_new_groups();
+    }
+
+    /// On a first start, folds each Library group the first time it shows, and keeps the
+    /// folds; on any other start, nothing.
+    pub(super) fn fold_new_groups(&mut self) {
+        let kit = starter_kit::names();
+        let contents = Contents {
+            kit: &kit,
+            plugins: self.host.catalogue().offered(PluginKind::Instrument),
+            ..Contents::default()
+        };
+        if self.browse.library.fold_new_groups(&contents) {
+            self.folds_changed();
+        }
+    }
+
+    /// The Library's folds changed: drawn anew, saved, and the list keeps its rows in view.
+    fn folds_changed(&mut self) {
         self.browse.cache.clear();
         self.settings
             .set_library_folded(&self.browse.library.folded);
@@ -546,7 +573,7 @@ impl App {
             channel,
             port: Some(stable_port_name(port).to_owned()),
         });
-        if self.error.is_none() && !self.settings.midi_inputs.plays(port) {
+        if self.error.is_none() && !self.settings.midi_inputs.plays(port, self.ports.names()) {
             self.settings.midi_inputs.toggle(port, self.ports.names());
             self.inputs_changed();
         }
@@ -902,7 +929,17 @@ mod tests {
     /// p10_link ("kick" first, "keys" playing the linked port) with the given ports listed, the
     /// Library open with its Instruments closed, so the devices show in the window's 560 px;
     /// no port is ever opened.
+    /// The Library on p10_link listing `ports`, on settings that chose none to play (a written
+    /// empty list), so each test lets in what it means to.
     fn device_app(ports: &[&str]) -> (App, Player) {
+        let (mut app, player) = first_run_device_app(ports);
+        app.settings.midi_inputs = MidiInputs::none();
+        app.inputs_changed();
+        (app, player)
+    }
+
+    /// The Library on p10_link listing `ports`, on settings that never held a choice.
+    fn first_run_device_app(ports: &[&str]) -> (App, Player) {
         let (mut app, player) = library_app(&fixture("p10_link.json"), Host::offline());
         let names = ports.iter().map(|name| (*name).to_owned()).collect();
         app.ports = MidiPorts::new(PortSource::Given(names));
@@ -910,6 +947,28 @@ mod tests {
         let at = row_center(&app, &instruments);
         press(&mut app, at, mouse::Button::Left);
         (app, player)
+    }
+
+    // Settings that never held a choice: every device listed plays and is ticked, in the Library
+    // and in the Settings panel ("All ports" not, as it is not chosen); the first tick pressed
+    // switches that device off and writes the others as the choice.
+    #[test]
+    fn on_a_first_run_every_device_plays_until_a_tick_is_pressed() {
+        let (mut app, _player) = first_run_device_app(&["Port A", "Port B"]);
+        assert_eq!(app.settings.midi_inputs, MidiInputs::default());
+        for name in ["Port A", "Port B"] {
+            assert!(device_row(&app, name).plays, "{name} ticked");
+        }
+        assert!(!app.settings_panel().inputs.is_all(), "All ports unticked");
+        let row = row_center(&app, &device(&app, "Port A"));
+        let at = Point::new(browser::ROW_LEFT + browser::TICK_SIZE / 2.0, row.y);
+        press(&mut app, at, mouse::Button::Left);
+        assert_eq!(
+            app.settings.midi_inputs,
+            MidiInputs::Named(["Port B".to_owned()].into())
+        );
+        assert!(!device_row(&app, "Port A").plays);
+        assert!(device_row(&app, "Port B").plays);
     }
 
     /// The Library's row of device `name`.
@@ -1019,7 +1078,7 @@ mod tests {
             .to_owned();
         let (mut app, _player) = device_app(&[&linked, "Port B"]);
         let before = document(&app);
-        assert!(!app.settings.midi_inputs.plays("Port B"));
+        assert!(!app.settings.midi_inputs.plays("Port B", app.ports.names()));
         let port_b = device(&app, "Port B");
         hold_and_move(&mut app, &port_b, Point::new(400.0, 100.0));
         let over = over_row(&app, 0);
@@ -1030,7 +1089,10 @@ mod tests {
         let project = app.session.project();
         assert_eq!(project.channel_for_port("Port B"), Some(ChannelId(1)));
         assert_eq!(project.channel_for_port(&linked), Some(ChannelId(2)));
-        assert!(app.settings.midi_inputs.plays("Port B"), "let in");
+        assert!(
+            app.settings.midi_inputs.plays("Port B", app.ports.names()),
+            "let in"
+        );
         assert_eq!(
             device(&app, "Port B"),
             Item::Port(Port {
@@ -1170,6 +1232,7 @@ mod tests {
             keyboard.to_owned(),
             pads.to_owned(),
         ]));
+        app.settings.midi_inputs = MidiInputs::none();
         let instruments = app.library_items()[0].clone();
         let at = row_center(&app, &instruments);
         press(&mut app, at, mouse::Button::Left);
@@ -1202,7 +1265,7 @@ mod tests {
             app.settings.midi_inputs,
             MidiInputs::Named(["Pads:Pads MIDI 1".to_owned()].into())
         );
-        assert!(app.settings.midi_inputs.plays(pads));
+        assert!(app.settings.midi_inputs.plays(pads, app.ports.names()));
     }
 
     // The Library's ticks are the Settings panel's MIDI input boxes: switched in one, shown in
@@ -1233,7 +1296,7 @@ mod tests {
         let name = row_center(&app, &device(&app, "Port B"));
         press(&mut app, name, mouse::Button::Left);
         assert!(
-            !app.settings.midi_inputs.plays("Port B"),
+            !app.settings.midi_inputs.plays("Port B", app.ports.names()),
             "a press on the name only holds the device"
         );
     }
@@ -2510,6 +2573,92 @@ mod tests {
         assert!(
             again.library_items().contains(&plugins),
             "its label still shows"
+        );
+        std::fs::remove_dir_all(&dir).expect("removed");
+    }
+
+    // On a first start every Library group folds, the labels alone showing, and the folds are
+    // saved as a press keeps them. A group the user opens stays open when the sets are looked
+    // for again; a group that look shows first (the shipped sets) folds as it shows. The next
+    // start, no first start, opens on what was left.
+    #[test]
+    fn a_first_start_folds_every_group_once_and_keeps_what_the_user_opens() {
+        use crate::ui::library::{AUDIO_INPUT, PLUGINS, SHIPPED_SETS, STARTER_KIT};
+        let dir = temp_dir("first_start");
+        let file = dir.join("dawsome/settings.json");
+        let host = Host {
+            settings_file: Some(file.clone()),
+            saves_settings: true,
+            instruments: Some(dir.join("sets")),
+            ..catalogue_host()
+        };
+        let saved_folds = || {
+            let text = std::fs::read_to_string(&file).expect("saved");
+            serde_json::from_str::<serde_json::Value>(&text).expect("JSON")["library"]["folded"]
+                .clone()
+        };
+        let instrument_rows = |app: &App| -> Vec<Item> {
+            app.library_items()
+                .into_iter()
+                .skip(1)
+                .take_while(|item| !matches!(item, Item::Header { .. }))
+                .collect()
+        };
+        let (mut app, _player) = library_app(&fixture("p10_base.json"), host.clone());
+        assert!(
+            app.browse.library.folded.is_empty(),
+            "booting alone folds nothing"
+        );
+        app.fold_library_for_first_start();
+        assert_eq!(
+            instrument_rows(&app),
+            [
+                Item::Group(STARTER_KIT),
+                Item::Group(PLUGINS),
+                Item::Group(AUDIO_INPUT),
+            ]
+        );
+        assert_eq!(
+            saved_folds(),
+            serde_json::json!([
+                "Audio input",
+                "Plugins",
+                "Plugins/Dawsome",
+                "Plugins/Example",
+                "Starter kit"
+            ])
+        );
+        let at = row_center(&app, &Item::Group(PLUGINS));
+        press(&mut app, at, mouse::Button::Left);
+        copy_dir(&fixture("instruments/pad"), &dir.join("sets/pad"));
+        let _ = app.scan_sets();
+        assert_eq!(
+            instrument_rows(&app),
+            [
+                Item::Group(STARTER_KIT),
+                Item::Group(SHIPPED_SETS),
+                Item::Group(PLUGINS),
+                Item::Synth,
+                Item::Maker("Dawsome".to_owned()),
+                Item::Maker("Example".to_owned()),
+                Item::Rescan,
+                Item::Group(AUDIO_INPUT),
+            ]
+        );
+        assert_eq!(
+            saved_folds(),
+            serde_json::json!([
+                "Audio input",
+                "Instrument sets",
+                "Plugins/Dawsome",
+                "Plugins/Example",
+                "Starter kit"
+            ])
+        );
+        let (again, _player) = library_app(&fixture("p10_base.json"), host);
+        assert_eq!(
+            again.browse.library.folded, app.browse.library.folded,
+            "the next start opens on what was left"
         );
         std::fs::remove_dir_all(&dir).expect("removed");
     }

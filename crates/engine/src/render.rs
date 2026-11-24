@@ -2323,6 +2323,20 @@ fn audio_clips(
         let Some(bus) = feed(buses, fed, usize::from(channel.bus.0), len) else {
             continue;
         };
+        if clip.fade_in > 0 || clip.fade_out > 0 {
+            // From the clip's own positions, never the block's, so any block split gives the
+            // same values; each frame's factor in f64, its value rounded to f32 once.
+            let last = clip_end - 1;
+            for (index, frame) in scratch.iter_mut().enumerate() {
+                let n = lo + index as i128;
+                let factor = ramp(n - clip_start, clip.fade_in) * ramp(last - n, clip.fade_out);
+                if factor < 1.0 {
+                    for value in frame.iter_mut() {
+                        *value = (f64::from(*value) * factor) as f32;
+                    }
+                }
+            }
+        }
         let stereo = source.channels() == 2;
         let levels = Levels::of(channel, automation);
         for (offset, (frame, value)) in bus[from_frame..to_frame]
@@ -2340,6 +2354,16 @@ fn audio_clips(
                 at,
             );
         }
+    }
+}
+
+/// A linear ramp's factor `at` frames from its silent end over `length` frames: min(1, at /
+/// length); 1 without a ramp.
+fn ramp(at: i128, length: u64) -> f64 {
+    if length == 0 {
+        1.0
+    } else {
+        (at as f64 / length as f64).min(1.0)
     }
 }
 

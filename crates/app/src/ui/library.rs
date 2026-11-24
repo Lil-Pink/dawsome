@@ -19,8 +19,9 @@
 //!
 //! Inside Instruments each group folds on its label too ("Starter kit", "Instrument sets" and
 //! each kind under it, "My instruments", "Plugins" and each maker under it, "Audio input"): a
-//! folded group shows its label alone ([`Library::folded`], by [`fold_key`]). A search shows
-//! every match, folded or not.
+//! folded group shows its label alone ([`Library::folded`], by [`fold_key`]). On a first start
+//! every group folds the first time it shows ([`Library::fold_new_groups`]), so a new user sees
+//! the labels alone. A search shows every match, folded or not.
 //!
 //! The search box filters every section at once: kit sounds and ports by name, sets and plugins
 //! by name or maker as the picker does, and the tree by its own search. Section rows sit in one list the
@@ -307,6 +308,9 @@ pub struct Library {
     pub closed: BTreeSet<Section>,
     /// The groups folded, by [`fold_key`]: their labels show alone, except while searching.
     pub folded: BTreeSet<String>,
+    /// On a first start, every group shown so far, each folded as it first showed
+    /// ([`Library::fold_new_groups`]); none on any other start.
+    pub first_look: Option<BTreeSet<String>>,
     /// The first row shown.
     pub top: usize,
     pub sets: Sets,
@@ -453,6 +457,32 @@ impl Library {
         open
     }
 
+    /// On a first start, folds each group of `contents` the first time it shows, whatever is
+    /// folded, closed or searched now; a group shown before stays as the user left it. Whether
+    /// one folded.
+    pub fn fold_new_groups(&mut self, contents: &Contents) -> bool {
+        let Some(seen) = &mut self.first_look else {
+            return false;
+        };
+        let everything = Library {
+            sets: self.sets.clone(),
+            kinds: self.kinds.clone(),
+            ..Library::default()
+        };
+        let shown = everything.items(&Contents {
+            search: "",
+            ..contents.clone()
+        });
+        let mut folded = false;
+        for key in shown.iter().filter_map(fold_key) {
+            if seen.insert(key.clone()) {
+                self.folded.insert(key);
+                folded = true;
+            }
+        }
+        folded
+    }
+
     /// Folds the group `key` names ([`fold_key`]), or opens it when it is folded.
     pub fn toggle_group(&mut self, key: &str) {
         if !self.folded.remove(key) {
@@ -543,7 +573,7 @@ pub fn ports(listed: &[String], inputs: &MidiInputs, links: &[(String, String)])
         .chain(loopbacks.into_iter().map(|name| (name, false)))
         .map(|(name, unplugged)| Port {
             name: name.clone(),
-            plays: inputs.plays(name),
+            plays: inputs.plays(name, listed),
             channel: channel_of(name),
             unplugged,
             loopback: is_loopback(name),
@@ -1184,6 +1214,134 @@ mod tests {
                 header(Section::Instruments, 2, true),
                 Item::Group(MY_SETS),
                 Item::Set(set("My pad", "")),
+            ]
+        );
+    }
+
+    /// The Instruments section's rows between its header and the Samples header.
+    fn instrument_rows(items: &[Item]) -> Vec<Item> {
+        items
+            .iter()
+            .skip(1)
+            .take_while(|item| !matches!(item, Item::Header { .. }))
+            .cloned()
+            .collect()
+    }
+
+    // On a first start every group the contents hold folds, nested ones too (each kind under
+    // the shipped sets, each maker under Plugins), so the section lists its group labels alone;
+    // a search still shows every match. Another start folds nothing.
+    #[test]
+    fn a_first_start_folds_every_group_and_a_search_still_shows_every_match() {
+        let catalogue = catalogue();
+        let library = |first_look| Library {
+            sets: Sets {
+                shipped: vec![
+                    set("Electric Bass", "FreePats"),
+                    set("Upright Piano", "FreePats"),
+                ],
+                mine: vec![set("My pad", "")],
+            },
+            kinds: Kinds(
+                [("Electric Bass", Kind::Bass), ("Upright Piano", Kind::Keys)]
+                    .into_iter()
+                    .map(|(name, kind)| (PathBuf::from(format!("{name}.sfz")), kind))
+                    .collect(),
+            ),
+            first_look,
+            ..Library::default()
+        };
+        let contents = Contents {
+            kit: &KIT[..2],
+            plugins: catalogue.offered(PluginKind::Instrument),
+            ..Contents::default()
+        };
+        let mut first = library(Some(BTreeSet::new()));
+        assert!(first.fold_new_groups(&contents));
+        let every_group = [
+            "Audio input",
+            "Instrument sets",
+            "Instrument sets/Bass",
+            "Instrument sets/Keys",
+            "My instruments",
+            "Plugins",
+            "Plugins/Dawsome",
+            "Plugins/Example",
+            "Starter kit",
+        ];
+        assert_eq!(first.folded, BTreeSet::from(every_group.map(str::to_owned)));
+        assert_eq!(
+            instrument_rows(&first.items(&contents)),
+            [
+                Item::Group(STARTER_KIT),
+                Item::Group(SHIPPED_SETS),
+                Item::Group(MY_SETS),
+                Item::Group(PLUGINS),
+                Item::Group(AUDIO_INPUT),
+            ]
+        );
+        let searched = |library: &Library| {
+            library.items(&Contents {
+                search: "piano",
+                ..contents.clone()
+            })
+        };
+        assert_eq!(
+            searched(&first),
+            searched(&library(None)),
+            "a search shows every match, folded or not"
+        );
+        assert!(searched(&first).contains(&Item::Set(set("Upright Piano", "FreePats"))));
+        let mut later = library(None);
+        assert!(!later.fold_new_groups(&contents), "not a first start");
+        assert!(later.folded.is_empty());
+    }
+
+    // A group the user opens on a first start stays open when the contents come again; a group
+    // that first shows later (the plugins a scan finds) folds as it shows, under a label left
+    // open.
+    #[test]
+    fn a_group_opened_on_a_first_start_stays_open_and_a_later_one_folds() {
+        let mut library = Library {
+            first_look: Some(BTreeSet::new()),
+            ..Library::default()
+        };
+        let before_scan = Contents {
+            kit: &KIT[..2],
+            ..Contents::default()
+        };
+        assert!(library.fold_new_groups(&before_scan));
+        library.toggle_group(PLUGINS);
+        assert!(!library.fold_new_groups(&before_scan), "nothing new");
+        assert!(!library.folded.contains(PLUGINS), "opened, it stays open");
+        let catalogue = catalogue();
+        let scanned = Contents {
+            plugins: catalogue.offered(PluginKind::Instrument),
+            ..before_scan.clone()
+        };
+        assert!(library.fold_new_groups(&scanned));
+        assert_eq!(
+            library.folded,
+            BTreeSet::from(
+                [
+                    "Audio input",
+                    "Plugins/Dawsome",
+                    "Plugins/Example",
+                    "Starter kit"
+                ]
+                .map(str::to_owned)
+            )
+        );
+        assert_eq!(
+            instrument_rows(&library.items(&scanned)),
+            [
+                Item::Group(STARTER_KIT),
+                Item::Group(PLUGINS),
+                Item::Synth,
+                Item::Maker("Dawsome".to_owned()),
+                Item::Maker("Example".to_owned()),
+                Item::Rescan,
+                Item::Group(AUDIO_INPUT),
             ]
         );
     }
